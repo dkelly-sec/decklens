@@ -203,7 +203,7 @@ def recent_ranked_decks(tag: str, battle_log: list[dict[str, Any]], top: int = 3
 class Predictor:
     archetypes: ArchetypeModel
     linear: LinearMatchupModel | None = None
-    tiers: Any = None  # TierStats, when the database is available
+    tiers: Any = None  # TierStats (records by tier and match level), with a database
 
     def known_cards(self) -> set[int]:
         return set(self.archetypes.vocab.card_ids)
@@ -232,7 +232,9 @@ class Predictor:
             result["note"] += (" One deck has a Hero the Clash Royale API doesn't show, so "
                                "this is judged on the other seven cards.")
         if self.tiers is not None:
-            result["tiers"] = self.tiers.matchup(i, j)
+            breakdown = self.tiers.matchup(deck_a, deck_b, i, j)
+            if breakdown is not None:
+                result["breakdown"] = breakdown
         if self.linear is not None:
             result["key_cards"] = self._key_cards(deck_a, deck_b)
         return result

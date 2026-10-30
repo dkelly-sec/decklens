@@ -49,7 +49,7 @@ python -m decklens.crawl --max-players 100       # small first run
 python -m decklens.crawl                         # full run: top 10,000 leaderboard, up to 1,500 battle logs
 ```
 
-Each battle log is one API request. Runs pause between requests, back off when rate-limited, and stop at once on a 403 (bad key or IP). Battle logs only carry a player's rank for the top 500, so the nightly run also records the leaderboard to 10,000 (about 100 requests); together they give each player's rank at the time of each battle, which powers the top 200 / 1,000 / 10,000 tiers. Players not seen for 90 days are deleted (retention policy).
+Each battle log is one API request. Runs pause between requests, back off when rate-limited, and stop at once on a 403 (bad key or IP). Battle logs only carry a player's rank for the top 500, so the nightly run also records the leaderboard to 10,000 (about 100 requests); together they give each player's rank at the time of each battle, which powers the top 200 / 1,000 tiers. The deeper leaderboard also lets name search find players down to rank 10,000. Players not seen for 90 days are deleted (retention policy).
 
 **Upgrading an existing database** (run once, as the owner):
 
@@ -109,7 +109,7 @@ What the page does:
 - **Last opponent:** your most recent ranked opponent, their deck, and how your archetype tends to do against theirs.
 - **Find an opponent:** type the letters you can see in their name; pick them from the matches (closest rank to yours first) to see their recent decks and the matchup against yours.
 - **Deck details:** card art, elixir, evolutions and levels for every card, plus average elixir, 4-card cycle cost and how many cards are maxed.
-- **Win rate by tier:** your archetype against theirs among top 200, top 1,000 and top 10,000 players (both players inside the bracket at the time: rank from the battle itself for the top 500, otherwise from the leaderboard snapshot within a day of it), each with its number of games and a 95% range. Small samples are flagged.
+- **Matchup grid:** your win rate against their deck over the last 14 days, by how closely decks must match (exact, 7+ of 8 cards, 6+ of 8 cards on both sides, or same archetype) and by tier (top 200, top 1,000, all players). A game counts in a tier only if both players were inside it at the time: rank from the battle itself for the top 500, otherwise from the leaderboard snapshot within a day of it. Every cell shows its number of games and a 95% range; small samples are flagged.
 
 Already created the web role before tier stats existed? Give it read access to stored battles (still read-only):
 

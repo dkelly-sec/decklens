@@ -176,7 +176,7 @@ def test_web_role_can_only_read(conn):
 
 
 
-def test_tier_rows_only_include_recent_battles_with_both_ranks(conn):
+def test_tier_rows_include_recent_battles_with_known_or_unknown_ranks(conn):
     from decklens.storage import save_battles
     from decklens.web.tiers import load_rows
 
@@ -187,13 +187,14 @@ def test_tier_rows_only_include_recent_battles_with_both_ranks(conn):
     both["team"][0]["globalRank"], both["opponent"][0]["globalRank"] = 120, 450
     one = battle(team_tag="#8YY", opp_tag="#9QJ")
     one["battleTime"] = stamp
-    one["team"][0]["globalRank"] = 30                 # opponent unranked: not in any tier
+    one["team"][0]["globalRank"] = 30                 # opponent unranked: rank is None
     old = battle(team_tag="#LLL", opp_tag="#9QJ")     # dated 30 Oct 2026, both ranked
     old["team"][0]["globalRank"], old["opponent"][0]["globalRank"] = 10, 20
     save_battles(conn, parse_battle_log([both, one, old])[0])
 
     rows = load_rows(conn, days=14)
-    assert len(rows) == 1 + int(datetime.now(timezone.utc) - datetime(2026, 10, 30, 1, 15,
+    assert any({r[2], r[4]} == {30, None} for r in rows)
+    assert len(rows) == 2 + int(datetime.now(timezone.utc) - datetime(2026, 10, 30, 1, 15,
                                                                         tzinfo=timezone.utc)
                                 < timedelta(days=14))
     winner, deck0, rank0, deck1, rank1 = next(r for r in rows if {r[2], r[4]} == {120, 450})
@@ -229,5 +230,5 @@ def test_tier_ranks_beyond_500_come_from_the_nearest_leaderboard_snapshot(conn):
     unknown["team"][0]["globalRank"] = 90
     save_battles(conn, parse_battle_log([filled, clamped, unknown])[0])
 
-    ranks = sorted(tuple(sorted((r[2], r[4]))) for r in load_rows(conn, days=14))
-    assert ranks == [(80, 2400), (300, 501)]
+    ranks = {frozenset((r[2], r[4])) for r in load_rows(conn, days=14)}
+    assert ranks == {frozenset((80, 2400)), frozenset((300, 501)), frozenset((90, None))}

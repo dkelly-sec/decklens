@@ -1,18 +1,24 @@
-"""Archetype matchup records by skill tier (top 200 / 1,000 / 10,000).
+"""Matchup records for your deck against theirs, by skill tier and by how
+closely the decks have to match.
 
-A battle counts in a tier only if BOTH players were inside it when they played,
-so "top 200" really means games between top-200 players.
+Columns: top 200, top 1,000 and all players. A battle counts in a tier only if
+BOTH players were inside it when they played, so "top 200" really means games
+between top-200 players.
 
-Where the rank comes from: battle logs only carry a rank for the top 500
-(checked against real data: 9,698 ranked sides, highest rank 500). Beyond
-that, the player's rank is taken from the nightly leaderboard snapshot
-nearest the battle, within SNAPSHOT_WINDOW_HOURS. A player with no battle rank
-was outside the top 500 when they played, so a snapshot saying otherwise is
-clamped to 501 rather than trusted. Exact-deck matchups almost never repeat, so records
-are kept per archetype pair, using the trained archetype model to label decks.
+Rows, from strictest to loosest:
+  exact      both decks card-for-card the same as yours and theirs
+  7 / 6      each deck shares at least 7 (or 6) of its 8 cards with yours / theirs
+  archetype  same deck styles, using the trained archetype model
 
-Tables are rebuilt from the database at most every 10 minutes and shared by
-all requests.
+Where ranks come from: battle logs only carry a rank for the top 500 (checked
+against real data: 9,698 ranked sides, highest rank 500). Beyond that, the
+player's rank is taken from the nightly leaderboard snapshot nearest the
+battle, within SNAPSHOT_WINDOW_HOURS. A player with no battle rank was outside
+the top 500 when they played, so a snapshot saying otherwise is clamped to 501
+rather than trusted. Tiers stop at the top 1,000.
+
+Battles are reloaded from the database at most every 10 minutes and kept as
+card matrices, so each request is a few vectorised numpy operations.
 """
 
 from __future__ import annotations
@@ -30,7 +36,13 @@ from ..model import wilson_interval
 
 log = logging.getLogger("decklens.web.tiers")
 
-TIERS = (200, 1000, 10_000)
+TIERS = (200, 1000)
+COLUMNS: tuple[int | None, ...] = (*TIERS, None)   # None = all players
+DECK_SIZE = 8
+# (key, cards that must match out of 8, or None for the archetype level)
+LEVELS: tuple[tuple[str, int | None], ...] = (
+    ("exact", 8), ("7", 7), ("6", 6), ("archetype", None),
+)
 WINDOW_DAYS = 14
 BATTLE_RANK_LIMIT = 500       # the API only puts a rank on battles for the top 500
 SNAPSHOT_WINDOW_HOURS = 24    # leaderboard snapshots are taken nightly
@@ -71,13 +83,12 @@ _ROWS = """
     WHERE b.battle_type = 'pathOfLegend'
       AND b.winner_side IS NOT NULL
       AND b.battle_time >= now() - make_interval(days => %(days)s)
-      AND r0.rank IS NOT NULL AND r1.rank IS NOT NULL
 """
 
 
 def load_rows(conn: Any, days: int = WINDOW_DAYS) -> list[tuple]:
-    """(winner side, deck 0, rank 0, deck 1, rank 1) for recent ranked battles
-    where both players' ranks are known."""
+    """(winner side, deck 0, rank 0, deck 1, rank 1) for recent decided ranked
+    battles. A rank is None when it isn't known."""
     with conn.cursor() as cur:
         cur.execute(_ROWS, {"days": days, "hours": SNAPSHOT_WINDOW_HOURS,
                             "limit": BATTLE_RANK_LIMIT})
@@ -85,63 +96,103 @@ def load_rows(conn: Any, days: int = WINDOW_DAYS) -> list[tuple]:
 
 
 @dataclass
-class TierTable:
-    wins: dict[int, np.ndarray]   # tier -> wins[i, j] (archetype i beat j)
-    games: dict[int, np.ndarray]  # tier -> games[i, j]
+class BattleTable:
+    columns: dict[int, int]   # card id -> matrix column
+    cards0: np.ndarray        # (battles, cards) 1 where side 0 played that card
+    cards1: np.ndarray
+    winner: np.ndarray        # 0 or 1
+    worst: np.ndarray         # worse of the two ranks; inf when either is unknown
+    arch0: np.ndarray         # archetype of each side
+    arch1: np.ndarray
+
+    def overlap(self, side: np.ndarray, deck: Sequence[int]) -> np.ndarray:
+        """How many of deck's cards each battle's side played."""
+        cols = [self.columns[c] for c in set(deck) if c in self.columns]
+        return side[:, cols].sum(axis=1) if cols else np.zeros(len(side), dtype=int)
 
 
-def build_table(model: ArchetypeModel, rows: Sequence[tuple]) -> TierTable:
-    k = len(model.names)
-    wins = {t: np.zeros((k, k)) for t in TIERS}
-    games = {t: np.zeros((k, k)) for t in TIERS}
-    if not rows:
-        return TierTable(wins, games)
-    side0 = model.assign([tuple(r[1]) for r in rows])
-    side1 = model.assign([tuple(r[3]) for r in rows])
-    for (winner, _, rank0, _, rank1), i, j in zip(rows, side0, side1):
-        worst = max(rank0, rank1)
-        winning, losing = (i, j) if winner == 0 else (j, i)
-        for t in TIERS:
-            if worst <= t:
-                wins[t][winning, losing] += 1
-                games[t][i, j] += 1
-                if i != j:
-                    games[t][j, i] += 1
-    return TierTable(wins, games)
+def build_table(model: ArchetypeModel, rows: Sequence[tuple]) -> BattleTable:
+    columns: dict[int, int] = {}
+    for r in rows:
+        for c in (*r[1], *r[3]):
+            columns.setdefault(int(c), len(columns))
+    n, k = len(rows), max(len(columns), 1)
+    cards0 = np.zeros((n, k), dtype=np.int16)
+    cards1 = np.zeros((n, k), dtype=np.int16)
+    for row, r in enumerate(rows):
+        cards0[row, [columns[int(c)] for c in r[1]]] = 1
+        cards1[row, [columns[int(c)] for c in r[3]]] = 1
+    worst = np.array([max(r[2], r[4]) if r[2] is not None and r[4] is not None else np.inf
+                      for r in rows], dtype=float)
+    empty = np.zeros(0, dtype=int)
+    return BattleTable(
+        columns, cards0, cards1,
+        winner=np.array([int(r[0]) for r in rows], dtype=int),
+        worst=worst,
+        arch0=model.assign([tuple(r[1]) for r in rows]) if n else empty,
+        arch1=model.assign([tuple(r[3]) for r in rows]) if n else empty,
+    )
+
+
+def _cell(won: np.ndarray, games: np.ndarray, mirror: bool) -> dict[str, Any]:
+    n = int(games.sum())
+    cell: dict[str, Any] = {"games": n}
+    if mirror:
+        cell["mirror"] = True
+    elif n:
+        w = int((won & games).sum())
+        lo, hi = wilson_interval(w, n)
+        cell.update(wins=w, rate=round(w / n, 3), range=[round(lo, 3), round(hi, 3)])
+    return cell
 
 
 class TierStats:
     def __init__(self, model: ArchetypeModel, load: Callable[[], Sequence[tuple]],
                  *, ttl: float = 600.0, clock: Callable[[], float] = time.monotonic):
         self.model, self._load, self.ttl, self.clock = model, load, ttl, clock
-        self._table: TierTable | None = None
+        self._table: BattleTable | None = None
         self._built_at = -float("inf")
         self._lock = threading.Lock()
 
-    def table(self) -> TierTable | None:
+    def table(self) -> BattleTable | None:
         with self._lock:
             if self._table is None or self.clock() - self._built_at >= self.ttl:
                 try:
                     self._table = build_table(self.model, self._load())
                 except Exception as exc:  # database trouble: keep serving the last table
-                    log.warning("could not refresh tier stats: %s", type(exc).__name__)
+                    log.warning("could not refresh matchup stats: %s", type(exc).__name__)
                 self._built_at = self.clock()
             return self._table
 
-    def matchup(self, i: int, j: int) -> list[dict[str, Any]] | None:
-        """One row per tier: wins, games, win rate and 95% range for archetype i vs j."""
-        table = self.table()
-        if table is None:
+    def matchup(self, deck_a: Sequence[int], deck_b: Sequence[int], arch_a: int, arch_b: int
+                ) -> dict[str, Any] | None:
+        """Your record (deck_a) against theirs (deck_b) at every match level and tier.
+
+        A 7-card deck (a Hero the API hides) needs one card fewer to match.
+        """
+        t = self.table()
+        if t is None:
             return None
-        rows = []
-        for t in TIERS:
-            n = int(table.games[t][i, j])
-            row: dict[str, Any] = {"tier": t, "games": n}
-            if i == j:
-                row["mirror"] = True
-            elif n:
-                w = int(table.wins[t][i, j])
-                lo, hi = wilson_interval(w, n)
-                row.update(wins=w, rate=round(w / n, 3), range=[round(lo, 3), round(hi, 3)])
-            rows.append(row)
-        return rows
+        deck_mirror = set(deck_a) == set(deck_b)
+        tier_masks = [t.worst <= c if c is not None else np.ones(len(t.worst), dtype=bool)
+                      for c in COLUMNS]
+        a0, a1 = t.overlap(t.cards0, deck_a), t.overlap(t.cards1, deck_a)
+        b0, b1 = t.overlap(t.cards0, deck_b), t.overlap(t.cards1, deck_b)
+        levels = []
+        for key, need in LEVELS:
+            if need is None:
+                first = (t.arch0 == arch_a) & (t.arch1 == arch_b)    # you were side 0
+                second = (t.arch1 == arch_a) & (t.arch0 == arch_b)   # you were side 1
+                mirror = arch_a == arch_b
+            else:
+                need_a = need - (DECK_SIZE - len(set(deck_a)))
+                need_b = need - (DECK_SIZE - len(set(deck_b)))
+                first = (a0 >= need_a) & (b1 >= need_b)
+                second = (a1 >= need_a) & (b0 >= need_b)
+                mirror = deck_mirror
+            games = first | second
+            won = (first & (t.winner == 0)) | (~first & second & (t.winner == 1))
+            levels.append({"level": key, "cells": [
+                {"tier": c, **_cell(won, games & m, mirror)} for c, m in zip(COLUMNS, tier_masks)
+            ]})
+        return {"window_days": WINDOW_DAYS, "levels": levels}

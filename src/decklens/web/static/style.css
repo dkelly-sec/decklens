@@ -130,8 +130,20 @@ button:focus-visible, input:focus-visible { outline: 3px solid var(--accent); ou
 .deck-facts { color: var(--muted); margin: 4px 0; }
 
 .tiers { width: 100%; border-collapse: collapse; margin: 8px 0; font-size: 14px; }
-.tiers th, .tiers td { padding: 6px 8px; border-bottom: 1px solid var(--border); text-align: left; }
+.table-wrap { overflow-x: auto; }
+.tiers th, .tiers td { padding: 6px 8px; border-bottom: 1px solid var(--border); text-align: left; vertical-align: top; }
 .tiers th { color: var(--muted); font-weight: 600; }
+.tiers tbody th { white-space: nowrap; }
+.tiers td.record span { display: block; }
+.tiers .rate { font-size: 16px; font-weight: 600; }
+.tiers .games, .tiers .range { font-size: 12px; color: var(--muted); }
+.tiers .games .few { display: inline; }
+@media (max-width: 480px) {
+  .tiers { font-size: 13px; }
+  .tiers th, .tiers td { padding: 6px 3px; }
+  .tiers .rate { font-size: 15px; }
+  .tiers .games .few { display: block; }
+}
 .few { color: var(--muted); }
 
 .matchup {

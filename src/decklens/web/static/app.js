@@ -131,36 +131,68 @@ function playerLine(player) {
   return el("p", parts.join(" · "), "player");
 }
 
-const TIER_NAMES = { 200: "Top 200", 1000: "Top 1,000", 10000: "Top 10,000" };
+const COLUMN_NAMES = { 200: "Top 200", 1000: "Top 1,000" };
+const LEVEL_NAMES = {
+  exact: "Exact",
+  7: "7+ of 8",
+  6: "6+ of 8",
+  archetype: "Archetype",
+};
 
-function tierTable(m) {
+function columnName(tier) {
+  return tier === null ? "All players" : COLUMN_NAMES[tier] || "Top " + tier.toLocaleString();
+}
+
+function recordCell(cell) {
+  const td = el("td", null, "record");
+  if (cell.mirror) {
+    td.append(el("span", "Mirror", "rate"), el("span", plural(cell.games, "game", "games"), "games"));
+  } else if (cell.games) {
+    td.append(el("span", pct(cell.rate), "rate"));
+    const games = el("span", plural(cell.games, "game", "games"), "games");
+    if (cell.games < 30) games.append(el("span", " (few)", "few"));
+    td.append(games, el("span", pct(cell.range[0]) + "–" + pct(cell.range[1]), "range"));
+  } else {
+    td.append(el("span", "—", "rate"), el("span", "0 games", "games"));
+  }
+  return td;
+}
+
+// Rows: how closely decks must match. Columns: skill tier. Cells: your win rate.
+function breakdownTable(b) {
+  const wrap = el("div", null, "table-wrap");
   const table = el("table", null, "tiers");
-  const head = el("tr");
-  for (const h of ["Players", "Your win rate", "95% range", "Games"]) head.append(el("th", h));
   table.append(el("thead"), el("tbody"));
+  const head = el("tr");
+  head.append(el("th", "Match"));
+  for (const cell of b.levels[0].cells) head.append(el("th", columnName(cell.tier)));
   table.tHead.append(head);
-
-  function row(name, rate, range, games, mirror) {
+  for (const level of b.levels) {
     const tr = el("tr");
-    tr.append(el("td", name));
-    if (mirror) {
-      tr.append(el("td", "Mirror"), el("td", "—"));
-    } else if (games) {
-      tr.append(el("td", pct(rate)), el("td", pct(range[0]) + "–" + pct(range[1])));
-    } else {
-      tr.append(el("td", "No games yet"), el("td", "—"));
-    }
-    const cell = el("td", games.toLocaleString());
-    if (games && games < 30 && !mirror) cell.append(el("span", " (few)", "few"));
-    tr.append(cell);
+    tr.append(el("th", LEVEL_NAMES[level.level] || level.level));
+    for (const cell of level.cells) tr.append(recordCell(cell));
     table.tBodies[0].append(tr);
   }
+  wrap.append(table);
+  return wrap;
+}
 
-  for (const t of m.tiers || []) {
-    row(TIER_NAMES[t.tier] || "Top " + t.tier, t.rate, t.range, t.games, t.mirror);
+// Without the database, only the archetype record from training is available.
+function recordOnly(m) {
+  const table = el("table", null, "tiers");
+  table.append(el("thead"), el("tbody"));
+  const head = el("tr");
+  head.append(el("th", "Match"), el("th", "All stored battles"));
+  table.tHead.append(head);
+  const tr = el("tr");
+  tr.append(el("th", LEVEL_NAMES.archetype));
+  if (m.record) {
+    tr.append(recordCell({ games: m.record.games, rate: m.record.wins / m.record.games,
+      range: m.record.range }));
+  } else {
+    tr.append(recordCell({ games: m.games, mirror: true }));
   }
-  if (m.record) row("All stored battles", m.record.wins / m.record.games, m.record.range, m.record.games, false);
-  else if (m.mirror) row("All stored battles", 0.5, [0.5, 0.5], m.games, true);
+  table.tBodies[0].append(tr);
   return table;
 }
 
@@ -169,13 +201,15 @@ function matchupBox(m, label) {
   box.append(el("p", label || "Matchup", "label"));
   box.append(el("p", m.archetype_a + "  vs  " + m.archetype_b, "archetypes"));
   box.append(el("p", "Your deck wins about " + pct(m.win_chance), "chance"));
-  if (m.tiers || m.record || m.mirror) {
-    box.append(tierTable(m));
-    if (m.tiers) {
-      box.append(el("p", "Tiers only count battles where both players were in that bracket " +
-        "when they played. Ranks beyond 500 come from that day's leaderboard. " +
-        "Rates are for your archetype against theirs.", "detail"));
-    }
+  if (m.breakdown) {
+    box.append(breakdownTable(m.breakdown));
+    box.append(el("p", "Your win rate, from ranked games in the last " + m.breakdown.window_days +
+      " days. Exact: both decks card for card. 7+ / 6+ of 8: each deck shares at least that " +
+      "many cards with yours and theirs. Archetype: same deck styles. Top 200 / 1,000 only " +
+      "count games where both players were in that bracket (ranks beyond 500 come from " +
+      "that day's leaderboard).", "detail"));
+  } else if (m.record || m.mirror) {
+    box.append(recordOnly(m));
   }
   if (m.note) box.append(el("p", m.note, "note"));
   if (m.key_cards && m.key_cards.length) {

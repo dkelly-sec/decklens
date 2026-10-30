@@ -421,32 +421,63 @@ def test_key_cards_say_whose_deck_they_are_in(predictor):
 # --- win rates by tier ------------------------------------------------------------------
 
 
+OPP_7 = OPP_DECK[:7] + (card_id(46),)                  # shares 7 of 8 cards with OPP_DECK
+MY_6 = MY_DECK[:6] + (card_id(47), card_id(48))         # shares 6 of 8 cards with MY_DECK
+
+
 def _tier_rows():
-    """(winner_side, deck0, rank0, deck1, rank1) rows: archetype 0 vs archetype 1."""
+    """(winner_side, deck0, rank0, deck1, rank1) rows; None = rank unknown."""
     rows = []
-    rows += [(0, MY_DECK, 50, OPP_DECK, 150)] * 6      # top 200 game, my archetype wins
-    rows += [(1, MY_DECK, 50, OPP_DECK, 150)] * 2      # top 200 game, theirs wins
+    rows += [(0, MY_DECK, 50, OPP_DECK, 150)] * 6      # top 200 game, I win
+    rows += [(1, MY_DECK, 50, OPP_DECK, 150)] * 2      # top 200 game, they win
     rows += [(0, MY_DECK, 500, OPP_DECK, 900)] * 3     # top 1,000 only
-    rows += [(1, OPP_DECK, 3000, MY_DECK, 9000)] * 4   # top 10,000 only; sides swapped
+    rows += [(1, OPP_DECK, 3000, MY_DECK, 9000)] * 4   # outside the tiers; sides swapped, I win
+    rows += [(1, MY_DECK, None, OPP_7, None)] * 2      # similar opponent deck, ranks unknown
+    rows += [(0, MY_6, 100, OPP_DECK, 100)]            # similar deck of mine, top 200
     rows += [(0, MY_DECK, 50, MY_DECK, 60)] * 5        # mirror match
     return rows
 
 
-def test_tier_table_counts_only_battles_inside_each_tier(predictor):
+def _cells(breakdown, level):
+    row = next(r for r in breakdown["levels"] if r["level"] == level)
+    return {c["tier"]: c for c in row["cells"]}
+
+
+def test_breakdown_by_match_level_and_tier(predictor):
     from decklens.web.tiers import TierStats
 
     stats = TierStats(predictor.archetypes, _tier_rows)
     i, j = (int(x) for x in predictor.archetypes.assign([MY_DECK, OPP_DECK]))
-    top200, top1000, top10000 = stats.matchup(i, j)
-    assert (top200["tier"], top200["wins"], top200["games"]) == (200, 6, 8)
-    assert (top1000["wins"], top1000["games"]) == (9, 11)
-    assert (top10000["wins"], top10000["games"]) == (13, 15)  # swapped sides counted correctly
+    b = stats.matchup(MY_DECK, OPP_DECK, i, j)
+    assert [r["level"] for r in b["levels"]] == ["exact", "7", "6", "archetype"]
+
+    def record(level):
+        return {t: (c["wins"], c["games"]) for t, c in _cells(b, level).items()}
+
+    assert record("exact") == {200: (6, 8), 1000: (9, 11), None: (13, 15)}  # swapped sides counted
+    assert record("7") == {200: (6, 8), 1000: (9, 11), None: (13, 17)}      # + the 7-of-8 games
+    assert record("6") == {200: (7, 9), 1000: (10, 12), None: (14, 18)}     # + my 6-of-8 deck
+    arch = record("archetype")
+    assert all(arch[t][1] >= record("exact")[t][1] for t in arch)           # loosest level
+    top200 = _cells(b, "exact")[200]
     assert top200["range"][0] < top200["rate"] < top200["range"][1]
-    mirror = stats.matchup(i, i)
-    assert mirror[0] == {"tier": 200, "games": 5, "mirror": True}
 
 
-def test_tier_stats_are_cached_and_survive_database_trouble(predictor):
+def test_breakdown_mirrors_and_hidden_heroes(predictor):
+    from decklens.web.tiers import TierStats
+
+    stats = TierStats(predictor.archetypes, _tier_rows)
+    i = int(predictor.archetypes.assign([MY_DECK])[0])
+    mirror = stats.matchup(MY_DECK, MY_DECK, i, i)
+    assert _cells(mirror, "exact")[200] == {"tier": 200, "games": 5, "mirror": True}
+
+    # Their Hero was hidden: 7 known cards, so "exact" means all 7 of those match.
+    j = int(predictor.archetypes.assign([OPP_DECK])[0])
+    hidden = stats.matchup(MY_DECK, OPP_DECK[:7], i, j)
+    assert _cells(hidden, "exact")[None]["games"] == 17   # OPP_DECK and OPP_7 both qualify
+
+
+def test_breakdown_is_cached_and_survives_database_trouble(predictor):
     from decklens.web.tiers import TierStats
 
     calls = []
@@ -459,14 +490,16 @@ def test_tier_stats_are_cached_and_survive_database_trouble(predictor):
         return _tier_rows()
 
     stats = TierStats(predictor.archetypes, flaky, ttl=600, clock=lambda: now[0])
-    first = stats.matchup(0, 1)
-    stats.matchup(0, 1)
+    first = stats.matchup(MY_DECK, OPP_DECK, 0, 1)
+    stats.matchup(MY_DECK, OPP_DECK, 0, 1)
     assert len(calls) == 1          # cached
     now[0] = 601
-    assert stats.matchup(0, 1) == first and len(calls) == 2  # refresh failed: old table kept
+    assert stats.matchup(MY_DECK, OPP_DECK, 0, 1) == first and len(calls) == 2  # old data kept
+    empty = TierStats(predictor.archetypes, list)
+    assert _cells(empty.matchup(MY_DECK, OPP_DECK, 0, 1), "exact")[None]["games"] == 0
 
 
-def test_predict_includes_tiers_when_available(predictor):
+def test_predict_includes_breakdown_when_available(predictor):
     from decklens.web.tiers import TierStats
 
     predictor.tiers = TierStats(predictor.archetypes, _tier_rows)
@@ -474,7 +507,8 @@ def test_predict_includes_tiers_when_available(predictor):
         app, _, _ = make(predictor)
         data = app.post("/api/predict", json={"deck_a": list(MY_DECK),
                                               "deck_b": list(OPP_DECK)}).json()
-        assert [t["tier"] for t in data["tiers"]] == [200, 1000, 10_000]
+        assert [c["tier"] for c in data["breakdown"]["levels"][0]["cells"]] == [200, 1000, None]
+        assert data["breakdown"]["window_days"] == 14
     finally:
         predictor.tiers = None
 
