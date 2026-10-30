@@ -20,6 +20,11 @@ from .validation import InvalidTagError, normalize_tag
 # "trail" and friendlies "clanMate", both skipped.
 KEPT_BATTLE_TYPES = frozenset({"pathOfLegend", "PvP"})
 
+# When a Hero sits in the Hero slot, the API leaves that card out of the deck
+# entirely, so the deck arrives with 7 cards. Stored battles still need all 8
+# (the models train on full decks); scouting accepts 7 and marks the gap.
+DECK_SIZE = 8
+
 
 @dataclass(frozen=True)
 class BattlePlayer:
@@ -62,9 +67,14 @@ def make_battle_id(battle_time: str, tag_a: str, tag_b: str) -> str:
     return hashlib.sha256(f"{battle_time}|{lo}|{hi}".encode()).hexdigest()[:32]
 
 
-def _player(raw: dict[str, Any]) -> BattlePlayer:
-    cards = tuple(c for c in raw.get("cards", []) if isinstance(c, dict))
-    if len(cards) != 8:
+def _deck_cards(raw: dict[str, Any]) -> tuple[dict[str, Any], ...]:
+    cards = raw.get("cards")
+    return tuple(c for c in cards if isinstance(c, dict)) if isinstance(cards, list) else ()
+
+
+def _player(raw: dict[str, Any], allow_hidden_card: bool = False) -> BattlePlayer:
+    cards = _deck_cards(raw)  # kept in the game's slot order
+    if len(cards) != DECK_SIZE and not (allow_hidden_card and len(cards) == DECK_SIZE - 1):
         raise ValueError("expected an 8-card deck")
     clan = raw.get("clan") or {}
     return BattlePlayer(
@@ -80,15 +90,20 @@ def _player(raw: dict[str, Any]) -> BattlePlayer:
     )
 
 
-def parse_battle(raw: dict[str, Any]) -> Battle | None:
-    """Return a Battle, or None if this entry isn't a kept 1v1 battle."""
+def parse_battle(raw: dict[str, Any], *, allow_hidden_card: bool = False) -> Battle | None:
+    """Return a Battle, or None if this entry isn't a kept 1v1 battle.
+
+    allow_hidden_card accepts a 7-card deck (a Hero in the Hero slot, which the
+    API omits). Only scouting uses it; stored battles always have 8 cards.
+    """
     if raw.get("type") not in KEPT_BATTLE_TYPES:
         return None
     team, opponent = raw.get("team") or [], raw.get("opponent") or []
     if len(team) != 1 or len(opponent) != 1:
         return None
     try:
-        a, b = _player(team[0]), _player(opponent[0])
+        a = _player(team[0], allow_hidden_card)
+        b = _player(opponent[0], allow_hidden_card)
         when = parse_battle_time(raw["battleTime"])
     except (KeyError, ValueError, TypeError, InvalidTagError):
         return None  # malformed entries are skipped, never trusted
@@ -110,14 +125,31 @@ def parse_battle(raw: dict[str, Any]) -> Battle | None:
     )
 
 
-def parse_battle_log(entries: Iterable[dict[str, Any]]) -> tuple[list[Battle], Counter]:
-    """Parse a whole battle log. Returns kept battles and a count of skipped types."""
+def _skip_reason(entry: Any) -> str:
+    if not isinstance(entry, dict):
+        return "invalid"
+    kind = str(entry.get("type"))[:40]
+    team, opponent = entry.get("team"), entry.get("opponent")
+    one_v_one = (isinstance(team, list) and isinstance(opponent, list)
+                 and len(team) == 1 and len(opponent) == 1)
+    if kind in KEPT_BATTLE_TYPES and one_v_one:
+        sides = team + opponent
+        if any(isinstance(p, dict) and len(_deck_cards(p)) == DECK_SIZE - 1 for p in sides):
+            return f"{kind} (7-card deck, hidden Hero)"
+        return f"{kind} (unreadable)"
+    return kind
+
+
+def parse_battle_log(entries: Iterable[dict[str, Any]], *, allow_hidden_card: bool = False
+                     ) -> tuple[list[Battle], Counter]:
+    """Parse a whole battle log. Returns kept battles and a count of skip reasons."""
     kept: list[Battle] = []
     skipped: Counter = Counter()
     for entry in entries:
-        battle = parse_battle(entry) if isinstance(entry, dict) else None
+        battle = (parse_battle(entry, allow_hidden_card=allow_hidden_card)
+                  if isinstance(entry, dict) else None)
         if battle is None:
-            skipped[str(entry.get("type") if isinstance(entry, dict) else "invalid")] += 1
+            skipped[_skip_reason(entry)] += 1
         else:
             kept.append(battle)
     return kept, skipped

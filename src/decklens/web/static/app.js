@@ -55,10 +55,25 @@ function errorBox(error) {
 
 // --- rendering ---------------------------------------------------------------
 
+const FORM_LABELS = { evo: "Evo", hero: "Hero", either: "Evo or Hero" };
+
 function cardTile(card) {
-  const tile = el("li", null, "card" + (card.rarity ? " " + card.rarity : ""));
+  const classes = ["card"];
+  if (card.rarity) classes.push(card.rarity);
+  if (card.form) classes.push("form-" + card.form);
+  if (card.hidden) classes.push("hidden-card");
+  const tile = el("li", null, classes.join(" "));
+
+  if (card.hidden) {
+    // The API leaves out a Hero in the Hero slot: show the gap honestly.
+    tile.append(el("span", "?", "card-placeholder"), el("span", card.name, "card-name"),
+      el("span", "The game's API doesn't show this card", "card-facts"));
+    return tile;
+  }
+
   const img = document.createElement("img");
-  img.src = "/cards/" + encodeURIComponent(card.id) + ".png" + (card.evolved ? "?evo=1" : "");
+  const form = card.form === "evo" || card.form === "hero" ? "?form=" + card.form : "";
+  img.src = "/cards/" + encodeURIComponent(card.id) + ".png" + form;
   img.alt = card.name;
   img.width = 64;
   img.height = 77;
@@ -68,11 +83,15 @@ function cardTile(card) {
 
   const facts = [];
   if (card.elixir !== null && card.elixir !== undefined) facts.push(card.elixir + " elixir");
-  if (card.evolved) facts.push("Evo");
+  if (FORM_LABELS[card.form]) facts.push(FORM_LABELS[card.form]);
   if (card.below_max === 0) facts.push("Max level");
   else if (card.below_max) facts.push(card.below_max + " below max");
   if (facts.length) tile.append(el("span", facts.join(" · "), "card-facts"));
   return tile;
+}
+
+function plural(n, one, many) {
+  return n + " " + (n === 1 ? one : many);
 }
 
 function deckView(deck) {
@@ -81,13 +100,27 @@ function deckView(deck) {
   const facts = [];
   if (s.avg_elixir !== null && s.avg_elixir !== undefined) facts.push("Average elixir " + s.avg_elixir);
   if (s.cycle !== null && s.cycle !== undefined) facts.push("4-card cycle " + s.cycle);
-  if (s.evolutions) facts.push(s.evolutions + (s.evolutions === 1 ? " evolution" : " evolutions"));
-  if (s.maxed !== null && s.maxed !== undefined) facts.push(s.maxed + "/8 cards maxed");
+  if (s.evolutions) facts.push(plural(s.evolutions, "evolution", "evolutions"));
+  if (s.heroes) facts.push(plural(s.heroes, "hero", "heroes"));
+  if (s.either) facts.push(s.either + " evo or hero");
+  if (s.maxed !== null && s.maxed !== undefined) facts.push(s.maxed + "/" + s.levels_known + " cards maxed");
   if (facts.length) box.append(el("p", facts.join(" · "), "deck-facts"));
   const list = el("ul", null, "deck");
   for (const card of deck.cards) list.append(cardTile(card));
   box.append(list);
+  if (s.hidden) {
+    box.append(el("p", "One card is hidden: the Clash Royale API leaves out a Hero in the " +
+      "Hero slot, so elixir figures use the other seven.", "detail"));
+  }
+  if (s.either) {
+    box.append(el("p", "\"Evo or Hero\": the Wild slot card has both unlocked, and the API " +
+      "doesn't say which one was active.", "detail"));
+  }
   return box;
+}
+
+function knownIds(deck) {
+  return deck.cards.filter((c) => c.id !== null && c.id !== undefined).map((c) => c.id);
 }
 
 function playerLine(player) {
@@ -140,7 +173,8 @@ function matchupBox(m, label) {
     box.append(tierTable(m));
     if (m.tiers) {
       box.append(el("p", "Tiers only count battles where both players were in that bracket " +
-        "when they played. Rates are for your archetype against theirs.", "detail"));
+        "when they played. Ranks beyond 500 come from that day's leaderboard. " +
+        "Rates are for your archetype against theirs.", "detail"));
     }
   }
   if (m.note) box.append(el("p", m.note, "note"));
@@ -231,15 +265,25 @@ async function findOpponent(event) {
   }
 }
 
+function noRankedMessage(modes) {
+  const entries = Object.entries(modes || {});
+  const total = entries.reduce((sum, [, n]) => sum + n, 0);
+  if (!total) return "This player has no battles in their recent battle log.";
+  const list = entries.map(([mode, n]) => mode + " " + n).join(", ");
+  if (modes.Ranked) return "Their recent ranked battles couldn't be read (" + list + ").";
+  return "No ranked battles in their last " + total + " games. Recently they've played: " + list + ".";
+}
+
 async function showOpponentDecks(player, container) {
   const panel = el("div", "Loading their recent decks…", "decks-panel");
   const old = container.querySelector(".decks-panel");
   if (old) old.remove();
   container.append(panel);
   try {
-    const { decks } = await api("/api/players/" + tagPath(player.tag) + "/decks");
+    const result = await api("/api/players/" + tagPath(player.tag) + "/decks");
+    const decks = result.decks;
     if (!decks.length) {
-      show(panel, el("p", "No recent ranked battles for this player.", "muted"));
+      show(panel, el("p", noRankedMessage(result.recent_modes), "muted"));
       return;
     }
     const parts = [];
@@ -247,14 +291,14 @@ async function showOpponentDecks(player, container) {
       const when = d.last_played ? ", last on " + new Date(d.last_played).toLocaleDateString() : "";
       parts.push(el("p", "Played " + d.games + " times (" + d.wins + " wins" + when + ")", "label"),
         deckView(d.deck));
-      if (state.me && state.me.deck.cards.length === 8) {
+      if (state.me && knownIds(state.me.deck).length >= 7 && knownIds(d.deck).length >= 7) {
         try {
           const m = await api("/api/predict", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
-              deck_a: state.me.deck.cards.map((c) => c.id),
-              deck_b: d.deck.cards.map((c) => c.id),
+              deck_a: knownIds(state.me.deck),
+              deck_b: knownIds(d.deck),
             }),
           });
           parts.push(matchupBox(m, "Your current deck vs this one"));

@@ -198,3 +198,36 @@ def test_tier_rows_only_include_recent_battles_with_both_ranks(conn):
                                 < timedelta(days=14))
     winner, deck0, rank0, deck1, rank1 = next(r for r in rows if {r[2], r[4]} == {120, 450})
     assert len(deck0) == 8 and len(deck1) == 8 and winner in (0, 1)
+
+
+def test_tier_ranks_beyond_500_come_from_the_nearest_leaderboard_snapshot(conn):
+    from decklens.rankings import RankEntry
+    from decklens.storage import save_battles, save_rank_entries
+    from decklens.web.tiers import load_rows
+
+    when = datetime.now(timezone.utc) - timedelta(days=2)
+    stamp = when.strftime("%Y%m%dT%H%M%S.000Z")
+
+    def entry(tag, rank):
+        return RankEntry(tag=tag, name=tag, rating=2000, rank=rank, clan_tag=None, clan_name=None)
+
+    # Nightly snapshots: one 3 hours after the battle (used), one 3 days later (too far).
+    save_rank_entries(conn, [entry("#9QJ", 2400), entry("#8YY", 120)],
+                      when + timedelta(hours=3), "leaderboard")
+    save_rank_entries(conn, [entry("#9QJ", 50), entry("#2PP", 700)],
+                      when + timedelta(days=3), "leaderboard")
+
+    filled = battle(team_tag="#2PP", opp_tag="#9QJ")
+    filled["battleTime"] = stamp
+    filled["team"][0]["globalRank"] = 80              # from the battle itself
+    clamped = battle(team_tag="#8YY", opp_tag="#LLL")
+    clamped["battleTime"] = stamp
+    clamped["opponent"][0]["globalRank"] = 300
+    # #8YY has no battle rank, so it was outside the top 500 then: snapshot 120 -> 501
+    unknown = battle(team_tag="#2PP", opp_tag="#UUU")  # #UUU never on the leaderboard
+    unknown["battleTime"] = (when - timedelta(hours=1)).strftime("%Y%m%dT%H%M%S.000Z")
+    unknown["team"][0]["globalRank"] = 90
+    save_battles(conn, parse_battle_log([filled, clamped, unknown])[0])
+
+    ranks = sorted(tuple(sorted((r[2], r[4]))) for r in load_rows(conn, days=14))
+    assert ranks == [(80, 2400), (300, 501)]

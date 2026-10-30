@@ -1,6 +1,6 @@
 """Nightly crawl: seed from the Ranked leaderboard, then follow opponents.
 
-    python -m decklens.crawl                     # leaderboard top 1,000, crawl up to 1,500 players
+    python -m decklens.crawl                     # leaderboard top 10,000, crawl up to 1,500 players
     python -m decklens.crawl --max-players 200   # smaller run
     python -m decklens.crawl --probe             # print response shapes only, store nothing
 
@@ -210,8 +210,10 @@ class _PgStore:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Seed from the Ranked leaderboard and crawl.")
-    parser.add_argument("--seed-leaderboard", type=int, default=1000, metavar="N",
-                        help="leaderboard players to seed from (0 to skip)")
+    parser.add_argument("--seed-leaderboard", type=int, default=10_000, metavar="N",
+                        help="leaderboard players to record (0 to skip). Their ranks fill in "
+                             "the top 1,000 / 10,000 tiers, since battles only carry a rank "
+                             "for the top 500. The best-ranked are crawled first.")
     parser.add_argument("--location", default="global", help="'global' or a numeric location id")
     parser.add_argument("--season", help="seed from a finished season's leaderboard instead")
     parser.add_argument("--max-players", type=int, default=1500,

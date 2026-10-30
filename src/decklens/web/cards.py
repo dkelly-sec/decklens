@@ -31,6 +31,8 @@ ASSET_HOST = "api-assets.clashroyale.com"
 _ASSET_PATH = re.compile(r"/[a-z0-9-]{1,40}/\d{1,4}/[A-Za-z0-9_-]{1,160}\.png")
 _PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 MAX_IMAGE_BYTES = 256 * 1024
+# (our key, field in the API's iconUrls)
+ICON_FIELDS = (("medium", "medium"), ("evo", "evolutionMedium"), ("hero", "heroMedium"))
 
 
 def safe_asset_url(url: Any) -> str | None:
@@ -54,27 +56,38 @@ class CardImages:
         self._images = TTLCache(ttl=24 * 3600, max_items=400, clock=clock)
 
     def catalog(self) -> dict[int, dict[str, str]]:
-        """card id -> {"medium": url, "evolution": url}, only for URLs that pass the checks."""
+        """card id -> {"medium": url, "evo": url, "hero": url}, only URLs that pass the checks."""
         def build() -> dict[int, dict[str, str]]:
             out: dict[int, dict[str, str]] = {}
+            rejected = 0
             for card in self._client.get_cards():
                 cid, icons = card.get("id"), card.get("iconUrls")
                 if not isinstance(cid, int) or isinstance(cid, bool) or not isinstance(icons, dict):
                     continue
-                urls = {key: safe_asset_url(icons.get(field))
-                        for key, field in (("medium", "medium"), ("evolution", "evolutionMedium"))}
-                urls = {k: v for k, v in urls.items() if v}
+                urls: dict[str, str] = {}
+                for key, field in ICON_FIELDS:
+                    raw = icons.get(field)
+                    if raw is None:
+                        continue
+                    url = safe_asset_url(raw)
+                    if url:
+                        urls[key] = url
+                    else:
+                        rejected += 1
                 if urls:
                     out[cid] = urls
+            if rejected:  # never log the URLs themselves: they are untrusted input
+                log.warning("ignored %d card image URLs that failed the safety checks", rejected)
             return out
 
         return self._catalog.get_or_set("catalog", build)
 
-    def image(self, card_id: int, evolved: bool = False) -> bytes | None:
+    def image(self, card_id: int, form: str | None = None) -> bytes | None:
+        """PNG for a card, in its Evolution or Hero art when asked and available."""
         urls = self.catalog().get(card_id)
         if not urls:
             return None
-        url = urls.get("evolution") if evolved and "evolution" in urls else urls.get("medium")
+        url = urls.get(form) if form in ("evo", "hero") and form in urls else urls.get("medium")
         if url is None:
             return None
         try:

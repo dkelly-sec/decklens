@@ -15,7 +15,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from importlib import resources
 from pathlib import Path
-from typing import Any, Callable, Iterator
+from typing import Any, Callable, Iterator, Literal
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.responses import FileResponse, JSONResponse, Response
@@ -29,8 +29,8 @@ from .security import (
     BodySizeLimitMiddleware, RateLimiter, SecurityHeadersMiddleware, TTLCache,
 )
 from .services import (
-    Predictor, last_ranked_opponent, recent_ranked_decks, safe_tag, summarise_player,
-    validate_deck,
+    Predictor, battle_mix, card_ids, last_ranked_opponent, recent_ranked_decks, safe_tag,
+    summarise_player, validate_deck,
 )
 
 log = logging.getLogger("decklens.web")
@@ -116,7 +116,12 @@ def create_app(services: Services, *, hsts: bool = False) -> FastAPI:
     @app.get("/api/players/{tag}/decks", dependencies=[Depends(limit("lookup"))])
     def decks(tag: str) -> dict[str, Any]:
         tag = tag_or_400(tag)
-        return {"tag": tag, "decks": recent_ranked_decks(tag, upstream("battlelog", tag))}
+        log_entries = upstream("battlelog", tag)
+        found = recent_ranked_decks(tag, log_entries)
+        result: dict[str, Any] = {"tag": tag, "decks": found}
+        if not found:  # say what they have been playing instead
+            result["recent_modes"] = battle_mix(log_entries)
+        return result
 
     @app.get("/api/players/{tag}/last-opponent", dependencies=[Depends(limit("lookup"))])
     def last_opponent(tag: str) -> dict[str, Any]:
@@ -124,9 +129,9 @@ def create_app(services: Services, *, hsts: bool = False) -> FastAPI:
         found = last_ranked_opponent(tag, upstream("battlelog", tag))
         if found is None:
             raise HTTPException(404, "No recent ranked battles for this player")
-        your = [c["id"] for c in found["your_deck"]["cards"]]
-        theirs = [c["id"] for c in found["deck"]["cards"]]
-        if services.predictor is not None and len(your) == 8 and len(theirs) == 8:
+        your = card_ids(found["your_deck"]["cards"])
+        theirs = card_ids(found["deck"]["cards"])
+        if services.predictor is not None and min(len(your), len(theirs)) >= 7:
             found["matchup"] = services.predictor.predict(your, theirs)
         return found
 
@@ -159,11 +164,11 @@ def create_app(services: Services, *, hsts: bool = False) -> FastAPI:
 
     @app.get("/cards/{card_id}.png", include_in_schema=False,
              dependencies=[Depends(limit("images"))])
-    def card_image(card_id: int, evo: bool = False) -> Response:
+    def card_image(card_id: int, form: Literal["evo", "hero"] | None = None) -> Response:
         if services.images is None or not 0 < card_id < 10**9:
             raise HTTPException(404, "No image")
         try:
-            data = services.images.image(card_id, evolved=evo)
+            data = services.images.image(card_id, form=form)
         except ApiError:
             data = None  # card list unavailable: the page falls back to card names
         if data is None:

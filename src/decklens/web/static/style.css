@@ -112,6 +112,21 @@ button:focus-visible, input:focus-visible { outline: 3px solid var(--accent); ou
 .deck li.epic { border-top-color: #a347e0; }
 .deck li.legendary { border-top-color: #3fc1c9; }
 .deck li.champion { border-top-color: #f2c94c; }
+.deck li.form-evo { background: rgba(163, 71, 224, 0.12); }
+.deck li.form-hero { background: rgba(242, 201, 76, 0.10); }
+.deck li.form-either { background: linear-gradient(135deg, rgba(163, 71, 224, 0.12), rgba(242, 201, 76, 0.10)); }
+.deck li.hidden-card { border-style: dashed; }
+.card-placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 64px;
+  height: 77px;
+  border: 2px dashed var(--border);
+  border-radius: 6px;
+  font-size: 28px;
+  color: var(--muted);
+}
 .deck-facts { color: var(--muted); margin: 4px 0; }
 
 .tiers { width: 100%; border-collapse: collapse; margin: 8px 0; font-size: 14px; }

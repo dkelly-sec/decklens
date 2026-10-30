@@ -246,7 +246,8 @@ def test_predict(predictor):
 
 
 @pytest.mark.parametrize("body, status", [
-    ({"deck_a": list(MY_DECK)[:7], "deck_b": list(OPP_DECK)}, 400),        # 7 cards
+    ({"deck_a": list(MY_DECK)[:6], "deck_b": list(OPP_DECK)}, 400),        # 6 cards
+    ({"deck_a": list(MY_DECK) + [card_id(46)], "deck_b": list(OPP_DECK)}, 400),  # 9 cards
     ({"deck_a": [card_id(10)] * 8, "deck_b": list(OPP_DECK)}, 400),         # duplicates
     ({"deck_a": list(range(1, 9)), "deck_b": list(OPP_DECK)}, 400),         # unknown cards
     ({"deck_a": ["x"] * 8, "deck_b": list(OPP_DECK)}, 422),                 # not numbers
@@ -320,11 +321,11 @@ def test_placeholder_database_url_turns_search_off(monkeypatch, tmp_path):
 def test_deck_details_and_summary():
     from decklens.web.services import _cards, deck_summary
 
-    raw = [
+    raw = [  # the game's slot order: Evolution slot, Hero slot, Wild slot, then plain cards
+        {"id": 9, "name": "Skeletons", "elixirCost": 1, "level": 16, "maxLevel": 16,
+         "rarity": "Common", "evolutionLevel": 1},
         {"id": 1, "name": "Hog Rider", "elixirCost": 4, "level": 14, "maxLevel": 16,
          "rarity": "Rare", "evolutionLevel": 0},
-        {"id": 2, "name": "Skeletons", "elixirCost": 1, "level": 16, "maxLevel": 16,
-         "rarity": "Common", "evolutionLevel": 1},
         {"id": 3, "name": "Mirror", "level": 16, "maxLevel": 16, "rarity": "<b>Epic</b>"},
         {"id": 4, "name": "Cannon", "elixirCost": 3, "level": "16", "maxLevel": 16},
         {"id": 5, "name": "Log", "elixirCost": 2, "level": 16, "maxLevel": 16},
@@ -332,14 +333,75 @@ def test_deck_details_and_summary():
         {"id": 7, "name": "Musketeer", "elixirCost": 4, "level": 16, "maxLevel": 16},
         {"id": 8, "name": "Fireball", "elixirCost": 99, "level": 16, "maxLevel": 16},
     ]
-    cards_out = {c["id"]: c for c in _cards(raw)}
+    out = _cards(raw)
+    assert [c["id"] for c in out] == [9, 1, 3, 4, 5, 6, 7, 8]  # slot order kept, not sorted
+    cards_out = {c["id"]: c for c in out}
     assert cards_out[1]["below_max"] == 2 and cards_out[1]["rarity"] == "rare"
-    assert cards_out[2]["evolved"] is True
+    assert cards_out[9]["form"] == "evo"
     assert cards_out[3]["elixir"] is None and cards_out[3]["rarity"] is None  # unknown values dropped
     assert cards_out[4]["below_max"] is None                                  # "16" isn't a number
     assert cards_out[8]["elixir"] is None                                     # impossible cost dropped
-    summary = deck_summary(list(cards_out.values()))
-    assert summary == {"avg_elixir": 2.5, "cycle": 7, "evolutions": 1, "maxed": 6}
+    summary = deck_summary(out)
+    assert summary == {"avg_elixir": 2.5, "cycle": 7, "evolutions": 1, "heroes": 0, "either": 0,
+                       "maxed": 6, "levels_known": 7, "hidden": 0}
+
+
+@pytest.mark.parametrize("owned, slot, form", [
+    (1, 0, "evo"), (2, 0, None), (3, 0, "evo"),        # Evolution slot: only evolutions play
+    (1, 1, None), (2, 1, "hero"), (3, 1, "hero"),      # Hero slot: only heroes play
+    (1, 2, "evo"), (2, 2, "hero"), (3, 2, "either"),   # Wild slot: both unlocked is ambiguous
+    (3, 3, None), (1, 7, None),                        # ordinary slots play the plain card
+    (0, 0, None), (None, 0, None), (4, 0, None), (-1, 2, None),  # junk ignored
+])
+def test_evolutions_and_heroes_depend_on_the_slot(owned, slot, form):
+    from decklens.web.services import active_form
+
+    assert active_form(owned, slot) == form
+
+
+def test_hero_left_out_by_the_api_gets_a_placeholder_in_the_hero_slot():
+    from decklens.web.services import _cards, card_ids, deck_summary
+
+    raw = [{"id": 100 + i, "name": f"C{i}", "elixirCost": 3, "level": 16, "maxLevel": 16,
+            "evolutionLevel": 3} for i in range(7)]
+    out = _cards(raw)
+    assert len(out) == 8 and out[1]["hidden"] is True and out[1]["id"] is None
+    assert out[0]["form"] == "evo" and out[2]["form"] == "either" and out[3]["form"] is None
+    assert card_ids(out) == [100 + i for i in range(7)]
+    s = deck_summary(out)
+    assert s["hidden"] == 1 and s["heroes"] == 1 and s["levels_known"] == 7 and s["avg_elixir"] == 3
+
+
+def test_scouting_keeps_battles_where_a_hero_was_hidden(predictor):
+    hidden = cards(OPP_DECK)[:7]
+    client = FakeClient()
+    entry = battle(5)
+    entry["opponent"][0]["cards"] = hidden
+    client.get_battle_log = lambda tag: [entry]
+    app, _, _ = make(predictor, client=client)
+    data = app.get("/api/players/%232PP/last-opponent").json()
+    assert data["deck"]["summary"]["hidden"] == 1 and len(data["deck"]["cards"]) == 8
+    assert "seven cards" in data["matchup"]["note"]
+
+    from decklens.battles import parse_battle_log
+    kept, skipped = parse_battle_log([entry])       # stored battles still need all 8 cards
+    assert kept == [] and skipped == {"pathOfLegend (7-card deck, hidden Hero)": 1}
+
+
+def test_no_ranked_decks_explains_what_they_played_instead():
+    client = FakeClient()
+    client.get_battle_log = lambda tag: [battle(1, kind="PvP"), battle(2, kind="PvP"),
+                                         battle(3, kind="trail"), {"type": "<b>new</b>"}]
+    app, _, _ = make(client=client)
+    data = app.get("/api/players/%239QJ/decks").json()
+    assert data["decks"] == []
+    assert data["recent_modes"] == {"Trophy Road": 2, "Challenges": 1, "Other modes": 1}
+
+
+def test_predict_accepts_a_deck_with_a_hidden_hero(predictor):
+    app, _, _ = make(predictor)
+    r = app.post("/api/predict", json={"deck_a": list(MY_DECK)[:7], "deck_b": list(OPP_DECK)})
+    assert r.status_code == 200 and "seven cards" in r.json()["note"]
 
 
 def test_recent_decks_include_details_and_last_played():
@@ -422,6 +484,7 @@ def test_predict_includes_tiers_when_available(predictor):
 PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 100
 GOOD_URL = "https://api-assets.clashroyale.com/cards/300/abcDEF123_-xyz.png"
 EVO_URL = "https://api-assets.clashroyale.com/cardevolutions/300/evoXYZ.png"
+HERO_URL = "https://api-assets.clashroyale.com/cardheroes/300/heroXYZ.png"
 
 
 @pytest.mark.parametrize("url, ok", [
@@ -478,7 +541,9 @@ class CatalogClient(FakeClient):
             raise self.card_error
         return [
             {"id": 26000010, "name": "Card 10",
-             "iconUrls": {"medium": GOOD_URL, "evolutionMedium": EVO_URL}},
+             "iconUrls": {"medium": GOOD_URL, "evolutionMedium": EVO_URL, "heroMedium": HERO_URL}},
+            {"id": 26000012, "name": "Card 12",
+             "iconUrls": {"medium": GOOD_URL.replace("abc", "twelve")}},
             {"id": 26000011, "name": "Card 11",
              "iconUrls": {"medium": "https://evil.example/cards/300/x.png"}},
         ]
@@ -500,8 +565,12 @@ def test_card_image_is_fetched_safely_and_cached():
     assert url == GOOD_URL and kwargs["allow_redirects"] is False and kwargs["timeout"] == 5
     assert "Authorization" not in kwargs.get("headers", {})         # API key never sent
     assert "Authorization" not in session.headers
-    assert images.image(26000010, evolved=True) == PNG
+    assert images.image(26000010, form="evo") == PNG
     assert session.calls[-1][0] == EVO_URL
+    assert images.image(26000010, form="hero") == PNG
+    assert session.calls[-1][0] == HERO_URL
+    assert images.image(26000012, form="hero") == PNG     # no hero art: plain card instead
+    assert session.calls[-1][0] == GOOD_URL.replace("abc", "twelve")
 
 
 def test_card_with_unsafe_url_in_catalog_is_skipped():
@@ -530,7 +599,9 @@ def test_card_image_route():
     assert ok.headers["content-type"] == "image/png"
     assert ok.headers["cache-control"] == "public, max-age=86400"
     assert ok.headers["x-content-type-options"] == "nosniff"
-    for bad in ("/cards/99.png", "/cards/abc.png", "/cards/-5.png", "/cards/26000011.png"):
+    assert app.get("/cards/26000010.png?form=hero").status_code == 200
+    for bad in ("/cards/99.png", "/cards/abc.png", "/cards/-5.png", "/cards/26000011.png",
+                "/cards/26000010.png?form=../../x", "/cards/26000010.png?form=both"):
         assert app.get(bad).status_code in (404, 422)
 
 

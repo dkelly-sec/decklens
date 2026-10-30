@@ -1,8 +1,14 @@
 """Archetype matchup records by skill tier (top 200 / 1,000 / 10,000).
 
-A battle counts in a tier only if BOTH players were inside it when they played
-(their leaderboard rank at battle time), so "top 200" really means games
-between top-200 players. Exact-deck matchups almost never repeat, so records
+A battle counts in a tier only if BOTH players were inside it when they played,
+so "top 200" really means games between top-200 players.
+
+Where the rank comes from: battle logs only carry a rank for the top 500
+(checked against real data: 9,698 ranked sides, highest rank 500). Beyond
+that, the player's rank is taken from the nightly leaderboard snapshot
+nearest the battle, within SNAPSHOT_WINDOW_HOURS. A player with no battle rank
+was outside the top 500 when they played, so a snapshot saying otherwise is
+clamped to 501 rather than trusted. Exact-deck matchups almost never repeat, so records
 are kept per archetype pair, using the trained archetype model to label decks.
 
 Tables are rebuilt from the database at most every 10 minutes and shared by
@@ -26,22 +32,55 @@ log = logging.getLogger("decklens.web.tiers")
 
 TIERS = (200, 1000, 10_000)
 WINDOW_DAYS = 14
+BATTLE_RANK_LIMIT = 500       # the API only puts a rank on battles for the top 500
+SNAPSHOT_WINDOW_HOURS = 24    # leaderboard snapshots are taken nightly
 
+
+# Rank at battle time for each side: the battle's own rank, else the nearest
+# leaderboard snapshot (never better than BATTLE_RANK_LIMIT + 1). Written out in
+# full for both sides: no SQL is ever assembled from strings.
 _ROWS = """
-    SELECT b.winner_side, p0.card_ids, p0.global_rank, p1.card_ids, p1.global_rank
+    SELECT b.winner_side, p0.card_ids, r0.rank, p1.card_ids, r1.rank
     FROM battles b
     JOIN battle_players p0 ON p0.battle_id = b.battle_id AND p0.side = 0
     JOIN battle_players p1 ON p1.battle_id = b.battle_id AND p1.side = 1
+    CROSS JOIN LATERAL (
+        SELECT COALESCE(p0.global_rank, (
+            SELECT GREATEST(s.rank, %(limit)s + 1)
+            FROM player_rank_snapshots s
+            WHERE s.tag = p0.player_tag
+              AND s.source = 'leaderboard' AND s.rank IS NOT NULL
+              AND s.observed_at BETWEEN b.battle_time - make_interval(hours => %(hours)s)
+                                    AND b.battle_time + make_interval(hours => %(hours)s)
+            ORDER BY abs(extract(epoch FROM s.observed_at - b.battle_time))
+            LIMIT 1
+        )) AS rank
+    ) r0
+    CROSS JOIN LATERAL (
+        SELECT COALESCE(p1.global_rank, (
+            SELECT GREATEST(s.rank, %(limit)s + 1)
+            FROM player_rank_snapshots s
+            WHERE s.tag = p1.player_tag
+              AND s.source = 'leaderboard' AND s.rank IS NOT NULL
+              AND s.observed_at BETWEEN b.battle_time - make_interval(hours => %(hours)s)
+                                    AND b.battle_time + make_interval(hours => %(hours)s)
+            ORDER BY abs(extract(epoch FROM s.observed_at - b.battle_time))
+            LIMIT 1
+        )) AS rank
+    ) r1
     WHERE b.battle_type = 'pathOfLegend'
       AND b.winner_side IS NOT NULL
-      AND p0.global_rank IS NOT NULL AND p1.global_rank IS NOT NULL
-      AND b.battle_time >= now() - make_interval(days => %s)
+      AND b.battle_time >= now() - make_interval(days => %(days)s)
+      AND r0.rank IS NOT NULL AND r1.rank IS NOT NULL
 """
 
 
 def load_rows(conn: Any, days: int = WINDOW_DAYS) -> list[tuple]:
+    """(winner side, deck 0, rank 0, deck 1, rank 1) for recent ranked battles
+    where both players' ranks are known."""
     with conn.cursor() as cur:
-        cur.execute(_ROWS, (days,))
+        cur.execute(_ROWS, {"days": days, "hours": SNAPSHOT_WINDOW_HOURS,
+                            "limit": BATTLE_RANK_LIMIT})
         return cur.fetchall()
 
 
