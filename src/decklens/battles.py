@@ -15,9 +15,9 @@ from typing import Any, Iterable
 
 from .validation import InvalidTagError, normalize_tag
 
-# Battle types kept for analysis. Path of Legends was renamed Ranked in 2025;
-# the API may still call it "pathOfLegend". The collector reports skipped
-# types so you can check the real values and adjust this set.
+# Battle types kept for analysis. Confirmed Oct 2026: Ranked mode battles are
+# type "pathOfLegend" (game mode "Ranked1v1_NewArena"); event challenges are
+# "trail" and friendlies "clanMate", both skipped.
 KEPT_BATTLE_TYPES = frozenset({"pathOfLegend", "PvP"})
 
 

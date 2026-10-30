@@ -34,9 +34,13 @@ def _required(name: str) -> str:
 def load_settings(*, require_database: bool = True) -> Settings:
     """Read settings from the environment, loading a local .env file if present."""
     try:
-        from dotenv import load_dotenv
+        from dotenv import find_dotenv, load_dotenv
 
-        load_dotenv(override=False)  # real environment variables win over .env
+        # Look for .env in the folder you run from (usecwd=True), not next to
+        # this source file. Real environment variables win over .env.
+        env_file = find_dotenv(usecwd=True)
+        if env_file:
+            load_dotenv(env_file, override=False)
     except ImportError:  # pragma: no cover - dotenv is a declared dependency
         pass
 
