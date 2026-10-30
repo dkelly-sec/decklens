@@ -49,12 +49,13 @@ python -m decklens.crawl --max-players 100       # small first run
 python -m decklens.crawl --countries 1000        # full run: global + country leaderboards, up to 1,500 battle logs
 ```
 
-Each battle log is one API request. Runs pause between requests, back off when rate-limited, and stop at once on a 403 (bad key or IP). Battle logs only carry a player's rank for the top 500, so each run also records the global leaderboard (the API stops at 1,000); together they give each player's rank at the time of each battle, which powers the top 200 / 1,000 tiers. To find players outside the global top 1,000 by name, `--countries 1000` also indexes every country's Ranked leaderboard. Those ranks are local, so they are stored as names only, never mixed into the global ranks. Players not seen for 90 days are deleted (retention policy).
+Each battle log is one API request. Runs pause between requests, back off when rate-limited, and stop at once on a 403 (bad key or IP). Battle logs only carry a player's rank for the top 500, so each run also records the global leaderboard (the API stops at 1,000); together they give each player's rank at the time of each battle, which powers the top 200 / 1,000 tiers. To find players outside the global top 1,000 by name, `--countries 1000` also indexes every country's Ranked leaderboard. Those ranks are local, so they are never mixed into the global ranks; each player's rating is kept, and name search lists exact name matches first, then players closest to your rating (Ranked pairs similar ratings, so your opponent is usually at the top). Players not seen for 90 days are deleted (retention policy).
 
 **Upgrading an existing database** (run once, as the owner):
 
 ```powershell
 Get-Content db\migrations\002_ranks_and_crawl.sql | docker compose exec -T db psql -U decklens -d decklens -v ON_ERROR_STOP=1 -f -
+Get-Content db\migrations\003_player_rating.sql  | docker compose exec -T db psql -U decklens -d decklens -v ON_ERROR_STOP=1 -f -
 ```
 
 ### Nightly schedule (Windows)

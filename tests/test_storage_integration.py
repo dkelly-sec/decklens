@@ -129,19 +129,19 @@ def test_opponent_search_by_name(conn):
     from decklens.web.search import search_players
 
     entries = [
-        RankEntry("#2PP", "⚔️⚡D I P O⚡⚔️", None, 900, "Clan", "Clan"),
-        RankEntry("#9QJ", "Dipolar", None, 120, None, None),
+        RankEntry("#2PP", "⚔️⚡D I P O⚡⚔️", 2900, 900, "Clan", "Clan"),
+        RankEntry("#9QJ", "Dipolar", 3100, 120, None, None),
         RankEntry("#8YY", "Dípo Fan", None, None, None, None),
-        RankEntry("#LLL", "Someone else", None, 5, None, None),
+        RankEntry("#LLL", "Someone else", 3500, 5, None, None),
     ]
     save_rank_entries(conn, entries, NOW, "leaderboard")
 
     found = search_players(conn, "dipo")
-    assert [r["tag"] for r in found] == ["#9QJ", "#2PP", "#8YY"]  # best rank first, unranked last
-    assert found[1]["name"] == "⚔️⚡D I P O⚡⚔️"                      # original name kept for display
+    assert [r["tag"] for r in found] == ["#2PP", "#9QJ", "#8YY"]  # exact name first, then rank
+    assert found[0]["name"] == "⚔️⚡D I P O⚡⚔️" and found[0]["rating"] == 2900  # display name kept
 
-    near = search_players(conn, "DIPO", near_rank=850)
-    assert near[0]["tag"] == "#2PP"                                  # closest to my rank first
+    near = search_players(conn, "DIP", near_rating=3050)
+    assert [r["tag"] for r in near] == ["#9QJ", "#2PP", "#8YY"]   # closest rating, unknown last
 
     assert search_players(conn, "zz") == []
     with pytest.raises(ValueError):
@@ -241,5 +241,31 @@ def test_country_players_are_searchable_but_get_no_rank(conn):
     save_players(conn, [RankEntry(tag="#2PP", name="Ｃｏｕｎｔｒｙ ⚔ Star", rating=None, rank=None,
                                   clan_tag=None, clan_name="Clan")], NOW)
     assert search_players(conn, "country") == [
-        {"tag": "#2PP", "name": "Ｃｏｕｎｔｒｙ ⚔ Star", "clan": "Clan", "rank": None}]
+        {"tag": "#2PP", "name": "Ｃｏｕｎｔｒｙ ⚔ Star", "clan": "Clan", "rank": None, "rating": None}]
     assert conn.execute("SELECT count(*) FROM player_rank_snapshots").fetchone()[0] == 0
+
+
+def test_same_name_players_are_ordered_by_closeness_to_my_rating(conn):
+    """Eight players called AJ: the one near my rating (my likely opponent) comes first."""
+    from decklens.storage import save_battles, save_players
+    from decklens.web.search import search_players
+
+    tags = ["#LPVGU8J2V", "#GGGCPPVLU", "#2J8VVR8QY", "#V28PY8LPC", "#UL2908CLJ", "#URGV9CGL"]
+    ratings = [2900, 2079, 3300, None, 1800, 2600]
+    save_players(conn, [RankEntry(t, "AJ", r, None, None, None) for t, r in zip(tags, ratings)],
+                 NOW)
+    save_players(conn, [RankEntry(f"#{c}2PP", f"Ajumador{c}", 2130, None, None, None)
+                        for c in "GJLQRU"], NOW)  # longer names, even closer ratings
+
+    found = search_players(conn, "aj", near_rating=2136)
+    assert len(found) == 10
+    assert [r["tag"] for r in found[:6]] == [
+        "#GGGCPPVLU", "#UL2908CLJ", "#URGV9CGL", "#LPVGU8J2V", "#2J8VVR8QY", "#V28PY8LPC"]
+    # rating gaps: 57, 336, 464, 764, 1164, then unknown rating last
+    assert all(r["name"].startswith("Ajumador") for r in found[6:])
+
+    # A later sighting in a battle (no rating there) keeps the leaderboard rating.
+    raw = battle(team_tag="#GGGCPPVLU", opp_tag="#9QJ")
+    raw["battleTime"] = (NOW + timedelta(days=1)).strftime("%Y%m%dT%H%M%S.000Z")
+    save_battles(conn, parse_battle_log([raw])[0])
+    assert conn.execute("SELECT rating FROM players WHERE tag = '#GGGCPPVLU'").fetchone() == (2079,)

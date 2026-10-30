@@ -30,16 +30,22 @@ _INSERT_SIDE = """
 """
 
 _UPSERT_PLAYER = """
-    INSERT INTO players (tag, name, search_key, clan_tag, clan_name, last_seen)
-    VALUES (%s, %s, %s, %s, %s, %s)
+    INSERT INTO players (tag, name, search_key, clan_tag, clan_name, last_seen, rating)
+    VALUES (%s, %s, %s, %s, %s, %s, %s)
     ON CONFLICT (tag) DO UPDATE SET
         name = EXCLUDED.name,
         search_key = EXCLUDED.search_key,
         clan_tag = EXCLUDED.clan_tag,
         clan_name = EXCLUDED.clan_name,
-        last_seen = EXCLUDED.last_seen
+        last_seen = EXCLUDED.last_seen,
+        rating = COALESCE(EXCLUDED.rating, players.rating)
     WHERE players.last_seen < EXCLUDED.last_seen
 """
+
+def _rating(value: int | None) -> int | None:
+    """A plausible Ranked rating, or None (never store junk from the API)."""
+    return value if value is not None and 0 <= value <= 20_000 else None
+
 
 _INSERT_SNAPSHOT = """
     INSERT INTO player_rank_snapshots (tag, observed_at, rating, rank, source)
@@ -72,7 +78,7 @@ def save_battles(conn: Connection, battles: Iterable[Battle]) -> int:
                 cur.execute(
                     _UPSERT_PLAYER,
                     (p.tag, p.name, search_key(p.name), p.clan_tag, p.clan_name,
-                     battle.battle_time),
+                     battle.battle_time, None),
                 )
                 if p.global_rank is not None:  # rank as it was when this battle was played
                     cur.execute(
@@ -105,7 +111,8 @@ def save_rank_entries(
         for e in entries:
             cur.execute(
                 _UPSERT_PLAYER,
-                (e.tag, e.name, search_key(e.name), e.clan_tag, e.clan_name, observed_at),
+                (e.tag, e.name, search_key(e.name), e.clan_tag, e.clan_name, observed_at,
+                 _rating(e.rating)),
             )
             cur.execute(_INSERT_SNAPSHOT, (e.tag, observed_at, e.rating, e.rank, source))
             count += 1
@@ -120,7 +127,8 @@ def save_players(conn: Connection, entries: Iterable[RankEntry], observed_at: da
         for e in entries:
             cur.execute(
                 _UPSERT_PLAYER,
-                (e.tag, e.name, search_key(e.name), e.clan_tag, e.clan_name, observed_at),
+                (e.tag, e.name, search_key(e.name), e.clan_tag, e.clan_name, observed_at,
+                 _rating(e.rating)),
             )
             count += 1
     return count

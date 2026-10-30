@@ -137,7 +137,7 @@ def create_app(services: Services, *, hsts: bool = False) -> FastAPI:
 
     @app.get("/api/search", dependencies=[Depends(limit("search"))])
     def search(name: str = Query(min_length=1, max_length=40),
-               near_rank: int | None = Query(default=None, ge=1, le=100_000)) -> dict[str, Any]:
+               near_rating: int | None = Query(default=None, ge=0, le=20_000)) -> dict[str, Any]:
         if services.search_db is None:
             raise HTTPException(503, "Search isn't set up on this server")
         import psycopg
@@ -146,7 +146,7 @@ def create_app(services: Services, *, hsts: bool = False) -> FastAPI:
 
         try:
             with services.search_db() as conn:
-                return {"results": search_players(conn, name, near_rank=near_rank)}
+                return {"results": search_players(conn, name, near_rating=near_rating)}
         except ValueError as exc:
             raise HTTPException(400, str(exc)) from None
         except psycopg.OperationalError as exc:  # database down or wrong login

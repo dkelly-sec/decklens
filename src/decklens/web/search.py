@@ -15,22 +15,28 @@ from psycopg import Connection
 from ..names import search_key
 
 MIN_QUERY = 2
-MAX_RESULTS = 5
+MAX_RESULTS = 10
+MAX_RATING = 20_000
 
+# Order: exact name matches first; then players whose rating is closest to
+# yours (Ranked matchmaking pairs similar ratings, so your opponent is almost
+# always among them); then best global rank; then most recently seen.
 _SEARCH = r"""
-    SELECT p.tag, p.name, p.clan_name, r.rank
+    SELECT p.tag, p.name, p.clan_name, r.rank, p.rating
     FROM players p
     LEFT JOIN LATERAL (
         SELECT s.rank FROM player_rank_snapshots s
         WHERE s.tag = p.tag AND s.rank IS NOT NULL
         ORDER BY s.observed_at DESC LIMIT 1
     ) r ON true
-    WHERE p.search_key LIKE %s ESCAPE '\'
+    WHERE p.search_key LIKE %(pattern)s ESCAPE '\'
     ORDER BY
-        CASE WHEN %s::int IS NULL THEN 0 ELSE abs(coalesce(r.rank, 100000) - %s::int) END,
+        (p.search_key = %(key)s) DESC,
+        CASE WHEN %(near)s::int IS NULL THEN 0
+             ELSE abs(coalesce(p.rating, -100000) - %(near)s::int) END,
         r.rank ASC NULLS LAST,
         p.last_seen DESC
-    LIMIT %s
+    LIMIT %(limit)s
 """
 
 
@@ -39,12 +45,15 @@ def _like_prefix(key: str) -> str:
     return key.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
 
 
-def search_players(conn: Connection, query: str, *, near_rank: int | None = None
+def search_players(conn: Connection, query: str, *, near_rating: int | None = None
                    ) -> list[dict[str, Any]]:
     key = search_key(query)
     if len(key) < MIN_QUERY:
         raise ValueError(f"type at least {MIN_QUERY} letters or digits of the name")
+    if near_rating is not None and not 0 <= near_rating <= MAX_RATING:
+        raise ValueError("rating out of range")
     with conn.cursor() as cur:
-        cur.execute(_SEARCH, (_like_prefix(key), near_rank, near_rank, MAX_RESULTS))
-        return [{"tag": tag, "name": name, "clan": clan, "rank": rank}
-                for tag, name, clan, rank in cur.fetchall()]
+        cur.execute(_SEARCH, {"pattern": _like_prefix(key), "key": key, "near": near_rating,
+                              "limit": MAX_RESULTS})
+        return [{"tag": tag, "name": name, "clan": clan, "rank": rank, "rating": rating}
+                for tag, name, clan, rank, rating in cur.fetchall()]

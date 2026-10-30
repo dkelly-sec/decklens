@@ -209,19 +209,21 @@ def test_last_opponent_without_ranked_battles():
 
 
 def test_search_normalises_and_escapes(predictor):
-    rows = [("#9QJ", HOSTILE, "Clan", 812)]
+    rows = [("#9QJ", HOSTILE, "Clan", 812, 2400)]
     app, _, conn = make(rows=rows)
-    response = app.get("/api/search", params={"name": "🔥Dípo%_", "near_rank": 150})
+    response = app.get("/api/search", params={"name": "🔥Dípo%_", "near_rating": 2136})
     assert response.status_code == 200
     assert response.json()["results"][0]["tag"] == "#9QJ"
-    pattern, near, _, limit = conn.executed[0]
-    assert pattern == "dipo%" and near == 150 and limit == 5  # no user wildcards survive
+    params = conn.executed[0]
+    assert params == {"pattern": "dipo%", "key": "dipo", "near": 2136, "limit": 10}  # no wildcards
+    assert response.json()["results"][0]["rating"] == 2400
 
 
 @pytest.mark.parametrize("params, status", [
     ({"name": "🔥"}, 400),               # nothing searchable left after normalising
     ({"name": "x" * 41}, 422),           # too long
-    ({"name": "dipo", "near_rank": 0}, 422),
+    ({"name": "dipo", "near_rating": -1}, 422),
+    ({"name": "dipo", "near_rating": 99999}, 422),
     ({}, 422),
 ])
 def test_search_input_validation(params, status):

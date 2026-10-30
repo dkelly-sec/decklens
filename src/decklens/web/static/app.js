@@ -127,7 +127,7 @@ function playerLine(player) {
   const parts = [player.name || "Unknown", player.tag];
   if (player.clan) parts.push(player.clan);
   if (player.rank) parts.push("rank #" + player.rank);
-  else if (player.rating) parts.push("rating " + player.rating);
+  if (player.rating) parts.push("rating " + player.rating);
   return el("p", parts.join(" · "), "player");
 }
 
@@ -324,7 +324,8 @@ async function findOpponent(event) {
   const out = document.getElementById("find-result");
   const name = document.getElementById("find-name").value;
   let path = "/api/search?name=" + encodeURIComponent(name);
-  if (state.me && state.me.rank) path += "&near_rank=" + encodeURIComponent(state.me.rank);
+  // Ranked matches players of similar rating, so players nearest yours come first.
+  if (state.me && state.me.rating) path += "&near_rating=" + encodeURIComponent(state.me.rating);
   show(out, el("p", "Searching…", "muted"));
   try {
     const { results } = await api(path);

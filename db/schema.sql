@@ -9,7 +9,8 @@ CREATE TABLE IF NOT EXISTS players (
     clan_tag        TEXT,
     clan_name       TEXT,
     last_seen       TIMESTAMPTZ NOT NULL,
-    last_crawled_at TIMESTAMPTZ           -- when we last fetched this player's battle log
+    last_crawled_at TIMESTAMPTZ,          -- when we last fetched this player's battle log
+    rating          INTEGER               -- latest Ranked rating from a leaderboard, if known
 );
 -- text_pattern_ops makes prefix searches (search_key LIKE 'dav%') use the index.
 CREATE INDEX IF NOT EXISTS players_search_key_idx ON players (search_key text_pattern_ops);
