@@ -56,7 +56,7 @@ _INSERT_SNAPSHOT = """
 # Players due a crawl: never crawled, or not since the cutoff. Best-ranked first,
 # using each player's most recent known rank.
 _DUE_FOR_CRAWL = """
-    SELECT p.tag, r.rank
+    SELECT r.rank, p.tag
     FROM players p
     LEFT JOIN LATERAL (
         SELECT s.rank FROM player_rank_snapshots s
@@ -142,7 +142,10 @@ def mark_crawled(conn: Connection, tag: str, when: datetime) -> None:
 def players_due_for_crawl(
     conn: Connection, *, now: datetime, recrawl_after: timedelta, limit: int
 ) -> list[tuple[str, int | None]]:
-    """(tag, last known rank) for players not crawled recently, best-ranked first."""
+    """(last known rank, tag) for players not crawled recently, best-ranked first.
+
+    The same (rank, tag) shape crawl() takes as seeds, so the two plug together.
+    """
     with conn.cursor() as cur:
         cur.execute(_DUE_FOR_CRAWL, (now - recrawl_after, limit))
         return [(row[0], row[1]) for row in cur.fetchall()]

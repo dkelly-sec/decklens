@@ -62,12 +62,12 @@ def test_crawl_queue_prefers_best_rank_and_skips_recent(conn):
     ]
     assert save_rank_entries(conn, entries, NOW, "leaderboard") == 3
     due = players_due_for_crawl(conn, now=NOW, recrawl_after=timedelta(hours=20), limit=10)
-    assert [tag for tag, _ in due] == ["#2PP", "#9QJ", "#8YY"]
+    assert [tag for _, tag in due] == ["#2PP", "#9QJ", "#8YY"]
 
     mark_crawled(conn, "#2PP", NOW - timedelta(hours=1))   # crawled recently: not due
     mark_crawled(conn, "#9QJ", NOW - timedelta(hours=30))  # crawled long ago: due again
     due = players_due_for_crawl(conn, now=NOW, recrawl_after=timedelta(hours=20), limit=10)
-    assert [tag for tag, _ in due] == ["#9QJ", "#8YY"]
+    assert [tag for _, tag in due] == ["#9QJ", "#8YY"]
 
 
 def test_retention_removes_old_players_and_their_snapshots(conn):
@@ -269,3 +269,32 @@ def test_same_name_players_are_ordered_by_closeness_to_my_rating(conn):
     raw["battleTime"] = (NOW + timedelta(days=1)).strftime("%Y%m%dT%H%M%S.000Z")
     save_battles(conn, parse_battle_log([raw])[0])
     assert conn.execute("SELECT rating FROM players WHERE tag = '#GGGCPPVLU'").fetchone() == (2079,)
+
+
+def test_crawl_queue_from_the_database_actually_gets_crawled(conn):
+    """Regression: the queue query and crawl() once disagreed on (rank, tag)
+    order, so every seed was silently dropped and nothing was crawled."""
+    from decklens.crawl import crawl
+    from decklens.storage import players_due_for_crawl, save_rank_entries
+
+    save_rank_entries(conn, [RankEntry("#2PP", "a", None, 5, None, None),
+                             RankEntry("#9QJ", "b", None, 1, None, None)], NOW, "leaderboard")
+    due = players_due_for_crawl(conn, now=NOW, recrawl_after=timedelta(hours=20), limit=10)
+
+    class Client:
+        calls: list = []
+
+        def get_battle_log(self, tag):
+            self.calls.append(tag)
+            return []
+
+    class Store:
+        def save_battles(self, battles):
+            return 0
+
+        def mark_crawled(self, tag):
+            pass
+
+    client = Client()
+    stats = crawl(client, Store(), due, max_players=10, sleep=lambda s: None)
+    assert client.calls == ["#9QJ", "#2PP"] and stats.invalid_seeds == 0  # best rank first

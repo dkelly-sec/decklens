@@ -237,3 +237,9 @@ def test_country_sweep_gives_up_when_every_board_fails():
     errors = {str(57000000 + i): ApiError("HTTP 502", 502) for i in range(20)}
     with pytest.raises(CrawlAborted):
         sweep(CountryClient({}, errors=errors, locations=locations))
+
+
+def test_invalid_seeds_are_counted_and_reported(caplog):
+    stats, _, _ = run(FakeClient({}), [("#2PP", 5), (None, None), (3, "#9QJ")], max_players=5)
+    assert stats.invalid_seeds == 2 and stats.players_crawled == 1
+    assert "ignored 2 seeds" in caplog.text

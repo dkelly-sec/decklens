@@ -56,6 +56,7 @@ class CrawlStats:
     battles_seen: int = 0
     battles_new: int = 0
     discovered: int = 0
+    invalid_seeds: int = 0
     skipped_types: dict[str, int] = field(default_factory=dict)
 
 
@@ -90,7 +91,10 @@ def crawl(
         try:
             push(rank, normalize_tag(tag))
         except InvalidTagError:
+            stats.invalid_seeds += 1
             continue
+    if stats.invalid_seeds:
+        log.warning("ignored %d seeds that weren't valid (rank, tag) pairs", stats.invalid_seeds)
 
     while heap and stats.players_crawled < max_players:
         _, _, tag = heapq.heappop(heap)
