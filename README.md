@@ -116,8 +116,8 @@ $pw | Set-Clipboard   # then set WEB_DATABASE_URL in .env (see .env.example)
 
 What the page does:
 - **You:** type your name (picked from the player index) or your tag to load your current deck; your tag is remembered in your browser.
-- **Last opponent:** your most recent ranked opponent, their deck, and how your archetype tends to do against theirs.
-- **Find an opponent:** type the letters you can see in their name; pick them from the matches (closest rank to yours first) to see their recent decks and the matchup against yours.
+- **Last opponent:** your most recent Ranked or 20-win challenge opponent, their deck, and how your archetype tends to do against theirs.
+- **Find an opponent:** type the letters you can see in their name; pick them from the matches (exact names first, then closest rating to yours) to see their recent decks in separate **Ranked** and **20-win challenge** tabs, with the matchup against your deck (your latest challenge deck on the challenge tab). Challenge games are recognised by their game mode (`Challenge_AllCards_EventDeck_NoSet`), since Trophy Road and friendlies share the same battle type. Matchup numbers come from Ranked games only.
 - **Deck details:** card art, elixir, evolutions and levels for every card, plus average elixir, 4-card cycle cost and how many cards are maxed.
 - **Matchup grid:** your win rate against their deck over the last 14 days, by how closely decks must match (exact, 7+ of 8 cards, 6+ of 8 cards on both sides, or same archetype) and by tier (top 200, top 1,000, all players). A game counts in a tier only if both players were inside it at the time: rank from the battle itself for the top 500, otherwise from the leaderboard snapshot within a day of it. Every cell shows its number of games and a 95% range; small samples are flagged.
 

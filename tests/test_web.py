@@ -195,7 +195,9 @@ def test_last_opponent_with_matchup(predictor):
 def test_opponent_recent_decks():
     app, _, _ = make()
     data = app.get("/api/players/%239QJ/decks").json()
-    assert data["decks"][0]["games"] == 2 and data["decks"][0]["wins"] == 0
+    ranked = data["modes"]["ranked"]
+    assert ranked[0]["games"] == 2 and ranked[0]["wins"] == 0
+    assert data["modes"]["challenge"] == [] and data["recent_modes"] == {"Ranked": 2}
 
 
 def test_last_opponent_without_ranked_battles():
@@ -396,8 +398,46 @@ def test_no_ranked_decks_explains_what_they_played_instead():
                                          battle(3, kind="trail"), {"type": "<b>new</b>"}]
     app, _, _ = make(client=client)
     data = app.get("/api/players/%239QJ/decks").json()
-    assert data["decks"] == []
-    assert data["recent_modes"] == {"Trophy Road": 2, "Challenges": 1, "Other modes": 1}
+    assert data["modes"] == {"ranked": [], "challenge": []}
+    assert data["recent_modes"] == {"Trophy Road": 2, "Other challenges": 1, "Other modes": 1}
+
+
+CHALLENGE = {"id": 72000474, "name": "Challenge_AllCards_EventDeck_NoSet"}
+
+
+def test_challenge_decks_get_their_own_tab_and_other_trail_modes_are_ignored():
+    def challenge(minute, me_won=True):
+        return battle(minute, me_won=me_won, kind="trail") | {"gameMode": CHALLENGE}
+
+    trophy_road = battle(7, kind="trail") | {"gameMode": {"id": 72000006, "name": "Ladder"}}
+    log = [trophy_road, challenge(6), challenge(5, me_won=False), challenge(4), battle(3)]
+    client = FakeClient()
+    client.get_battle_log = lambda tag: log
+    app, _, _ = make(client=client)
+
+    data = app.get("/api/players/%232PP/decks").json()
+    assert [d["games"] for d in data["modes"]["challenge"]] == [3]
+    assert data["modes"]["challenge"][0]["wins"] == 2
+    assert [d["games"] for d in data["modes"]["ranked"]] == [1]
+    assert data["recent_modes"] == {"20-win challenge": 3, "Trophy Road": 1, "Ranked": 1}
+
+    last = app.get("/api/players/%232PP/last-opponent").json()
+    assert last["mode"] == "challenge" and last["your_result"] == "won"  # Trophy Road skipped
+
+
+def test_last_opponent_reports_ranked_mode(predictor):
+    app, _, _ = make(predictor)
+    assert app.get("/api/players/%232PP/last-opponent").json()["mode"] == "ranked"
+
+
+def test_odd_game_mode_values_are_ignored_safely():
+    client = FakeClient()
+    client.get_battle_log = lambda tag: [battle(1, kind="trail") | {"gameMode": "Challenge"},
+                                         battle(2, kind="trail") | {"gameMode": {"name": 5}},
+                                         battle(3, kind="trail") | {"gameMode": None}]
+    app, _, _ = make(client=client)
+    r = app.get("/api/players/%232PP/decks")
+    assert r.status_code == 200 and r.json()["modes"] == {"ranked": [], "challenge": []}
 
 
 def test_predict_accepts_a_deck_with_a_hidden_hero(predictor):
@@ -408,7 +448,7 @@ def test_predict_accepts_a_deck_with_a_hidden_hero(predictor):
 
 def test_recent_decks_include_details_and_last_played():
     app, _, _ = make()
-    d = app.get("/api/players/%239QJ/decks").json()["decks"][0]
+    d = app.get("/api/players/%239QJ/decks").json()["modes"]["ranked"][0]
     assert d["deck"]["summary"]["avg_elixir"] == 3.5 and d["deck"]["summary"]["maxed"] == 8
     assert d["last_played"].startswith("2026-10-30T01:05")
 

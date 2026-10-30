@@ -29,8 +29,8 @@ from .security import (
     BodySizeLimitMiddleware, RateLimiter, SecurityHeadersMiddleware, TTLCache,
 )
 from .services import (
-    Predictor, battle_mix, card_ids, last_ranked_opponent, recent_ranked_decks, safe_tag,
-    summarise_player, validate_deck,
+    Predictor, battle_mix, card_ids, last_opponent, recent_decks, safe_tag, summarise_player,
+    validate_deck,
 )
 
 log = logging.getLogger("decklens.web")
@@ -117,18 +117,17 @@ def create_app(services: Services, *, hsts: bool = False) -> FastAPI:
     def decks(tag: str) -> dict[str, Any]:
         tag = tag_or_400(tag)
         log_entries = upstream("battlelog", tag)
-        found = recent_ranked_decks(tag, log_entries)
-        result: dict[str, Any] = {"tag": tag, "decks": found}
-        if not found:  # say what they have been playing instead
-            result["recent_modes"] = battle_mix(log_entries)
-        return result
+        # Decks per mode (Ranked, 20-win challenge), plus what they've been
+        # playing overall so an empty tab can say why.
+        return {"tag": tag, "modes": recent_decks(tag, log_entries),
+                "recent_modes": battle_mix(log_entries)}
 
     @app.get("/api/players/{tag}/last-opponent", dependencies=[Depends(limit("lookup"))])
-    def last_opponent(tag: str) -> dict[str, Any]:
+    def last_opponent_route(tag: str) -> dict[str, Any]:
         tag = tag_or_400(tag)
-        found = last_ranked_opponent(tag, upstream("battlelog", tag))
+        found = last_opponent(tag, upstream("battlelog", tag))
         if found is None:
-            raise HTTPException(404, "No recent ranked battles for this player")
+            raise HTTPException(404, "No recent Ranked or 20-win challenge battles")
         your = card_ids(found["your_deck"]["cards"])
         theirs = card_ids(found["deck"]["cards"])
         if services.predictor is not None and min(len(your), len(theirs)) >= 7:

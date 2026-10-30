@@ -174,3 +174,15 @@ footer { font-size: 13px; padding-bottom: 32px; }
   .deck { grid-template-columns: repeat(2, 1fr); }
   .row { flex-direction: column; }
 }
+
+.tabs { display: flex; gap: 6px; margin: 12px 0 8px; border-bottom: 1px solid var(--border); flex-wrap: wrap; }
+.tabs .tab {
+  background: transparent;
+  color: var(--muted);
+  border: 1px solid transparent;
+  border-bottom: none;
+  border-radius: 6px 6px 0 0;
+  padding: 8px 12px;
+  font-weight: 600;
+}
+.tabs .tab[aria-selected="true"] { color: var(--text); border-color: var(--border); background: var(--bg); }

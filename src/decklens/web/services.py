@@ -17,7 +17,29 @@ from ..battles import Battle, opt_int, parse_battle_log
 from ..model import LinearMatchupModel, wilson_interval
 from ..validation import InvalidTagError, normalize_tag
 
+# Game modes DeckLens scouts. Checked against a real battle log (Oct 2026):
+#   Ranked:            type "pathOfLegend", game mode "Ranked1v1_NewArena"
+#   20-win challenge:  type "trail", game mode "Challenge_AllCards_EventDeck_NoSet"
+# "trail" is also used for Trophy Road ("Ladder") and friendlies, so challenge
+# games are picked out by their game mode name, not their type.
 RANKED = "pathOfLegend"
+CHALLENGE_GAME_MODE = "Challenge_AllCards_EventDeck_NoSet"
+MODES = ("ranked", "challenge")
+SCOUTED_TYPES = frozenset({RANKED, "trail"})
+
+
+def mode_of(battle: Battle) -> str | None:
+    """"ranked", "challenge" (the 20-win challenge) or None for anything else."""
+    if battle.battle_type == RANKED:
+        return "ranked"
+    if battle.battle_type == "trail" and battle.game_mode == CHALLENGE_GAME_MODE:
+        return "challenge"
+    return None
+
+
+def _scouted(battle_log: list[dict[str, Any]]) -> list[Battle]:
+    battles, _ = parse_battle_log(battle_log, allow_hidden_card=True, types=SCOUTED_TYPES)
+    return [b for b in battles if mode_of(b) is not None]
 MIN_GAMES_FOR_CONFIDENCE = 30
 
 
@@ -135,20 +157,20 @@ def _side(battle: Battle, tag: str) -> tuple[int, int] | None:
     return None
 
 
-def last_ranked_opponent(tag: str, battle_log: list[dict[str, Any]]) -> dict[str, Any] | None:
-    """The opponent from this player's most recent ranked battle (logs are newest first)."""
+def last_opponent(tag: str, battle_log: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """The opponent from this player's most recent Ranked or 20-win challenge
+    battle (logs are newest first)."""
     tag = normalize_tag(tag)
-    battles, _ = parse_battle_log(battle_log, allow_hidden_card=True)
-    for b in battles:
+    for b in _scouted(battle_log):
         sides = _side(b, tag)
-        if b.battle_type != RANKED or sides is None:
+        if sides is None:
             continue
         me, them = sides
         opp = b.players[them]
         result = "draw" if b.winner is None else ("won" if b.winner == me else "lost")
         return {
             "tag": opp.tag, "name": opp.name, "clan": opp.clan_name,
-            "rank": opp.global_rank, "your_result": result,
+            "rank": opp.global_rank, "your_result": result, "mode": mode_of(b),
             "time": b.battle_time.isoformat(),
             "deck": _deck(_cards(list(opp.cards))),  # their own levels and evolutions
             "your_deck": _deck(_cards(list(b.players[me].cards))),
@@ -156,47 +178,61 @@ def last_ranked_opponent(tag: str, battle_log: list[dict[str, Any]]) -> dict[str
     return None
 
 
+# Our own labels for what a player has been playing (raw API strings are never
+# echoed back). Game mode names are more specific than types, so they win.
+GAME_MODE_NAMES = {
+    "Ranked1v1_NewArena": "Ranked", CHALLENGE_GAME_MODE: "20-win challenge",
+    "Ladder": "Trophy Road", "Friendly": "Friendlies", "Showdown_Friendly": "Friendlies",
+}
 BATTLE_TYPE_NAMES = {
-    "pathOfLegend": "Ranked", "PvP": "Trophy Road", "trail": "Challenges",
-    "challenge": "Challenges", "tournament": "Tournaments", "clanMate": "Clan friendlies",
-    "friendly": "Friendlies", "boatBattle": "Boat battles", "riverRacePvP": "River Race",
-    "riverRaceDuel": "River Race duels", "riverRaceDuelColosseum": "River Race duels",
-    "quickplay": "Quick play",
+    "pathOfLegend": "Ranked", "PvP": "Trophy Road", "trail": "Other challenges",
+    "challenge": "Other challenges", "tournament": "Tournaments",
+    "clanMate": "Friendlies", "friendly": "Friendlies", "boatBattle": "Boat battles",
+    "riverRacePvP": "River Race", "riverRaceDuel": "River Race duels",
+    "riverRaceDuelColosseum": "River Race duels", "quickplay": "Quick play",
 }
 
 
 def battle_mix(battle_log: list[dict[str, Any]]) -> dict[str, int]:
-    """What a player has been playing lately, using our own labels only
-    (the raw type strings come from the API and are never echoed back)."""
+    """What a player has been playing lately, using our own labels only."""
     mix: Counter = Counter()
     for entry in battle_log:
-        kind = entry.get("type") if isinstance(entry, dict) else None
-        mix[BATTLE_TYPE_NAMES.get(kind, "Other modes") if isinstance(kind, str) else "Other modes"] += 1
+        if not isinstance(entry, dict):
+            mix["Other modes"] += 1
+            continue
+        mode = (entry.get("gameMode") or {}) if isinstance(entry.get("gameMode"), dict) else {}
+        kind = entry.get("type")
+        label = GAME_MODE_NAMES.get(mode.get("name")) if isinstance(mode.get("name"), str) else None
+        if label is None:
+            label = BATTLE_TYPE_NAMES.get(kind, "Other modes") if isinstance(kind, str) else "Other modes"
+        mix[label] += 1
     return dict(mix.most_common())
 
 
-def recent_ranked_decks(tag: str, battle_log: list[dict[str, Any]], top: int = 3
-                        ) -> list[dict[str, Any]]:
-    """A player's most-played decks in their recent ranked battles, with their record."""
+def recent_decks(tag: str, battle_log: list[dict[str, Any]], top: int = 3
+                 ) -> dict[str, list[dict[str, Any]]]:
+    """A player's most-played decks in each scouted mode, with their record."""
     tag = normalize_tag(tag)
-    battles, _ = parse_battle_log(battle_log, allow_hidden_card=True)
-    played: Counter = Counter()
-    won: Counter = Counter()
-    latest: dict[tuple[int, ...], dict[str, Any]] = {}
-    for b in battles:  # newest first
+    played: dict[str, Counter] = {m: Counter() for m in MODES}
+    won: dict[str, Counter] = {m: Counter() for m in MODES}
+    latest: dict[tuple[str, tuple[int, ...]], dict[str, Any]] = {}
+    for b in _scouted(battle_log):  # newest first
         sides = _side(b, tag)
-        if b.battle_type != RANKED or sides is None:
+        if sides is None:
             continue
         me, _ = sides
-        deck = b.players[me].card_ids
-        played[deck] += 1
-        won[deck] += int(b.winner == me)
-        if deck not in latest:  # newest slot order, evolutions and heroes
-            latest[deck] = {"cards": list(b.players[me].cards),
-                            "last_played": b.battle_time.isoformat()}
-    return [{"deck": _deck(_cards(latest[deck]["cards"])), "games": n, "wins": won[deck],
-             "last_played": latest[deck]["last_played"]}
-            for deck, n in played.most_common(top)]
+        mode, deck = mode_of(b), b.players[me].card_ids
+        played[mode][deck] += 1
+        won[mode][deck] += int(b.winner == me)
+        if (mode, deck) not in latest:  # newest slot order, evolutions and heroes
+            latest[(mode, deck)] = {"cards": list(b.players[me].cards),
+                                    "last_played": b.battle_time.isoformat()}
+    return {
+        mode: [{"deck": _deck(_cards(latest[(mode, deck)]["cards"])), "games": n,
+                "wins": won[mode][deck], "last_played": latest[(mode, deck)]["last_played"]}
+               for deck, n in played[mode].most_common(top)]
+        for mode in MODES
+    }
 
 
 @dataclass

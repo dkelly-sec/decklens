@@ -90,13 +90,21 @@ def _player(raw: dict[str, Any], allow_hidden_card: bool = False) -> BattlePlaye
     )
 
 
-def parse_battle(raw: dict[str, Any], *, allow_hidden_card: bool = False) -> Battle | None:
+def _game_mode_name(mode: Any) -> str | None:
+    name = mode.get("name") if isinstance(mode, dict) else None
+    return name[:80] if isinstance(name, str) else None
+
+
+def parse_battle(raw: dict[str, Any], *, allow_hidden_card: bool = False,
+                 types: frozenset[str] = KEPT_BATTLE_TYPES) -> Battle | None:
     """Return a Battle, or None if this entry isn't a kept 1v1 battle.
 
     allow_hidden_card accepts a 7-card deck (a Hero in the Hero slot, which the
     API omits). Only scouting uses it; stored battles always have 8 cards.
+    types lets scouting read other battle types (e.g. challenges); the crawler
+    keeps the default.
     """
-    if raw.get("type") not in KEPT_BATTLE_TYPES:
+    if raw.get("type") not in types:
         return None
     team, opponent = raw.get("team") or [], raw.get("opponent") or []
     if len(team) != 1 or len(opponent) != 1:
@@ -118,7 +126,7 @@ def parse_battle(raw: dict[str, Any], *, allow_hidden_card: bool = False) -> Bat
         battle_id=make_battle_id(raw["battleTime"], a.tag, b.tag),
         battle_time=when,
         battle_type=raw["type"],
-        game_mode=(raw.get("gameMode") or {}).get("name"),
+        game_mode=_game_mode_name(raw.get("gameMode")),
         players=players,
         winner=winner,
         league_number=opt_int(raw.get("leagueNumber")),
@@ -140,13 +148,13 @@ def _skip_reason(entry: Any) -> str:
     return kind
 
 
-def parse_battle_log(entries: Iterable[dict[str, Any]], *, allow_hidden_card: bool = False
-                     ) -> tuple[list[Battle], Counter]:
+def parse_battle_log(entries: Iterable[dict[str, Any]], *, allow_hidden_card: bool = False,
+                     types: frozenset[str] = KEPT_BATTLE_TYPES) -> tuple[list[Battle], Counter]:
     """Parse a whole battle log. Returns kept battles and a count of skip reasons."""
     kept: list[Battle] = []
     skipped: Counter = Counter()
     for entry in entries:
-        battle = (parse_battle(entry, allow_hidden_card=allow_hidden_card)
+        battle = (parse_battle(entry, allow_hidden_card=allow_hidden_card, types=types)
                   if isinstance(entry, dict) else None)
         if battle is None:
             skipped[_skip_reason(entry)] += 1

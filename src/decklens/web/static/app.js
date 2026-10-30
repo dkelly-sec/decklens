@@ -196,7 +196,7 @@ function recordOnly(m) {
   return table;
 }
 
-function matchupBox(m, label) {
+function matchupBox(m, label, mode) {
   const box = el("div", null, "matchup");
   box.append(el("p", label || "Matchup", "label"));
   box.append(el("p", m.archetype_a + "  vs  " + m.archetype_b, "archetypes"));
@@ -212,6 +212,10 @@ function matchupBox(m, label) {
     box.append(recordOnly(m));
   }
   if (m.note) box.append(el("p", m.note, "note"));
+  if (mode === "challenge") {
+    box.append(el("p", "These numbers come from Ranked games (challenge games aren't collected), " +
+      "so treat them as a rough guide for the challenge.", "note"));
+  }
   if (m.key_cards && m.key_cards.length) {
     const cards = el("ul", null, "key-cards");
     for (const k of m.key_cards) {
@@ -306,11 +310,11 @@ async function scoutLast() {
     const opp = await api("/api/players/" + tagPath(state.me.tag) + "/last-opponent");
     const parts = [
       playerLine(opp),
-      el("p", "You " + opp.your_result + " this one.", "detail"),
+      el("p", (MODE_NAMES[opp.mode] || "Battle") + " · You " + opp.your_result + " this one.", "detail"),
       el("p", "Their deck", "label"),
       deckView(opp.deck),
     ];
-    if (opp.matchup) parts.push(matchupBox(opp.matchup, "Your deck vs theirs"));
+    if (opp.matchup) parts.push(matchupBox(opp.matchup, "Your deck vs theirs", opp.mode));
     show(out, ...parts);
   } catch (error) {
     show(out, errorBox(error));
@@ -349,13 +353,64 @@ async function findOpponent(event) {
   }
 }
 
-function noRankedMessage(modes) {
-  const entries = Object.entries(modes || {});
+const MODE_NAMES = { ranked: "Ranked", challenge: "20-win challenge" };
+const MODES = ["ranked", "challenge"];
+let tabCounter = 0;
+
+function emptyMessage(mode, recent) {
+  const entries = Object.entries(recent || {});
   const total = entries.reduce((sum, [, n]) => sum + n, 0);
   if (!total) return "This player has no battles in their recent battle log.";
-  const list = entries.map(([mode, n]) => mode + " " + n).join(", ");
-  if (modes.Ranked) return "Their recent ranked battles couldn't be read (" + list + ").";
-  return "No ranked battles in their last " + total + " games. Recently they've played: " + list + ".";
+  const list = entries.map(([name, n]) => name + " " + n).join(", ");
+  const name = MODE_NAMES[mode];
+  if (recent[name]) return "Their recent " + name + " battles couldn't be read (" + list + ").";
+  return "No " + name + " games in their last " + total + " battles. Recently they've played: " + list + ".";
+}
+
+// Which of your decks to compare against: your current deck for Ranked, your
+// latest 20-win challenge deck (an event deck) for the challenge.
+async function myDeckFor(mode) {
+  if (mode === "ranked" || !state.me) {
+    return state.me ? { deck: state.me.deck, label: "Your current deck vs this one" } : null;
+  }
+  if (state.myChallenge === undefined) {
+    state.myChallenge = null;
+    try {
+      const mine = await api("/api/players/" + tagPath(state.me.tag) + "/decks");
+      const decks = (mine.modes && mine.modes.challenge) || [];
+      decks.sort((a, b) => String(b.last_played).localeCompare(String(a.last_played)));
+      if (decks.length) state.myChallenge = decks[0].deck;
+    } catch { /* fall back to the current deck below */ }
+  }
+  if (state.myChallenge) return { deck: state.myChallenge, label: "Your latest challenge deck vs this one" };
+  return { deck: state.me.deck, label: "Your current deck vs this one (no recent challenge deck of yours found)" };
+}
+
+async function deckList(decks, mode) {
+  const parts = [];
+  for (const d of decks) {
+    const when = d.last_played ? ", last on " + new Date(d.last_played).toLocaleDateString() : "";
+    parts.push(el("p", "Played " + plural(d.games, "time", "times") + " (" + d.wins + " wins" + when + ")", "label"),
+      deckView(d.deck));
+    const mine = await myDeckFor(mode);
+    if (mine && knownIds(mine.deck).length >= 7 && knownIds(d.deck).length >= 7) {
+      try {
+        const m = await api("/api/predict", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ deck_a: knownIds(mine.deck), deck_b: knownIds(d.deck) }),
+        });
+        parts.push(matchupBox(m, mine.label, mode));
+      } catch (error) {
+        parts.push(errorBox(error));
+      }
+    }
+  }
+  return parts;
+}
+
+function newestPlay(decks) {
+  return decks.reduce((best, d) => (String(d.last_played) > best ? String(d.last_played) : best), "");
 }
 
 async function showOpponentDecks(player, container) {
@@ -363,38 +418,53 @@ async function showOpponentDecks(player, container) {
   const old = container.querySelector(".decks-panel");
   if (old) old.remove();
   container.append(panel);
+  let result;
   try {
-    const result = await api("/api/players/" + tagPath(player.tag) + "/decks");
-    const decks = result.decks;
-    if (!decks.length) {
-      show(panel, el("p", noRankedMessage(result.recent_modes), "muted"));
-      return;
-    }
-    const parts = [];
-    for (const d of decks) {
-      const when = d.last_played ? ", last on " + new Date(d.last_played).toLocaleDateString() : "";
-      parts.push(el("p", "Played " + d.games + " times (" + d.wins + " wins" + when + ")", "label"),
-        deckView(d.deck));
-      if (state.me && knownIds(state.me.deck).length >= 7 && knownIds(d.deck).length >= 7) {
-        try {
-          const m = await api("/api/predict", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              deck_a: knownIds(state.me.deck),
-              deck_b: knownIds(d.deck),
-            }),
-          });
-          parts.push(matchupBox(m, "Your current deck vs this one"));
-        } catch (error) {
-          parts.push(errorBox(error));
-        }
-      }
-    }
-    show(panel, ...parts);
+    result = await api("/api/players/" + tagPath(player.tag) + "/decks");
   } catch (error) {
     show(panel, errorBox(error));
+    return;
   }
+  const modes = result.modes || {};
+
+  // One tab per mode. Opens on whichever mode they played most recently.
+  const id = "decks-" + (++tabCounter);
+  const tabs = el("div", null, "tabs");
+  tabs.setAttribute("role", "tablist");
+  tabs.setAttribute("aria-label", "Game mode");
+  const body = el("div", null, "tab-panel");
+  body.setAttribute("role", "tabpanel");
+  body.id = id + "-panel";
+  const rendered = {};
+  const buttons = {};
+
+  async function select(mode) {
+    for (const m of MODES) buttons[m].setAttribute("aria-selected", String(m === mode));
+    body.setAttribute("aria-labelledby", buttons[mode].id);
+    if (!rendered[mode]) {  // built once per tab; a promise, so fast clicks don't build twice
+      const decks = modes[mode] || [];
+      rendered[mode] = decks.length ? deckList(decks, mode)
+        : Promise.resolve([el("p", emptyMessage(mode, result.recent_modes), "muted")]);
+    }
+    show(body, el("p", "Loading matchups…", "muted"));
+    const nodes = await rendered[mode];
+    if (buttons[mode].getAttribute("aria-selected") === "true") show(body, ...nodes);
+  }
+
+  for (const mode of MODES) {
+    const games = (modes[mode] || []).reduce((n, d) => n + d.games, 0);
+    const button = el("button", MODE_NAMES[mode] + " · " + plural(games, "game", "games"), "tab");
+    button.type = "button";
+    button.id = id + "-" + mode;
+    button.setAttribute("role", "tab");
+    button.setAttribute("aria-controls", body.id);
+    button.addEventListener("click", () => select(mode));
+    buttons[mode] = button;
+    tabs.append(button);
+  }
+  show(panel, tabs, body);
+  const first = MODES.slice().sort((a, b) => newestPlay(modes[b] || []).localeCompare(newestPlay(modes[a] || [])))[0];
+  await select(first);
 }
 
 // --- start -------------------------------------------------------------------
