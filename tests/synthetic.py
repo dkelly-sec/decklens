@@ -68,3 +68,48 @@ def make_matchups(n: int = 6000, seed: int = 0, skill_noise: float = 1.0,
 
     names = {card_id(i): f"Card {i}" for i in range(N_CARDS)}
     return matchups, names, {card_id(i): float(s) for i, s in enumerate(strength)}
+
+
+# --- Archetypes -----------------------------------------------------------------
+#
+# Six archetypes, each defined by five core cards plus three random flex cards.
+# Two rock-paper-scissors cycles: 0 > 1 > 2 > 0 and 3 > 4 > 5 > 3. No single
+# card is strong on its own, so only a model that sees deck types can win.
+
+N_ARCHETYPES = 6
+RPS_EDGE = 1.2
+
+
+def core_cards(archetype: int) -> tuple[int, ...]:
+    return tuple(card_id(10 + 5 * archetype + i) for i in range(5))
+
+
+def _beats(i: int, j: int) -> float:
+    if i // 3 != j // 3 or i == j:
+        return 0.0
+    return RPS_EDGE if (j - i) % 3 == 1 else -RPS_EDGE
+
+
+def make_archetype_matchups(n: int = 6000, seed: int = 0
+                            ) -> tuple[list[Matchup], dict[int, str], dict[tuple, int]]:
+    rng = np.random.default_rng(seed)
+    flex_pool = [card_id(i) for i in range(40, 60)]
+    start = datetime(2026, 10, 1, tzinfo=timezone.utc)
+    truth: dict[tuple, int] = {}
+
+    def deck(archetype: int) -> tuple[int, ...]:
+        flex = rng.choice(flex_pool, 3, replace=False)
+        d = tuple(sorted(core_cards(archetype) + tuple(int(c) for c in flex)))
+        truth[d] = archetype
+        return d
+
+    matchups = []
+    for k in range(n):
+        i, j = (int(x) for x in rng.integers(N_ARCHETYPES, size=2))
+        a, b = deck(i), deck(j)
+        logit = _beats(i, j) + rng.normal(0, 0.5)
+        won = int(rng.random() < 1 / (1 + math.exp(-logit)))
+        matchups.append(Matchup(f"r{k:06d}", start + timedelta(minutes=k), a, b, 0.0, 0.0, won))
+
+    names = {card_id(i): f"Card {i}" for i in range(N_CARDS)}
+    return matchups, names, truth

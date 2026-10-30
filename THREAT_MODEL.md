@@ -34,7 +34,7 @@ Living document: update it as features are added. Last reviewed: week 3.
 | Vulnerable dependencies | pip-audit in CI, Dependabot weekly updates | Done |
 | Overloading or abusing the upstream API | Crawler request budget, minimum pause between requests, backoff on 429, stops on 403 or repeated failures | Done |
 | Untrusted values from API responses (leaderboard cursors, ids, ranks) | Location and season ids allowlisted; paging cursors validated before reuse; numbers accepted only as plain integers | Done |
-| Unsafe deserialisation of model files | Models exported as plain JSON (weights and card names), never pickle/joblib, so loading one can't run code; format tag and finite weights checked on load | Done |
+| Unsafe deserialisation of model files | Models exported as plain JSON (weights, archetype centroids, win counts), never pickle/joblib, so loading one can't run code; format tag, array shapes, value ranges and finite numbers checked on load | Done |
 | Misleading model results (leakage and confounding) | Train on older battles, test on strictly newer ones; card vocabulary built from training data only; player identity never used; skill at battle time included so card weights aren't inflated by who plays them; models symmetric so tag-order bias can't be exploited | Done |
 | Supply chain: CI actions | Dependabot updates actions; pin to commit SHAs | Partly done |
 | Over-retention of player data | Nightly crawl deletes players not seen for 90 days | Done |

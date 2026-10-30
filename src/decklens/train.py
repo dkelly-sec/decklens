@@ -6,8 +6,8 @@
     python -m decklens.train --min-league 7    # top league only
 
 Writes reports/model-YYYY-MM-DD.md (aggregate numbers only, safe to commit)
-and models/decklens-linear-YYYY-MM-DD.json (plain JSON weights; models/ is
-gitignored).
+and, in models/ (gitignored), decklens-linear-YYYY-MM-DD.json and
+decklens-archetypes-YYYY-MM-DD.json: plain JSON, safe to load.
 """
 
 from __future__ import annotations
@@ -23,10 +23,12 @@ from typing import Sequence
 
 import numpy as np
 
+from .archetypes import ArchetypeModel, fit_tuned
 from .config import ConfigError, load_settings
 from .features import CardVocab, Matchup, labels
 from .model import (
     Evaluation, ExtrasOnlyBaseline, LinearMatchupModel, TreeMatchupModel, evaluate, time_split,
+    wilson_interval,
 )
 
 log = logging.getLogger("decklens.train")
@@ -35,6 +37,8 @@ MIN_BATTLES = 1000
 COIN, LEVELS, SKILL = "Coin flip (always 50%)", "Card levels only", "Player skill only"
 LINEAR = "Logistic regression (cards + levels + skill)"
 TREES = "Gradient-boosted trees (card pairs + levels + skill)"
+ARCHETYPES = "Archetype matchup table"
+ARCHETYPE_OPTIONS = (10, 20, 40, 80)
 
 
 @dataclass
@@ -53,6 +57,8 @@ class TrainingResult:
     test_side0_win_rate: float
     both_ranked: float  # share of battles where both players had a leaderboard rank
     one_ranked: float
+    archetypes: ArchetypeModel | None = None
+    archetype_info: dict | None = None
 
 
 def run_training(
@@ -64,6 +70,7 @@ def run_training(
     min_league: int | None = None,
     days: int | None = None,
     with_trees: bool = True,
+    with_archetypes: bool = True,
 ) -> TrainingResult:
     if len(matchups) < MIN_BATTLES:
         raise ValueError(f"need at least {MIN_BATTLES} decided battles, have {len(matchups)}")
@@ -85,6 +92,11 @@ def run_training(
         trees = TreeMatchupModel.fit(vocab, train)
         evaluations.append(evaluate(TREES, trees.predict_proba(test), y_test))
 
+    archetypes, archetype_info = None, None
+    if with_archetypes:
+        archetypes, archetype_info = fit_tuned(vocab, train, cluster_options=ARCHETYPE_OPTIONS)
+        evaluations.append(evaluate(ARCHETYPES, archetypes.predict_proba(test), y_test))
+
     ranked_counts = [(m.rank_a is not None) + (m.rank_b is not None) for m in matchups]
     return TrainingResult(
         model=linear, evaluations=evaluations, n_train=len(train), n_test=len(test),
@@ -94,6 +106,7 @@ def run_training(
         test_side0_win_rate=float(y_test.mean()),
         both_ranked=ranked_counts.count(2) / len(matchups),
         one_ranked=ranked_counts.count(1) / len(matchups),
+        archetypes=archetypes, archetype_info=archetype_info,
     )
 
 
@@ -171,6 +184,10 @@ def render_report(r: TrainingResult) -> str:
         f"- Skill weight: {r.model.skill_weight:+.3f}. All else equal, a player ranked 10x "
         f"higher (e.g. #100 vs #1,000) wins about {_pct(_ten_times_better(r.model.skill_weight))}.",
         f"- Level weight: {r.model.level_weight:+.3f} per average level of advantage.",
+    ]
+    if r.archetypes is not None:
+        lines += _archetype_sections(r)
+    lines += [
         "",
         "## Limits",
         "",
@@ -183,6 +200,44 @@ def render_report(r: TrainingResult) -> str:
     return "\n".join(lines)
 
 
+def _archetype_sections(r: TrainingResult) -> list[str]:
+    model, info = r.archetypes, r.archetype_info or {}
+    clusters = int(info.get("archetypes", len(model.groups)))
+    lines = [
+        "",
+        "## Deck archetypes",
+        "",
+        f"{len(model.names)} archetypes found automatically: decks were grouped by shared cards "
+        f"into {clusters} clusters (chosen on held-out battles from "
+        f"{', '.join(map(str, ARCHETYPE_OPTIONS))}), and clusters with mostly the same core "
+        "cards were merged. Each is named after its signature cards.",
+        "",
+        "| Archetype | Share of decks | Win rate vs others (95% range) | Games |",
+        "| --- | --- | --- | --- |",
+    ]
+    for a in sorted(model.summary(), key=lambda a: -a["share"])[:12]:
+        lo, hi = wilson_interval(a["wins"], a["games"])
+        rate = a["wins"] / a["games"] if a["games"] else 0.5
+        lines.append(f"| {a['name']} | {_pct(a['share'])} | {_pct(rate)} ({_pct(lo)}–{_pct(hi)}) "
+                     f"| {a['games']:,} |")
+
+    lopsided = []
+    for row in model.matchup_rows(min_games=30):
+        lo, hi = wilson_interval(row["a_wins"], row["games"])
+        if hi < 0.5 or lo > 0.5:  # whole 95% range on one side of 50%
+            lopsided.append((abs(row["a_wins"] / row["games"] - 0.5), row, lo, hi))
+    lines += ["", "## Most lopsided archetype matchups", "",
+              "Pairings with at least 30 games whose whole 95% range is above or below 50%.", ""]
+    if not lopsided:
+        lines.append("None yet: no pairing is clearly lopsided with this much data.")
+    else:
+        lines += ["| Archetype | vs | First wins (95% range) | Games |", "| --- | --- | --- | --- |"]
+        for _, row, lo, hi in sorted(lopsided, key=lambda t: -t[0])[:10]:
+            lines.append(f"| {row['a']} | {row['b']} | {_pct(row['a_wins'] / row['games'])} "
+                         f"({_pct(lo)}–{_pct(hi)}) | {row['games']:,} |")
+    return lines
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Train DeckLens matchup models.")
     parser.add_argument("--days", type=int, default=14,
@@ -193,6 +248,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--min-card-count", type=int, default=30,
                         help="ignore cards seen fewer times than this in training")
     parser.add_argument("--no-trees", action="store_true", help="skip the gradient-boosted model")
+    parser.add_argument("--no-archetypes", action="store_true", help="skip the archetype model")
     parser.add_argument("--report-dir", default="reports")
     parser.add_argument("--model-dir", default="models")
     args = parser.parse_args(argv)
@@ -221,6 +277,7 @@ def main(argv: list[str] | None = None) -> int:
             matchups, names, test_fraction=args.test_fraction,
             min_card_count=args.min_card_count, min_league=args.min_league,
             days=args.days or None, with_trees=not args.no_trees,
+            with_archetypes=not args.no_archetypes,
         )
     except ValueError as exc:
         log.error("%s", exc)
@@ -232,6 +289,10 @@ def main(argv: list[str] | None = None) -> int:
     report_path.write_text(render_report(result), encoding="utf-8")
     model_path = Path(args.model_dir) / f"decklens-linear-{stamp}.json"
     result.model.save(model_path)
+    if result.archetypes is not None:
+        archetype_path = Path(args.model_dir) / f"decklens-archetypes-{stamp}.json"
+        result.archetypes.save(archetype_path)
+        log.info("archetypes: %d (saved to %s)", len(result.archetypes.names), archetype_path)
 
     log.info("skill data: both ranked %s, one ranked %s",
              _pct(result.both_ranked), _pct(result.one_ranked))
