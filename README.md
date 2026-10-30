@@ -46,10 +46,10 @@ The crawler seeds from the Ranked leaderboard, then follows opponents best-ranke
 ```powershell
 python -m decklens.crawl --probe                 # check response shapes; stores nothing
 python -m decklens.crawl --max-players 100       # small first run
-python -m decklens.crawl                         # full run: top 10,000 leaderboard, up to 1,500 battle logs
+python -m decklens.crawl --countries 1000        # full run: global + country leaderboards, up to 1,500 battle logs
 ```
 
-Each battle log is one API request. Runs pause between requests, back off when rate-limited, and stop at once on a 403 (bad key or IP). Battle logs only carry a player's rank for the top 500, so the nightly run also records the leaderboard to 10,000 (about 100 requests); together they give each player's rank at the time of each battle, which powers the top 200 / 1,000 tiers. The deeper leaderboard also lets name search find players down to rank 10,000. Players not seen for 90 days are deleted (retention policy).
+Each battle log is one API request. Runs pause between requests, back off when rate-limited, and stop at once on a 403 (bad key or IP). Battle logs only carry a player's rank for the top 500, so each run also records the global leaderboard (the API stops at 1,000); together they give each player's rank at the time of each battle, which powers the top 200 / 1,000 tiers. To find players outside the global top 1,000 by name, `--countries 1000` also indexes every country's Ranked leaderboard. Those ranks are local, so they are stored as names only, never mixed into the global ranks. Players not seen for 90 days are deleted (retention policy).
 
 **Upgrading an existing database** (run once, as the owner):
 
@@ -66,6 +66,15 @@ $action  = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-NoProfi
 $trigger = New-ScheduledTaskTrigger -Daily -At 3am
 $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable
 Register-ScheduledTask -TaskName "DeckLens nightly crawl" -Action $action -Trigger $trigger -Settings $settings
+```
+
+`scripts/refresh-index.ps1` refreshes just the name index (global and country leaderboards, no battle logs) so players who climbed today are searchable. Register it to run every 6 hours:
+
+```powershell
+$action  = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-NoProfile -ExecutionPolicy Bypass -File `"$PWD\scripts\refresh-index.ps1`""
+$trigger = New-ScheduledTaskTrigger -Once -At 10am -RepetitionInterval (New-TimeSpan -Hours 6)
+$settings = New-ScheduledTaskSettingsSet -StartWhenAvailable
+Register-ScheduledTask -TaskName "DeckLens index refresh" -Action $action -Trigger $trigger -Settings $settings
 ```
 
 The PC must be on, Docker Desktop running, and your public IP must still match the API key.

@@ -171,3 +171,69 @@ def test_season_fallback_with_only_placeholders_returns_nothing():
     client = BoardClient([], [{"code": None}, "junk"], [{"tag": "#2PP"}])
     entries, _ = fetch_leaderboard(client, location="global", season=None, limit=10)
     assert entries == [] and client.season_requested is None
+
+
+# --- country leaderboards (name index) ---------------------------------------------------
+
+
+class CountryClient:
+    def __init__(self, boards, errors=None, locations=None):
+        self.boards, self.errors, self.requested = boards, errors or {}, []
+        self.locations = locations if locations is not None else [
+            {"id": 57000001, "name": "Europe", "isCountry": False},      # region: skipped
+            {"id": 57000017, "name": "Australia", "isCountry": True},
+            {"id": 57000056, "name": "France", "isCountry": True},
+            {"id": "57000099", "isCountry": True},                       # id not an int: skipped
+            {"id": 57000094, "isCountry": "yes"},                        # flag not True: skipped
+            "junk",
+        ]
+
+    def get_locations(self):
+        return self.locations
+
+    def get_ranked_leaderboard(self, location, max_items):
+        self.requested.append((location, max_items))
+        if location in self.errors:
+            raise self.errors[location]
+        return self.boards.get(location, [])
+
+
+def sweep(client, **kw):
+    from decklens.crawl import sweep_countries
+
+    saved, sleeps = [], []
+    stats = sweep_countries(client, lambda found: saved.extend(found) or len(found),
+                            per_country=kw.pop("per_country", 1000), sleep=sleeps.append, **kw)
+    return stats, saved, sleeps
+
+
+def test_country_boards_fill_the_name_index_without_local_ranks():
+    client = CountryClient({"57000017": [{"tag": "#2PP", "name": "Aussie", "rank": 1,
+                                          "eloRating": 2400}],
+                            "57000056": [{"tag": "#9QJ", "name": "Français", "rank": 3}]})
+    stats, saved, sleeps = sweep(client, per_country=500)
+    assert client.requested == [("57000017", 500), ("57000056", 500)]  # countries only
+    assert {e.tag for e in saved} == {"#2PP", "#9QJ"}
+    assert all(e.rank is None for e in saved)          # country ranks never stored as global
+    assert (stats.countries, stats.with_players, stats.players, stats.failures) == (2, 2, 2, 0)
+    assert len(sleeps) == 2                             # pause after every request
+
+
+def test_a_failing_country_is_skipped_but_403_stops_the_sweep():
+    client = CountryClient({"57000056": [{"tag": "#9QJ", "name": "x", "rank": 1}]},
+                           errors={"57000017": ApiError("HTTP 500", 500)})
+    stats, saved, _ = sweep(client)
+    assert stats.failures == 1 and [e.tag for e in saved] == ["#9QJ"]
+
+    with pytest.raises(CrawlAborted):
+        sweep(CountryClient({}, errors={"57000017": ApiError("403 forbidden", 403)}))
+
+
+def test_country_sweep_gives_up_when_every_board_fails():
+    locations = [{"id": 57000000 + i, "isCountry": True} for i in range(20)]
+    errors = {str(57000000 + i): NotFoundError("not found", 404) for i in range(20)}
+    stats, saved, _ = sweep(CountryClient({}, errors=errors, locations=locations))
+    assert stats.failures == 20 and saved == []          # 404s: endpoint missing, keep going
+    errors = {str(57000000 + i): ApiError("HTTP 502", 502) for i in range(20)}
+    with pytest.raises(CrawlAborted):
+        sweep(CountryClient({}, errors=errors, locations=locations))

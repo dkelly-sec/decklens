@@ -115,6 +115,10 @@ class ClashRoyaleClient:
         items = data.get("items") if isinstance(data, dict) else None
         return [i for i in items if isinstance(i, dict)] if isinstance(items, list) else []
 
+    def get_locations(self) -> list[dict[str, Any]]:
+        """Every location (countries and regions), with ids and an isCountry flag."""
+        return self._get_paged("/locations", 1000)
+
     def get_seasons(self) -> list[dict[str, Any]]:
         data = self._get("/locations/global/seasonsV2")
         items = data.get("items") if isinstance(data, dict) else None

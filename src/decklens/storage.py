@@ -112,6 +112,20 @@ def save_rank_entries(
     return count
 
 
+def save_players(conn: Connection, entries: Iterable[RankEntry], observed_at: datetime) -> int:
+    """Store players for name search only, without a rank snapshot (used for
+    country leaderboards, whose ranks are local, not global)."""
+    count = 0
+    with conn.transaction(), conn.cursor() as cur:
+        for e in entries:
+            cur.execute(
+                _UPSERT_PLAYER,
+                (e.tag, e.name, search_key(e.name), e.clan_tag, e.clan_name, observed_at),
+            )
+            count += 1
+    return count
+
+
 def mark_crawled(conn: Connection, tag: str, when: datetime) -> None:
     with conn.transaction(), conn.cursor() as cur:
         cur.execute("UPDATE players SET last_crawled_at = %s WHERE tag = %s", (when, tag))

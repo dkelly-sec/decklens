@@ -22,7 +22,7 @@ if ($LASTEXITCODE -ne 0) {
     exit $LASTEXITCODE
 }
 
-cmd /c ".venv\Scripts\python.exe -m decklens.crawl --seed-leaderboard 10000 --max-players 1500 >> $log 2>&1"
+cmd /c ".venv\Scripts\python.exe -m decklens.crawl --seed-leaderboard 1000 --countries 1000 --max-players 1500 >> $log 2>&1"
 $code = $LASTEXITCODE
 Write-Log "nightly crawl finished (exit $code)"
 exit $code

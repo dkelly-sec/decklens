@@ -232,3 +232,14 @@ def test_tier_ranks_beyond_500_come_from_the_nearest_leaderboard_snapshot(conn):
 
     ranks = {frozenset((r[2], r[4])) for r in load_rows(conn, days=14)}
     assert ranks == {frozenset((80, 2400)), frozenset((300, 501)), frozenset((90, None))}
+
+
+def test_country_players_are_searchable_but_get_no_rank(conn):
+    from decklens.storage import save_players
+    from decklens.web.search import search_players
+
+    save_players(conn, [RankEntry(tag="#2PP", name="Ｃｏｕｎｔｒｙ ⚔ Star", rating=None, rank=None,
+                                  clan_tag=None, clan_name="Clan")], NOW)
+    assert search_players(conn, "country") == [
+        {"tag": "#2PP", "name": "Ｃｏｕｎｔｒｙ ⚔ Star", "clan": "Clan", "rank": None}]
+    assert conn.execute("SELECT count(*) FROM player_rank_snapshots").fetchone()[0] == 0

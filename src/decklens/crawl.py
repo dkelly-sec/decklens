@@ -1,8 +1,16 @@
 """Nightly crawl: seed from the Ranked leaderboard, then follow opponents.
 
-    python -m decklens.crawl                     # leaderboard top 10,000, crawl up to 1,500 players
+    python -m decklens.crawl                     # global top 1,000, crawl up to 1,500 players
+    python -m decklens.crawl --countries 1000    # also index every country's top 1,000 by name
+    python -m decklens.crawl --countries 1000 --max-players 0   # refresh the name index only
     python -m decklens.crawl --max-players 200   # smaller run
     python -m decklens.crawl --probe             # print response shapes only, store nothing
+
+The global leaderboard API stops at rank 1,000 (checked: asking for 10,000
+returns 1,000). Players ranked 1,000-10,000 worldwide are usually near the top
+of their own country, so the country leaderboards fill the name index in.
+Country ranks are local, so those players are stored for name search only,
+never with a rank that could be mistaken for a global one.
 
 Top players mostly face each other, so each battle log reveals more highly
 ranked players. Opponents are visited best-ranked first, within a fixed budget
@@ -17,7 +25,7 @@ import json
 import logging
 import sys
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta, timezone
 from typing import Callable, Iterable, Protocol
 
@@ -32,6 +40,7 @@ log = logging.getLogger("decklens.crawl")
 UNRANKED_PRIORITY = 1_000_000  # opponents without a known rank go to the back
 RANKED_TYPE = "pathOfLegend"
 MAX_FAILURES = 10
+PROGRESS_EVERY = 25  # countries between progress lines in the log
 
 
 class Store(Protocol):
@@ -157,6 +166,67 @@ def fetch_leaderboard(
     return parse_leaderboard(items), "season"
 
 
+@dataclass
+class CountrySweep:
+    countries: int = 0      # country leaderboards asked for
+    with_players: int = 0   # ...that had anyone on them
+    players: int = 0
+    failures: int = 0
+
+
+def country_ids(client: ClashRoyaleClient) -> list[str]:
+    """Ids of every location that is a country (regions like 'Europe' are skipped)."""
+    ids = []
+    for loc in client.get_locations():
+        if not isinstance(loc, dict):
+            continue
+        loc_id = loc.get("id")
+        if loc.get("isCountry") is True and isinstance(loc_id, int) and not isinstance(loc_id, bool):
+            ids.append(str(loc_id))
+    return ids
+
+
+def sweep_countries(
+    client: ClashRoyaleClient,
+    save: Callable[[list[RankEntry]], int],
+    *,
+    per_country: int,
+    pause: float = 0.2,
+    sleep: Callable[[float], None] = time.sleep,
+) -> CountrySweep:
+    """Add every country's Ranked leaderboard to the name index.
+
+    Ranks on these boards are country ranks, so they are dropped before saving.
+    A country that fails is skipped; a 403 (bad key or IP) stops the sweep.
+    """
+    stats = CountrySweep()
+    ids = country_ids(client)
+    log.info("sweeping %d country leaderboards", len(ids))
+    for loc in ids:
+        stats.countries += 1
+        if stats.countries % PROGRESS_EVERY == 0:
+            log.info("countries: %d of %d done, %d players so far",
+                     stats.countries - 1, len(ids), stats.players)
+        try:
+            entries = parse_leaderboard(client.get_ranked_leaderboard(loc, max_items=per_country))
+        except NotFoundError:
+            stats.failures += 1
+            continue
+        except ApiError as exc:
+            if exc.status == 403:
+                raise CrawlAborted(str(exc)) from None
+            stats.failures += 1
+            if stats.failures >= MAX_FAILURES and stats.with_players == 0:
+                raise CrawlAborted("country leaderboards keep failing; stopping") from None
+            continue
+        finally:
+            sleep(pause)
+        if entries:
+            stats.with_players += 1
+            stats.players += save([replace(e, rank=None) for e in entries])
+    return stats
+
+
 # --- probe ----------------------------------------------------------------
 
 
@@ -210,10 +280,13 @@ class _PgStore:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Seed from the Ranked leaderboard and crawl.")
-    parser.add_argument("--seed-leaderboard", type=int, default=10_000, metavar="N",
-                        help="leaderboard players to record (0 to skip). Their ranks fill in "
-                             "the top 1,000 / 10,000 tiers, since battles only carry a rank "
-                             "for the top 500. The best-ranked are crawled first.")
+    parser.add_argument("--seed-leaderboard", type=int, default=1000, metavar="N",
+                        help="global leaderboard players to record, at most 1,000 (the API's "
+                             "limit; 0 to skip). Their ranks fill in the top 1,000 tier, since "
+                             "battles only carry a rank for the top 500.")
+    parser.add_argument("--countries", type=int, default=0, metavar="N",
+                        help="also add each country's top N (at most 1,000) to the name index, "
+                             "so players outside the global top 1,000 can be searched (0 to skip)")
     parser.add_argument("--location", default="global", help="'global' or a numeric location id")
     parser.add_argument("--season", help="seed from a finished season's leaderboard instead")
     parser.add_argument("--max-players", type=int, default=1500,
@@ -228,8 +301,10 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
-    if not 0 <= args.max_players <= 20_000 or not 0 <= args.seed_leaderboard <= 10_000:
-        parser.error("--max-players must be 0-20000 and --seed-leaderboard 0-10000")
+    if not 0 <= args.max_players <= 20_000:
+        parser.error("--max-players must be 0-20000 (0 skips crawling)")
+    if not 0 <= args.seed_leaderboard <= 1000 or not 0 <= args.countries <= 1000:
+        parser.error("--seed-leaderboard and --countries must be 0-1000")
     if args.pause < 0.05:
         parser.error("--pause must be at least 0.05 seconds")
 
@@ -247,7 +322,9 @@ def main(argv: list[str] | None = None) -> int:
 
         import psycopg
 
-        from .storage import players_due_for_crawl, prune_stale_players, save_rank_entries
+        from .storage import (
+            players_due_for_crawl, prune_stale_players, save_players, save_rank_entries,
+        )
 
         def now() -> datetime:
             return datetime.now(timezone.utc)
@@ -261,25 +338,35 @@ def main(argv: list[str] | None = None) -> int:
                 save_rank_entries(conn, entries, now(), source)
                 log.info("seeded %d players from the %s", len(entries), source)
 
-            # Leaderboard players are now in the database with their rank, so one
-            # query picks who to visit: best-ranked first, skipping anyone crawled
-            # within the last --recrawl-hours.
-            seeds = players_due_for_crawl(
-                conn, now=now(), recrawl_after=timedelta(hours=args.recrawl_hours),
-                limit=args.max_players,
-            )
-            log.info("%d players due for a crawl", len(seeds))
+            if args.countries:
+                sweep = sweep_countries(
+                    client, lambda found: save_players(conn, found, now()),
+                    per_country=args.countries, pause=args.pause,
+                )
+                log.info("name index: %d players from %d of %d country leaderboards "
+                         "(%d failed)", sweep.players, sweep.with_players, sweep.countries,
+                         sweep.failures)
 
-            stats = crawl(client, _PgStore(conn, now), seeds,
-                          max_players=args.max_players, pause=args.pause)
-            log.info(
-                "done: %d players crawled, %d battles seen, %d new, %d new players discovered, "
-                "%d not found, %d failures",
-                stats.players_crawled, stats.battles_seen, stats.battles_new,
-                stats.discovered, stats.not_found, stats.failures,
-            )
-            if stats.skipped_types:
-                log.info("skipped battle types: %s", stats.skipped_types)
+            if args.max_players:
+                # Leaderboard players are now in the database with their rank, so one
+                # query picks who to visit: best-ranked first, skipping anyone crawled
+                # within the last --recrawl-hours.
+                seeds = players_due_for_crawl(
+                    conn, now=now(), recrawl_after=timedelta(hours=args.recrawl_hours),
+                    limit=args.max_players,
+                )
+                log.info("%d players due for a crawl", len(seeds))
+
+                stats = crawl(client, _PgStore(conn, now), seeds,
+                              max_players=args.max_players, pause=args.pause)
+                log.info(
+                    "done: %d players crawled, %d battles seen, %d new, "
+                    "%d new players discovered, %d not found, %d failures",
+                    stats.players_crawled, stats.battles_seen, stats.battles_new,
+                    stats.discovered, stats.not_found, stats.failures,
+                )
+                if stats.skipped_types:
+                    log.info("skipped battle types: %s", stats.skipped_types)
 
             if args.retention_days:
                 removed = prune_stale_players(conn, now=now(), keep_days=args.retention_days)
