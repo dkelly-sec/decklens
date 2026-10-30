@@ -226,10 +226,17 @@ function matchupBox(m, label) {
 
 // --- you ---------------------------------------------------------------------
 
-async function lookUpMe(event) {
-  if (event) event.preventDefault();
+// A tag uses only these characters (the letter O is accepted as zero).
+const TAG_PATTERN = /^#?[0289PYLQGRJCUVO]{3,15}$/i;
+
+function asTag(text) {
+  const t = text.trim();
+  if (!TAG_PATTERN.test(t)) return null;
+  return "#" + t.replace(/^#/, "").toUpperCase().replace(/O/g, "0");
+}
+
+async function showMe(tag) {
   const out = document.getElementById("me-result");
-  const tag = document.getElementById("me-tag").value;
   show(out, el("p", "Looking up…", "muted"));
   try {
     const me = await api("/api/players/" + tagPath(tag));
@@ -242,6 +249,48 @@ async function lookUpMe(event) {
     state.me = null;
     show(out, errorBox(error));
   }
+}
+
+function pickButton(content, onPick) {
+  const item = el("li");
+  const button = el("button", null, "result-button");
+  button.type = "button";
+  button.append(content);
+  button.addEventListener("click", onPick);
+  item.append(button);
+  return item;
+}
+
+// "#..." looks up a tag straight away. Anything else searches names, and if
+// the text could also be a tag, that is offered as the first choice.
+async function lookUpMe(event) {
+  if (event) event.preventDefault();
+  const out = document.getElementById("me-result");
+  const text = document.getElementById("me-tag").value;
+  const tag = asTag(text);
+  if (text.trim().startsWith("#")) {
+    if (tag) await showMe(tag);
+    else show(out, el("p", "That isn't a valid player tag.", "error"));
+    return;
+  }
+  show(out, el("p", "Searching…", "muted"));
+  let results = [];
+  let searchError = null;
+  try {
+    results = (await api("/api/search?name=" + encodeURIComponent(text))).results;
+  } catch (error) {
+    searchError = error;
+  }
+  if (!results.length && !tag) {
+    show(out, searchError ? errorBox(searchError) : el("p", "No players found with that name. " +
+      "DeckLens only knows players it has seen in ranked games, so try your tag instead " +
+      "(it's under your name on your profile).", "muted"));
+    return;
+  }
+  const list = el("ul", null, "results");
+  if (tag) list.append(pickButton(el("p", "Use player tag " + tag, "player"), () => showMe(tag)));
+  for (const r of results) list.append(pickButton(playerLine(r), () => showMe(r.tag)));
+  show(out, el("p", "Tap yourself:", "hint"), list);
 }
 
 // --- last opponent -----------------------------------------------------------
@@ -353,9 +402,9 @@ document.addEventListener("DOMContentLoaded", () => {
   document.getElementById("me-form").addEventListener("submit", lookUpMe);
   document.getElementById("last-button").addEventListener("click", scoutLast);
   document.getElementById("find-form").addEventListener("submit", findOpponent);
-  const saved = storageGet("decklens.myTag");
+  const saved = asTag(storageGet("decklens.myTag") || "");
   if (saved) {
     document.getElementById("me-tag").value = saved;
-    lookUpMe();
+    showMe(saved);
   }
 });

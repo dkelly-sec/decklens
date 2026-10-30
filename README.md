@@ -105,7 +105,7 @@ $pw | Set-Clipboard   # then set WEB_DATABASE_URL in .env (see .env.example)
 ```
 
 What the page does:
-- **You:** look up your tag to load your current deck (remembered in your browser).
+- **You:** type your name (picked from the player index) or your tag to load your current deck; your tag is remembered in your browser.
 - **Last opponent:** your most recent ranked opponent, their deck, and how your archetype tends to do against theirs.
 - **Find an opponent:** type the letters you can see in their name; pick them from the matches (closest rank to yours first) to see their recent decks and the matchup against yours.
 - **Deck details:** card art, elixir, evolutions and levels for every card, plus average elixir, 4-card cycle cost and how many cards are maxed.
