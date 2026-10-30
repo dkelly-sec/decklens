@@ -92,12 +92,32 @@ button:focus-visible, input:focus-visible { outline: 3px solid var(--accent); ou
 }
 
 .deck li {
-  padding: 6px 8px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 8px 6px;
   border: 1px solid var(--border);
+  border-top: 3px solid var(--border);
   border-radius: 6px;
   font-size: 14px;
   text-align: center;
 }
+
+.deck img { width: 64px; height: auto; }
+.card-name { font-weight: 600; }
+.card-facts { font-size: 12px; color: var(--muted); }
+.deck li.common { border-top-color: #9aa3b5; }
+.deck li.rare { border-top-color: #e0902b; }
+.deck li.epic { border-top-color: #a347e0; }
+.deck li.legendary { border-top-color: #3fc1c9; }
+.deck li.champion { border-top-color: #f2c94c; }
+.deck-facts { color: var(--muted); margin: 4px 0; }
+
+.tiers { width: 100%; border-collapse: collapse; margin: 8px 0; font-size: 14px; }
+.tiers th, .tiers td { padding: 6px 8px; border-bottom: 1px solid var(--border); text-align: left; }
+.tiers th { color: var(--muted); font-weight: 600; }
+.few { color: var(--muted); }
 
 .matchup {
   margin-top: 12px;

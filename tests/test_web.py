@@ -18,9 +18,10 @@ ME, OPP = "#2PP", "#9QJ"
 HOSTILE = "<script>alert(1)</script>" + "x" * 100
 
 
-def cards(ids):
-    return [{"id": int(c), "name": f"Card {int(c) - 26000000}", "level": 16, "maxLevel": 16}
-            for c in ids]
+def cards(ids, level=16):
+    return [{"id": int(c), "name": f"Card {int(c) - 26000000}", "level": level, "maxLevel": 16,
+             "elixirCost": 2 + i % 4, "rarity": "Common"}
+            for i, c in enumerate(ids)]
 
 
 MY_DECK = core_cards(0) + (card_id(40), card_id(41), card_id(42))
@@ -138,7 +139,7 @@ def test_page_and_static_files_are_served():
 def test_player_lookup_and_cache():
     app, services, _ = make()
     first = app.get("/api/players/%232PP").json()
-    assert first["name"] == "Me" and first["rank"] == 150 and len(first["deck"]) == 8
+    assert first["name"] == "Me" and first["rank"] == 150 and len(first["deck"]["cards"]) == 8
     app.get("/api/players/2pp")  # same player, written differently
     assert services.client.calls == [("player", "#2PP")]  # second answer came from the cache
 
@@ -185,7 +186,7 @@ def test_last_opponent_with_matchup(predictor):
     app, _, _ = make(predictor)
     data = app.get("/api/players/%232PP/last-opponent").json()
     assert data["tag"] == OPP and data["your_result"] == "lost"  # newest ranked battle; trail skipped
-    assert data["rank"] == 812 and len(data["deck"]) == 8
+    assert data["rank"] == 812 and len(data["deck"]["cards"]) == 8
     assert data["name"] == HOSTILE[:64]  # hostile name: length-limited, returned as plain data
     assert 0 <= data["matchup"]["win_chance"] <= 1
     assert data["matchup"]["archetype_a"] != data["matchup"]["archetype_b"]
@@ -310,3 +311,233 @@ def test_placeholder_database_url_turns_search_off(monkeypatch, tmp_path):
     monkeypatch.setenv("DECKLENS_MODEL_DIR", str(tmp_path))
     health = TestClient(create_app_from_env()).get("/api/health").json()
     assert health == {"status": "ok", "model": False, "search": False}
+
+
+
+# --- deck details --------------------------------------------------------------------
+
+
+def test_deck_details_and_summary():
+    from decklens.web.services import _cards, deck_summary
+
+    raw = [
+        {"id": 1, "name": "Hog Rider", "elixirCost": 4, "level": 14, "maxLevel": 16,
+         "rarity": "Rare", "evolutionLevel": 0},
+        {"id": 2, "name": "Skeletons", "elixirCost": 1, "level": 16, "maxLevel": 16,
+         "rarity": "Common", "evolutionLevel": 1},
+        {"id": 3, "name": "Mirror", "level": 16, "maxLevel": 16, "rarity": "<b>Epic</b>"},
+        {"id": 4, "name": "Cannon", "elixirCost": 3, "level": "16", "maxLevel": 16},
+        {"id": 5, "name": "Log", "elixirCost": 2, "level": 16, "maxLevel": 16},
+        {"id": 6, "name": "Ice Spirit", "elixirCost": 1, "level": 16, "maxLevel": 16},
+        {"id": 7, "name": "Musketeer", "elixirCost": 4, "level": 16, "maxLevel": 16},
+        {"id": 8, "name": "Fireball", "elixirCost": 99, "level": 16, "maxLevel": 16},
+    ]
+    cards_out = {c["id"]: c for c in _cards(raw)}
+    assert cards_out[1]["below_max"] == 2 and cards_out[1]["rarity"] == "rare"
+    assert cards_out[2]["evolved"] is True
+    assert cards_out[3]["elixir"] is None and cards_out[3]["rarity"] is None  # unknown values dropped
+    assert cards_out[4]["below_max"] is None                                  # "16" isn't a number
+    assert cards_out[8]["elixir"] is None                                     # impossible cost dropped
+    summary = deck_summary(list(cards_out.values()))
+    assert summary == {"avg_elixir": 2.5, "cycle": 7, "evolutions": 1, "maxed": 6}
+
+
+def test_recent_decks_include_details_and_last_played():
+    app, _, _ = make()
+    d = app.get("/api/players/%239QJ/decks").json()["decks"][0]
+    assert d["deck"]["summary"]["avg_elixir"] == 3.5 and d["deck"]["summary"]["maxed"] == 8
+    assert d["last_played"].startswith("2026-10-30T01:05")
+
+
+def test_key_cards_say_whose_deck_they_are_in(predictor):
+    app, _, _ = make(predictor)
+    data = app.post("/api/predict", json={"deck_a": list(MY_DECK), "deck_b": list(OPP_DECK)}).json()
+    assert {k["deck"] for k in data["key_cards"]} <= {"yours", "theirs"}
+    assert all(set(k) == {"card", "deck", "effect"} for k in data["key_cards"])
+
+
+# --- win rates by tier ------------------------------------------------------------------
+
+
+def _tier_rows():
+    """(winner_side, deck0, rank0, deck1, rank1) rows: archetype 0 vs archetype 1."""
+    rows = []
+    rows += [(0, MY_DECK, 50, OPP_DECK, 150)] * 6      # top 200 game, my archetype wins
+    rows += [(1, MY_DECK, 50, OPP_DECK, 150)] * 2      # top 200 game, theirs wins
+    rows += [(0, MY_DECK, 500, OPP_DECK, 900)] * 3     # top 1,000 only
+    rows += [(1, OPP_DECK, 3000, MY_DECK, 9000)] * 4   # top 10,000 only; sides swapped
+    rows += [(0, MY_DECK, 50, MY_DECK, 60)] * 5        # mirror match
+    return rows
+
+
+def test_tier_table_counts_only_battles_inside_each_tier(predictor):
+    from decklens.web.tiers import TierStats
+
+    stats = TierStats(predictor.archetypes, _tier_rows)
+    i, j = (int(x) for x in predictor.archetypes.assign([MY_DECK, OPP_DECK]))
+    top200, top1000, top10000 = stats.matchup(i, j)
+    assert (top200["tier"], top200["wins"], top200["games"]) == (200, 6, 8)
+    assert (top1000["wins"], top1000["games"]) == (9, 11)
+    assert (top10000["wins"], top10000["games"]) == (13, 15)  # swapped sides counted correctly
+    assert top200["range"][0] < top200["rate"] < top200["range"][1]
+    mirror = stats.matchup(i, i)
+    assert mirror[0] == {"tier": 200, "games": 5, "mirror": True}
+
+
+def test_tier_stats_are_cached_and_survive_database_trouble(predictor):
+    from decklens.web.tiers import TierStats
+
+    calls = []
+    now = [0.0]
+
+    def flaky():
+        calls.append(1)
+        if len(calls) > 1:
+            raise RuntimeError("database down")
+        return _tier_rows()
+
+    stats = TierStats(predictor.archetypes, flaky, ttl=600, clock=lambda: now[0])
+    first = stats.matchup(0, 1)
+    stats.matchup(0, 1)
+    assert len(calls) == 1          # cached
+    now[0] = 601
+    assert stats.matchup(0, 1) == first and len(calls) == 2  # refresh failed: old table kept
+
+
+def test_predict_includes_tiers_when_available(predictor):
+    from decklens.web.tiers import TierStats
+
+    predictor.tiers = TierStats(predictor.archetypes, _tier_rows)
+    try:
+        app, _, _ = make(predictor)
+        data = app.post("/api/predict", json={"deck_a": list(MY_DECK),
+                                              "deck_b": list(OPP_DECK)}).json()
+        assert [t["tier"] for t in data["tiers"]] == [200, 1000, 10_000]
+    finally:
+        predictor.tiers = None
+
+
+# --- card images ------------------------------------------------------------------------
+
+PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 100
+GOOD_URL = "https://api-assets.clashroyale.com/cards/300/abcDEF123_-xyz.png"
+EVO_URL = "https://api-assets.clashroyale.com/cardevolutions/300/evoXYZ.png"
+
+
+@pytest.mark.parametrize("url, ok", [
+    (GOOD_URL, True),
+    (EVO_URL, True),
+    ("http://api-assets.clashroyale.com/cards/300/a.png", False),          # not https
+    ("https://evil.example/cards/300/a.png", False),                        # other host
+    ("https://api-assets.clashroyale.com.evil.example/cards/300/a.png", False),
+    ("https://user@api-assets.clashroyale.com/cards/300/a.png", False),     # credentials trick
+    ("https://api-assets.clashroyale.com:8443/cards/300/a.png", False),     # other port
+    ("https://api-assets.clashroyale.com/cards/300/../../etc.png", False),  # path tricks
+    ("https://api-assets.clashroyale.com/cards/300/a.png?x=1", False),      # query string
+    ("https://169.254.169.254/latest/meta-data", False),                    # cloud metadata
+    (None, False),
+])
+def test_only_official_card_image_urls_are_allowed(url, ok):
+    from decklens.web.cards import safe_asset_url
+
+    assert (safe_asset_url(url) is not None) == ok
+
+
+class FakeAssetResponse:
+    def __init__(self, status=200, ctype="image/png", body=PNG):
+        self.status_code, self.headers, self.body = status, {"Content-Type": ctype}, body
+        self.closed = False
+
+    def iter_content(self, chunk_size):
+        for k in range(0, len(self.body), chunk_size):
+            yield self.body[k:k + chunk_size]
+
+    def close(self):
+        self.closed = True
+
+
+class FakeAssetSession:
+    def __init__(self, response=None):
+        self.response = response or FakeAssetResponse()
+        self.headers = {}
+        self.calls = []
+
+    def get(self, url, **kwargs):
+        self.calls.append((url, kwargs))
+        return self.response
+
+
+class CatalogClient(FakeClient):
+    def __init__(self, error=None):
+        super().__init__()
+        self.card_error = error
+
+    def get_cards(self):
+        self.calls.append(("cards", None))
+        if self.card_error:
+            raise self.card_error
+        return [
+            {"id": 26000010, "name": "Card 10",
+             "iconUrls": {"medium": GOOD_URL, "evolutionMedium": EVO_URL}},
+            {"id": 26000011, "name": "Card 11",
+             "iconUrls": {"medium": "https://evil.example/cards/300/x.png"}},
+        ]
+
+
+def _images(response=None, client=None):
+    from decklens.web.cards import CardImages
+
+    session = FakeAssetSession(response)
+    return CardImages(client or CatalogClient(), session=session), session
+
+
+def test_card_image_is_fetched_safely_and_cached():
+    images, session = _images()
+    assert images.image(26000010) == PNG
+    assert images.image(26000010) == PNG
+    assert len(session.calls) == 1                                  # cached
+    url, kwargs = session.calls[0]
+    assert url == GOOD_URL and kwargs["allow_redirects"] is False and kwargs["timeout"] == 5
+    assert "Authorization" not in kwargs.get("headers", {})         # API key never sent
+    assert "Authorization" not in session.headers
+    assert images.image(26000010, evolved=True) == PNG
+    assert session.calls[-1][0] == EVO_URL
+
+
+def test_card_with_unsafe_url_in_catalog_is_skipped():
+    images, session = _images()
+    assert images.image(26000011) is None and session.calls == []
+
+
+@pytest.mark.parametrize("response", [
+    FakeAssetResponse(status=302),                                 # redirect refused
+    FakeAssetResponse(ctype="text/html"),                          # not an image
+    FakeAssetResponse(body=b"<svg onload=alert(1)>"),              # PNG header lie
+    FakeAssetResponse(body=b"\x89PNG\r\n\x1a\n" + b"\x00" * 300_000),  # too big
+])
+def test_bad_image_responses_are_rejected(response):
+    images, _ = _images(response)
+    assert images.image(26000010) is None
+    assert response.closed
+
+
+def test_card_image_route():
+    images, _ = _images()
+    services = Services(client=FakeClient(), images=images)
+    app = TestClient(create_app(services), raise_server_exceptions=False)
+    ok = app.get("/cards/26000010.png")
+    assert ok.status_code == 200 and ok.content == PNG
+    assert ok.headers["content-type"] == "image/png"
+    assert ok.headers["cache-control"] == "public, max-age=86400"
+    assert ok.headers["x-content-type-options"] == "nosniff"
+    for bad in ("/cards/99.png", "/cards/abc.png", "/cards/-5.png", "/cards/26000011.png"):
+        assert app.get(bad).status_code in (404, 422)
+
+
+def test_card_images_degrade_gracefully():
+    images, _ = _images(client=CatalogClient(error=ApiError("forbidden", 403)))
+    app = TestClient(create_app(Services(client=FakeClient(), images=images)),
+                     raise_server_exceptions=False)
+    assert app.get("/cards/26000010.png").status_code == 404
+    no_images = TestClient(create_app(Services(client=FakeClient())))
+    assert no_images.get("/cards/26000010.png").status_code == 404

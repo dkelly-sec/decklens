@@ -155,16 +155,46 @@ def test_web_role_can_only_read(conn):
             conn.execute("REVOKE ALL ON players, player_rank_snapshots FROM decklens_web_test")
             conn.execute("DROP ROLE decklens_web_test")
 
+    grants = (ROOT / "db" / "web_grants.sql").read_text().replace("decklens_web", "decklens_web_test")
     drop_role()
     conn.execute("CREATE ROLE decklens_web_test")
-    conn.execute("GRANT SELECT ON players, player_rank_snapshots TO decklens_web_test")
+    conn.execute(grants)
     conn.execute("SET ROLE decklens_web_test")
     try:
-        conn.execute("SELECT count(*) FROM players")
-        for statement in ("DELETE FROM players", "SELECT count(*) FROM battles",
-                          "UPDATE players SET name = 'x'"):
+        for table in ("players", "player_rank_snapshots", "battles", "battle_players"):
+            conn.execute(f"SELECT count(*) FROM {table}")  # reading is allowed
+        for statement in ("DELETE FROM players", "UPDATE players SET name = 'x'",
+                          "DELETE FROM battles", "TRUNCATE battle_players",
+                          "INSERT INTO battles (battle_id, battle_time, battle_type) "
+                          "VALUES ('x', now(), 'x')"):
             with pytest.raises(psycopg.errors.InsufficientPrivilege):
                 conn.execute(statement)
     finally:
         conn.execute("RESET ROLE")
+        conn.execute("REVOKE ALL ON battles, battle_players FROM decklens_web_test")
         drop_role()
+
+
+
+def test_tier_rows_only_include_recent_battles_with_both_ranks(conn):
+    from decklens.storage import save_battles
+    from decklens.web.tiers import load_rows
+
+    recent = datetime.now(timezone.utc) - timedelta(days=1)
+    stamp = recent.strftime("%Y%m%dT%H%M%S.000Z")
+    both = battle(team_tag="#2PP", opp_tag="#9QJ")
+    both["battleTime"] = stamp
+    both["team"][0]["globalRank"], both["opponent"][0]["globalRank"] = 120, 450
+    one = battle(team_tag="#8YY", opp_tag="#9QJ")
+    one["battleTime"] = stamp
+    one["team"][0]["globalRank"] = 30                 # opponent unranked: not in any tier
+    old = battle(team_tag="#LLL", opp_tag="#9QJ")     # dated 30 Oct 2026, both ranked
+    old["team"][0]["globalRank"], old["opponent"][0]["globalRank"] = 10, 20
+    save_battles(conn, parse_battle_log([both, one, old])[0])
+
+    rows = load_rows(conn, days=14)
+    assert len(rows) == 1 + int(datetime.now(timezone.utc) - datetime(2026, 10, 30, 1, 15,
+                                                                        tzinfo=timezone.utc)
+                                < timedelta(days=14))
+    winner, deck0, rank0, deck1, rank1 = next(r for r in rows if {r[2], r[4]} == {120, 450})
+    assert len(deck0) == 8 and len(deck1) == 8 and winner in (0, 1)

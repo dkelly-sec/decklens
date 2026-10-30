@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Any, Callable, Iterator
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict
 
@@ -39,6 +39,7 @@ RATE_LIMITS = {
     "lookup": (30, 60.0),   # player / battle-log lookups: 30 a minute per client
     "search": (20, 60.0),   # name search: 20 a minute (slows down scraping the index)
     "predict": (60, 60.0),
+    "images": (600, 60.0),  # card art: a page shows up to ~40 cards at once
 }
 STATIC_DIR = Path(str(resources.files("decklens") / "web" / "static"))
 
@@ -48,6 +49,7 @@ class Services:
     client: Any                                   # ClashRoyaleClient (or a fake in tests)
     predictor: Predictor | None = None
     search_db: Callable[[], Any] | None = None    # returns a context manager yielding a connection
+    images: Any = None                            # CardImages
     limiter: RateLimiter = field(default_factory=lambda: RateLimiter(RATE_LIMITS))
     cache: TTLCache = field(default_factory=lambda: TTLCache(ttl=60.0, max_items=2000))
 
@@ -122,9 +124,9 @@ def create_app(services: Services, *, hsts: bool = False) -> FastAPI:
         found = last_ranked_opponent(tag, upstream("battlelog", tag))
         if found is None:
             raise HTTPException(404, "No recent ranked battles for this player")
-        if services.predictor is not None:
-            your = [c["id"] for c in found["your_deck"]]
-            theirs = [c["id"] for c in found["deck"]]
+        your = [c["id"] for c in found["your_deck"]["cards"]]
+        theirs = [c["id"] for c in found["deck"]["cards"]]
+        if services.predictor is not None and len(your) == 8 and len(theirs) == 8:
             found["matchup"] = services.predictor.predict(your, theirs)
         return found
 
@@ -154,6 +156,20 @@ def create_app(services: Services, *, hsts: bool = False) -> FastAPI:
         except ValueError as exc:
             raise HTTPException(400, str(exc)) from None
         return model.predict(deck_a, deck_b)
+
+    @app.get("/cards/{card_id}.png", include_in_schema=False,
+             dependencies=[Depends(limit("images"))])
+    def card_image(card_id: int, evo: bool = False) -> Response:
+        if services.images is None or not 0 < card_id < 10**9:
+            raise HTTPException(404, "No image")
+        try:
+            data = services.images.image(card_id, evolved=evo)
+        except ApiError:
+            data = None  # card list unavailable: the page falls back to card names
+        if data is None:
+            raise HTTPException(404, "No image")
+        return Response(data, media_type="image/png",
+                        headers={"Cache-Control": "public, max-age=86400"})
 
     @app.get("/", include_in_schema=False)
     def index() -> FileResponse:
@@ -210,6 +226,18 @@ def create_app_from_env() -> FastAPI:
     predictor = load_predictor(model_dir)
     if predictor is None:
         log.warning("no trained models in %s: predictions are off until you train", model_dir)
+    elif search_db is not None:
+        from .tiers import TierStats, load_rows
+
+        def rows() -> list[tuple]:
+            with search_db() as conn:
+                return load_rows(conn)
+
+        predictor.tiers = TierStats(predictor.archetypes, rows)
+
+    from .cards import CardImages
+
     client = ClashRoyaleClient(settings.api_token, timeout=settings.request_timeout)
-    return create_app(Services(client=client, predictor=predictor, search_db=search_db),
+    return create_app(Services(client=client, predictor=predictor, search_db=search_db,
+                               images=CardImages(client)),
                       hsts=os.environ.get("DECKLENS_HTTPS") == "1")

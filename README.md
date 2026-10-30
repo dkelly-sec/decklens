@@ -108,9 +108,18 @@ What the page does:
 - **You:** look up your tag to load your current deck (remembered in your browser).
 - **Last opponent:** your most recent ranked opponent, their deck, and how your archetype tends to do against theirs.
 - **Find an opponent:** type the letters you can see in their name; pick them from the matches (closest rank to yours first) to see their recent decks and the matchup against yours.
+- **Deck details:** card art, elixir, evolutions and levels for every card, plus average elixir, 4-card cycle cost and how many cards are maxed.
+- **Win rate by tier:** your archetype against theirs among top 200, top 1,000 and top 10,000 players (both players inside the bracket at the time), each with its number of games and a 95% range. Small samples are flagged.
+
+Already created the web role before tier stats existed? Give it read access to stored battles (still read-only):
+
+```powershell
+Get-Content db\web_grants.sql | docker compose exec -T db psql -U decklens -d decklens -v ON_ERROR_STOP=1 -f -
+```
 
 How it's secured:
 - The API key never reaches the browser; all lookups go through the server.
+- Card art is fetched by the server from Supercell's official asset host only (never a URL from the browser), checked, cached and served from this site, so the page never loads anything from elsewhere.
 - Strict Content Security Policy (no inline script), and the front end never builds HTML from data, so hostile player names display as text.
 - Every route is rate-limited; upstream lookups are cached; request bodies are capped at 4 KB; inputs are validated (tags, names, decks).
 - Errors are generic; there are no API docs or schema endpoints and no server banner.

@@ -109,6 +109,12 @@ class ClashRoyaleClient:
         sid = _validate_season_id(season_id)
         return self._get_paged(f"/locations/global/pathoflegend/{sid}/rankings/players", max_items)
 
+    def get_cards(self) -> list[dict[str, Any]]:
+        """Every card in the game, with names, rarities and official image URLs."""
+        data = self._get("/cards")
+        items = data.get("items") if isinstance(data, dict) else None
+        return [i for i in items if isinstance(i, dict)] if isinstance(items, list) else []
+
     def get_seasons(self) -> list[dict[str, Any]]:
         data = self._get("/locations/global/seasonsV2")
         items = data.get("items") if isinstance(data, dict) else None
