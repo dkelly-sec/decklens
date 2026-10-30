@@ -17,6 +17,7 @@ import logging
 import math
 import sys
 from dataclasses import dataclass
+from statistics import NormalDist
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Sequence
@@ -27,8 +28,8 @@ from .archetypes import ArchetypeModel, fit_tuned
 from .config import ConfigError, load_settings
 from .features import CardVocab, Matchup, labels
 from .model import (
-    Evaluation, ExtrasOnlyBaseline, LinearMatchupModel, TreeMatchupModel, evaluate, time_split,
-    wilson_interval,
+    Evaluation, ExtrasOnlyBaseline, LinearMatchupModel, PairedGain, TreeMatchupModel, evaluate,
+    paired_log_loss_gain, time_split, wilson_interval,
 )
 
 log = logging.getLogger("decklens.train")
@@ -59,6 +60,7 @@ class TrainingResult:
     one_ranked: float
     archetypes: ArchetypeModel | None = None
     archetype_info: dict | None = None
+    deck_vs_skill: PairedGain | None = None  # best deck model compared with skill only
 
 
 def run_training(
@@ -79,23 +81,26 @@ def run_training(
     vocab = CardVocab.build(train, min_count=min_card_count, names=names)  # training data only
     y_test = labels(test)
 
-    evaluations = [evaluate(COIN, np.full(len(test), 0.5), y_test)]
+    probs: dict[str, np.ndarray] = {COIN: np.full(len(test), 0.5)}
     for name, cols in ((LEVELS, ("level",)), (SKILL, ("skill", "ranked"))):
-        baseline = ExtrasOnlyBaseline(cols).fit(train)
-        evaluations.append(evaluate(name, baseline.predict_proba(test), y_test))
+        probs[name] = ExtrasOnlyBaseline(cols).fit(train).predict_proba(test)
 
     linear = LinearMatchupModel.fit(vocab, train)
     linear.trained_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
-    evaluations.append(evaluate(LINEAR, linear.predict_proba(test), y_test))
+    probs[LINEAR] = linear.predict_proba(test)
 
     if with_trees:
-        trees = TreeMatchupModel.fit(vocab, train)
-        evaluations.append(evaluate(TREES, trees.predict_proba(test), y_test))
+        probs[TREES] = TreeMatchupModel.fit(vocab, train).predict_proba(test)
 
     archetypes, archetype_info = None, None
     if with_archetypes:
         archetypes, archetype_info = fit_tuned(vocab, train, cluster_options=ARCHETYPE_OPTIONS)
-        evaluations.append(evaluate(ARCHETYPES, archetypes.predict_proba(test), y_test))
+        probs[ARCHETYPES] = archetypes.predict_proba(test)
+
+    evaluations = [evaluate(name, p, y_test) for name, p in probs.items()]
+    deck_models = [e for e in evaluations if e.name in (LINEAR, TREES, ARCHETYPES)]
+    best = min(deck_models, key=lambda e: e.log_loss)
+    deck_vs_skill = paired_log_loss_gain(best.name, probs[SKILL], probs[best.name], y_test)
 
     ranked_counts = [(m.rank_a is not None) + (m.rank_b is not None) for m in matchups]
     return TrainingResult(
@@ -106,7 +111,7 @@ def run_training(
         test_side0_win_rate=float(y_test.mean()),
         both_ranked=ranked_counts.count(2) / len(matchups),
         one_ranked=ranked_counts.count(1) / len(matchups),
-        archetypes=archetypes, archetype_info=archetype_info,
+        archetypes=archetypes, archetype_info=archetype_info, deck_vs_skill=deck_vs_skill,
     )
 
 
@@ -154,14 +159,8 @@ def render_report(r: TrainingResult) -> str:
         "",
         "Lower log loss and Brier are better. A coin flip scores 0.6931 log loss and 0.25 Brier.",
     ]
-    if SKILL in by_name and LINEAR in by_name:
-        gain = by_name[SKILL].log_loss - by_name[LINEAR].log_loss
-        verdict = (f"Yes: adding the decks to skill lowers log loss by {gain:.4f}."
-                   if gain > 0 else
-                   f"Not measurably: adding the decks to skill doesn't lower log loss "
-                   f"(change {-gain:+.4f}).")
-        lines += ["", f"**Do decks matter beyond skill?** {verdict} (Logistic regression "
-                      "compared with the skill-only baseline.)"]
+    if r.deck_vs_skill is not None:
+        lines += ["", f"**Do decks matter beyond skill?** {deck_verdict(r.deck_vs_skill)}"]
     lines += [
         "",
         "## Calibration (logistic regression)",
@@ -200,6 +199,42 @@ def render_report(r: TrainingResult) -> str:
     return "\n".join(lines)
 
 
+def deck_verdict(g: PairedGain) -> str:
+    """Plain-English answer that only claims what the confidence range supports."""
+    detail = (f"the best deck model ({g.model}) changes log loss per battle by "
+              f"{g.mean:+.4f} compared with skill alone (95% range {g.lo:+.4f} to {g.hi:+.4f}, "
+              f"compared battle by battle over the same {g.n:,} test battles; "
+              "positive means better)")
+    if g.lo > 0:
+        return f"**Yes.** {detail[0].upper()}{detail[1:]}."
+    if g.hi < 0:
+        return f"**No.** {detail[0].upper()}{detail[1:]}, so decks made predictions worse."
+    return (f"**Not clearly.** {detail[0].upper()}{detail[1:]}. The range includes zero, "
+            "so this could be luck.")
+
+
+def lopsided_matchups(model: ArchetypeModel, min_games: int = 30, alpha: float = 0.05
+                      ) -> tuple[list[tuple[dict, float, float]], int, float]:
+    """Pairings that are clearly lopsided, corrected for testing many at once.
+
+    With m pairings each tested at 95%, about m x 5% look lopsided by luck alone.
+    The Bonferroni correction tests each at 1 - alpha/m instead, keeping the chance
+    of even one false alarm across all of them to alpha. Returns (rows with their
+    corrected ranges, pairings tested, confidence level used for each)."""
+    rows = model.matchup_rows(min_games=min_games)
+    m = len(rows)
+    if m == 0:
+        return [], 0, 1 - alpha
+    z = NormalDist().inv_cdf(1 - alpha / (2 * m))
+    found = []
+    for row in rows:
+        lo, hi = wilson_interval(row["a_wins"], row["games"], z=z)
+        if hi < 0.5 or lo > 0.5:
+            found.append((row, lo, hi))
+    found.sort(key=lambda t: -abs(t[0]["a_wins"] / t[0]["games"] - 0.5))
+    return found, m, 1 - alpha / m
+
+
 def _archetype_sections(r: TrainingResult) -> list[str]:
     model, info = r.archetypes, r.archetype_info or {}
     clusters = int(info.get("archetypes", len(model.groups)))
@@ -221,18 +256,21 @@ def _archetype_sections(r: TrainingResult) -> list[str]:
         lines.append(f"| {a['name']} | {_pct(a['share'])} | {_pct(rate)} ({_pct(lo)}–{_pct(hi)}) "
                      f"| {a['games']:,} |")
 
-    lopsided = []
-    for row in model.matchup_rows(min_games=30):
-        lo, hi = wilson_interval(row["a_wins"], row["games"])
-        if hi < 0.5 or lo > 0.5:  # whole 95% range on one side of 50%
-            lopsided.append((abs(row["a_wins"] / row["games"] - 0.5), row, lo, hi))
-    lines += ["", "## Most lopsided archetype matchups", "",
-              "Pairings with at least 30 games whose whole 95% range is above or below 50%.", ""]
+    lopsided, tested, confidence = lopsided_matchups(model)
+    lines += [
+        "", "## Most lopsided archetype matchups", "",
+        f"{tested} pairings have at least 30 games. Testing that many at once, a few would look "
+        "lopsided by luck alone, so each range below is widened to a "
+        f"{100 * confidence:.2f}% range (Bonferroni correction). That keeps the chance of even "
+        "one false alarm in this list to 5%. Only pairings whose whole range is above or below "
+        "50% are listed.", "",
+    ]
     if not lopsided:
         lines.append("None yet: no pairing is clearly lopsided with this much data.")
     else:
-        lines += ["| Archetype | vs | First wins (95% range) | Games |", "| --- | --- | --- | --- |"]
-        for _, row, lo, hi in sorted(lopsided, key=lambda t: -t[0])[:10]:
+        lines += ["| Archetype | vs | First wins (corrected range) | Games |",
+                  "| --- | --- | --- | --- |"]
+        for row, lo, hi in lopsided[:10]:
             lines.append(f"| {row['a']} | {row['b']} | {_pct(row['a_wins'] / row['games'])} "
                          f"({_pct(lo)}–{_pct(hi)}) | {row['games']:,} |")
     return lines

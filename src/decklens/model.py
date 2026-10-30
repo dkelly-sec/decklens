@@ -67,6 +67,32 @@ def wilson_interval(successes: int, n: int, z: float = 1.96) -> tuple[float, flo
 
 
 @dataclass(frozen=True)
+class PairedGain:
+    """How much one model beats another on the same test battles (log loss, per battle)."""
+    model: str
+    mean: float  # positive: the model is better than the baseline
+    lo: float    # 95% range of the mean
+    hi: float
+    n: int
+
+
+def paired_log_loss_gain(name: str, baseline_probs: np.ndarray, model_probs: np.ndarray,
+                         y: np.ndarray, z: float = 1.96) -> PairedGain:
+    """Compare two models battle by battle. Pairing removes the battle-to-battle noise
+    both models share, so small but real differences can be told apart from luck."""
+    y = np.asarray(y)
+
+    def per_battle(p: np.ndarray) -> np.ndarray:
+        p = np.clip(np.asarray(p, dtype=np.float64), _EPS, 1 - _EPS)
+        return -(y * np.log(p) + (1 - y) * np.log(1 - p))
+
+    diff = per_battle(baseline_probs) - per_battle(model_probs)
+    mean = float(diff.mean())
+    half = z * float(diff.std(ddof=1)) / math.sqrt(len(diff)) if len(diff) > 1 else float("inf")
+    return PairedGain(name, mean, mean - half, mean + half, len(diff))
+
+
+@dataclass(frozen=True)
 class Evaluation:
     name: str
     n: int

@@ -124,3 +124,23 @@ def test_skill_feature_removes_the_confound():
     blind, aware = confound_weight(no_skill), confound_weight(matchups)
     assert blind > 0.15            # fooled: looks like a good card
     assert abs(aware) < blind / 2  # with skill accounted for, most of that is gone
+
+
+def test_paired_gain_detects_a_better_model():
+    from decklens.model import paired_log_loss_gain
+
+    rng = np.random.default_rng(0)
+    y = rng.integers(0, 2, 2000)
+    informed = np.where(y == 1, 0.6, 0.4)  # a model that knows a little
+    g = paired_log_loss_gain("informed", np.full(2000, 0.5), informed, y)
+    assert g.lo > 0 and g.n == 2000
+
+
+def test_paired_gain_of_identical_models_includes_zero():
+    from decklens.model import paired_log_loss_gain
+
+    rng = np.random.default_rng(1)
+    y = rng.integers(0, 2, 500)
+    p = rng.uniform(0.3, 0.7, 500)
+    g = paired_log_loss_gain("same", p, p.copy(), y)
+    assert g.mean == 0.0 and g.lo <= 0.0 <= g.hi

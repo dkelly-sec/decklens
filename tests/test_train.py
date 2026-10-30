@@ -62,3 +62,54 @@ def test_archetypes_are_found_and_reported_on_archetype_data():
     report = render_report(r)
     lopsided = report.split("## Most lopsided archetype matchups")[1].split("## Limits")[0]
     assert "| Card" in lopsided  # the planted rock-paper-scissors edges show up
+
+
+def _table_model(pair_wins):
+    """Five archetypes, every pair played 100 times; pair_wins[(i, j)] = wins of i over j."""
+    import numpy as np
+
+    from decklens.archetypes import ArchetypeModel
+    from decklens.features import CardVocab
+
+    k = 5
+    wins, games = np.zeros((k, k)), np.zeros((k, k))
+    for i in range(k):
+        for j in range(i + 1, k):
+            w = pair_wins.get((i, j), 50)
+            wins[i, j], wins[j, i] = w, 100 - w
+            games[i, j] = games[j, i] = 100
+    return ArchetypeModel(CardVocab(range(k)), np.eye(k), np.arange(k), list("ABCDE"),
+                          wins, games, 20.0, np.full(k, 100.0))
+
+
+def test_lopsided_list_is_corrected_for_many_pairings():
+    from decklens.model import wilson_interval
+    from decklens.train import lopsided_matchups
+
+    # A 60-40 record over 100 games clears a plain 95% range...
+    assert wilson_interval(60, 100)[0] > 0.5
+    model = _table_model({(0, 1): 60, (2, 3): 80})
+    found, tested, confidence = lopsided_matchups(model)
+    # ...but not once 10 pairings are tested at the same time. 80-20 still does.
+    assert tested == 10 and confidence == pytest.approx(0.995)
+    assert [(row["a"], row["b"]) for row, _, _ in found] == [("C", "D")]
+
+
+def test_deck_verdict_only_claims_what_the_range_supports():
+    from decklens.model import PairedGain
+    from decklens.train import deck_verdict
+
+    assert deck_verdict(PairedGain("Trees", 0.003, 0.001, 0.005, 3000)).startswith("**Yes.**")
+    assert deck_verdict(PairedGain("LR", 0.0001, -0.0009, 0.0011, 3000)).startswith(
+        "**Not clearly.**")
+    assert deck_verdict(PairedGain("LR", -0.004, -0.006, -0.002, 3000)).startswith("**No.**")
+
+
+def test_report_answers_with_the_best_deck_model():
+    from synthetic import make_archetype_matchups
+
+    matchups, names, _ = make_archetype_matchups(5000, seed=6)
+    r = run_training(matchups, names, min_card_count=10, with_trees=False)
+    assert r.deck_vs_skill.model == "Archetype matchup table"
+    assert "**Do decks matter beyond skill?** **Yes.**" in render_report(r)
+    assert "Bonferroni" in render_report(r)

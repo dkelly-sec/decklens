@@ -87,6 +87,7 @@ This writes a report to `reports/model-YYYY-MM-DD.md`, plus `models/decklens-lin
 - **Recent meta only:** by default only the last 14 days are used, so balance changes don't mix old and new metas.
 - **Two models:** logistic regression learns one strength per card (explainable, and swapping decks exactly flips the prediction). Gradient-boosted trees see both decks side by side, so they can learn counters.
 - **Deck archetypes:** decks are grouped automatically by the cards they share (no hand-kept deck list to go stale), named after their signature cards, and compared in an archetype-versus-archetype table. Pairings with few games are pulled towards each archetype's overall record, so a 3-0 start isn't read as 100%. The report lists the most played archetypes and the matchups that are clearly lopsided.
+- **No overclaiming:** "do decks matter beyond skill?" is answered by comparing the best deck model with skill alone battle by battle, with a 95% range, and only says yes if the whole range is an improvement. The lopsided-matchup list is corrected for testing every pairing at once (Bonferroni), so it doesn't fill up with lucky streaks.
 - **Safe model files:** models are saved as plain JSON (weights, archetype centroids and win counts), not pickle, so loading a model file can never run code.
 
 ## Development
