@@ -156,3 +156,18 @@ def test_current_leaderboard_used_when_available():
     client = BoardClient([{"tag": "#9QJ", "rank": 1}], [], [])
     entries, source = fetch_leaderboard(client, location="global", season=None, limit=10)
     assert source == "leaderboard" and entries[0].tag == "#9QJ"
+
+
+def test_season_fallback_skips_placeholder_seasons():
+    seasons = [{"code": "2026-08"}, {"code": "2026-09"},
+               {"code": None, "uniqueId": None, "endTime": None},
+               {"code": None, "uniqueId": None, "endTime": None}]
+    client = BoardClient([], seasons, [{"tag": "#2PP", "rank": 1}])
+    entries, source = fetch_leaderboard(client, location="global", season=None, limit=10)
+    assert client.season_requested == "2026-09" and source == "season"
+
+
+def test_season_fallback_with_only_placeholders_returns_nothing():
+    client = BoardClient([], [{"code": None}, "junk"], [{"tag": "#2PP"}])
+    entries, _ = fetch_leaderboard(client, location="global", season=None, limit=10)
+    assert entries == [] and client.season_requested is None

@@ -89,3 +89,36 @@ def test_hostile_names_are_stored_as_plain_text(conn):
     save_rank_entries(conn, [RankEntry("#2PP", evil, None, None, None, None)], NOW, "profile")
     assert conn.execute("SELECT name, search_key FROM players").fetchone() == (
         evil, "robdroptableplayers")
+
+
+def test_training_loader_reads_decided_ranked_battles(conn):
+    from decklens.dataset import load_matchups
+    from decklens.storage import save_battles
+
+    top = battle(team_tag="#2PP", opp_tag="#9QJ", team_crowns=3, opp_crowns=0)
+    top["leagueNumber"] = 7
+    top["team"][0]["globalRank"] = 40  # Alice was ranked 40th at the time
+    for card in top["team"][0]["cards"]:
+        card["maxLevel"] = 16  # Alice's cards are 2 levels below max
+    low = battle(team_tag="#8YY", opp_tag="#9QJ", team_crowns=0, opp_crowns=1)
+    low["battleTime"] = "20261030T020000.000Z"
+    low["leagueNumber"] = 3
+    draw = battle(team_tag="#LLL", opp_tag="#9QJ", team_crowns=1, opp_crowns=1)
+    draw["battleTime"] = "20261030T030000.000Z"
+    ladder = battle(team_tag="#QQQ", opp_tag="#9QJ", kind="PvP")
+    ladder["battleTime"] = "20261030T040000.000Z"
+    save_battles(conn, parse_battle_log([top, low, draw, ladder])[0])
+
+    matchups, names = load_matchups(conn)
+    assert len(matchups) == 2  # draw and non-ranked battle excluded
+    first, second = matchups  # oldest first
+    assert first.a_won == 1 and first.level_gap_a == 2.0 and first.level_gap_b == 0.0
+    assert (first.rank_a, first.rank_b) == (40, None)
+    assert second.a_won == 0  # side A (#8YY, lower tag) lost
+    assert names[26000000] == "Card 0"
+
+    only_top, _ = load_matchups(conn, min_league=7)
+    assert [m.battle_id for m in only_top] == [first.battle_id]
+
+    recent, _ = load_matchups(conn, since=datetime(2026, 10, 30, 1, 30, tzinfo=timezone.utc))
+    assert [m.battle_id for m in recent] == [second.battle_id]  # the 01:15 battle is too old

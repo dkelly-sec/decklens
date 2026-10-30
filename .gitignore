@@ -30,3 +30,6 @@ data/
 
 # --- Logs from scheduled runs ---
 logs/
+
+# --- Trained model files (regenerate with python -m decklens.train) ---
+models/

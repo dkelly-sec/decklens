@@ -141,13 +141,17 @@ def fetch_leaderboard(
         return entries, "leaderboard"
 
     log.warning("current leaderboard came back empty; trying the latest finished season")
-    seasons = client.get_seasons()
-    if not seasons:
+    # The API's season list can end with placeholder entries whose fields are
+    # all null, so take the last entry that actually has an identifier.
+    season_ids = [
+        str(s.get("code") or s.get("uniqueId") or s.get("id"))
+        for s in client.get_seasons()
+        if isinstance(s, dict) and (s.get("code") or s.get("uniqueId") or s.get("id"))
+    ]
+    if not season_ids:
+        log.warning("no usable season found")
         return [], "leaderboard"
-    latest = seasons[-1]
-    season_id = str(latest.get("code") or latest.get("id") or "")
-    if not season_id:
-        return [], "leaderboard"
+    season_id = season_ids[-1]
     log.info("using season %s", season_id)
     items = client.get_ranked_season_leaderboard(season_id, max_items=limit)
     return parse_leaderboard(items), "season"

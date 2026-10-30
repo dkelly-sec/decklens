@@ -12,6 +12,8 @@ dependencies = [
     "requests>=2.34.2",
     "python-dotenv>=1.2.4",
     "psycopg[binary]>=3.3.6",
+    "numpy>=2.1",
+    "scikit-learn>=1.6",
 ]
 
 [project.optional-dependencies]

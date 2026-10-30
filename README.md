@@ -2,7 +2,7 @@
 
 A Clash Royale matchup predictor trained on top-ladder battles, built on the official API and secured like a production service.
 
-> **Status:** week 2 of 8. Data pipeline: Ranked leaderboard seeding, opponent crawling, rank-at-battle-time tracking and a nightly schedule.
+> **Status:** week 3 of 8. Matchup model: deck encoding, skill-controlled card strengths, baselines, logistic regression and gradient-boosted trees, evaluated on the newest battles.
 
 ## Security from the first commit
 
@@ -69,6 +69,24 @@ Register-ScheduledTask -TaskName "DeckLens nightly crawl" -Action $action -Trigg
 ```
 
 The PC must be on, Docker Desktop running, and your public IP must still match the API key.
+
+## Training the model
+
+```powershell
+python -m decklens.train                  # ranked battles from the last 14 days
+python -m decklens.train --days 7         # current meta only
+python -m decklens.train --days 0         # everything stored
+python -m decklens.train --min-league 7   # top league only
+```
+
+This writes a report to `reports/model-YYYY-MM-DD.md` and a model to `models/decklens-linear-YYYY-MM-DD.json`.
+
+- **Honest evaluation:** training uses older battles and testing uses strictly newer ones, the same way the model will be used for real. Results are compared against a coin flip and a card-levels-only baseline, with 95% confidence ranges.
+- **Decks, not players:** features are the cards in each deck, the average card-level gap, and how highly each player was ranked when the battle was played. Player identity is never used, so the model can't learn "this player usually wins".
+- **Skill is controlled for:** strong players favour certain cards, so without skill data those cards look stronger than they are. Including rank at battle time means card weights measure what a card does between equally skilled players, and a skill-only baseline shows whether decks add anything beyond skill.
+- **Recent meta only:** by default only the last 14 days are used, so balance changes don't mix old and new metas.
+- **Two models:** logistic regression learns one strength per card (explainable, and swapping decks exactly flips the prediction). Gradient-boosted trees see both decks side by side, so they can learn counters.
+- **Safe model files:** the model is saved as plain JSON weights, not pickle, so loading a model file can never run code.
 
 ## Development
 
