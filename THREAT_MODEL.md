@@ -1,6 +1,6 @@
 # DeckLens threat model
 
-Living document: update it as features are added. Last reviewed: week 3.
+Living document: update it as features are added. Last reviewed: week 5.
 
 ## Assets
 
@@ -28,9 +28,14 @@ Living document: update it as features are added. Last reviewed: week 3.
 | SQL injection via names or tags | Parameterised queries throughout | Done |
 | Database exposed to the network | Docker port bound to 127.0.0.1 | Done |
 | Over-privileged database access | `decklens_app` role without DROP/ALTER/TRUNCATE; schema changes only via owner-run migrations | Done (verified: DROP denied) |
-| Stored XSS via player names | Escape on output, CSP | Planned (week 5) |
-| Proxy abuse / quota burning | Per-IP rate limits, caching | Planned (week 5) |
-| Scraping the player index | Rate-limited search, capped results, minimum query length | Planned (week 5) |
+| Stored XSS via player names | Front end only uses textContent (a test fails the build on innerHTML, eval and similar); strict CSP with no inline script; verified with hostile names in a DOM test | Done |
+| Proxy abuse / quota burning | Per-client rate limits (429 + Retry-After); upstream results cached 60s in a size-bounded cache | Done |
+| Scraping the player index | Search rate-limited to 20/min, at most 5 results, at least 2 letters after normalisation, LIKE wildcards escaped | Done |
+| Clickjacking | frame-ancestors 'none' and X-Frame-Options: DENY | Done |
+| Oversized or malformed requests | Bodies over 4 KB rejected (413); request models forbid unknown fields; decks must be 8 different known card ids | Done |
+| Information disclosure from the web app | Generic error messages, no stack traces, no API docs or schema endpoints, no server header, API key errors logged server-side only | Done |
+| Web app able to change data | Separate read-only database role (db/web_role.sql) plus read-only connections | Done |
+| Untrusted model files | Only plain JSON models are loaded, with shape and range checks | Done |
 | Vulnerable dependencies | pip-audit in CI, Dependabot weekly updates | Done |
 | Overloading or abusing the upstream API | Crawler request budget, minimum pause between requests, backoff on 429, stops on 403 or repeated failures | Done |
 | Untrusted values from API responses (leaderboard cursors, ids, ranks) | Location and season ids allowlisted; paging cursors validated before reuse; numbers accepted only as plain integers | Done |

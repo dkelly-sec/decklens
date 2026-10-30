@@ -2,7 +2,7 @@
 
 A Clash Royale matchup predictor trained on top-ladder battles, built on the official API and secured like a production service.
 
-> **Status:** week 3 of 8. Matchup model: deck encoding, skill-controlled card strengths, baselines, logistic regression and gradient-boosted trees, evaluated on the newest battles.
+> **Status:** week 5 of 8. Web app: player lookup, last-opponent scouting, opponent search by name and archetype matchups, behind a hardened API.
 
 ## Security from the first commit
 
@@ -89,6 +89,32 @@ This writes a report to `reports/model-YYYY-MM-DD.md`, plus `models/decklens-lin
 - **Deck archetypes:** decks are grouped automatically by the cards they share (no hand-kept deck list to go stale), named after their signature cards, and compared in an archetype-versus-archetype table. Pairings with few games are pulled towards each archetype's overall record, so a 3-0 start isn't read as 100%. The report lists the most played archetypes and the matchups that are clearly lopsided.
 - **No overclaiming:** "do decks matter beyond skill?" is answered by comparing the best deck model with skill alone battle by battle, with a 95% range, and only says yes if the whole range is an improvement. The lopsided-matchup list is corrected for testing every pairing at once (Bonferroni), so it doesn't fill up with lucky streaks.
 - **Safe model files:** models are saved as plain JSON (weights, archetype centroids and win counts), not pickle, so loading a model file can never run code.
+
+## Running the web app
+
+```powershell
+python -m decklens.web          # then open http://127.0.0.1:8000
+```
+
+It uses the newest models in `models\` (run `python -m decklens.train` first) and searches the player index through a **read-only** database role. Create it once:
+
+```powershell
+$pw = python -c "import secrets; print(secrets.token_urlsafe(24))"
+Get-Content db\web_role.sql | docker compose exec -T db psql -U decklens -d decklens -v ON_ERROR_STOP=1 -v web_password=$pw -f -
+$pw | Set-Clipboard   # then set WEB_DATABASE_URL in .env (see .env.example)
+```
+
+What the page does:
+- **You:** look up your tag to load your current deck (remembered in your browser).
+- **Last opponent:** your most recent ranked opponent, their deck, and how your archetype tends to do against theirs.
+- **Find an opponent:** type the letters you can see in their name; pick them from the matches (closest rank to yours first) to see their recent decks and the matchup against yours.
+
+How it's secured:
+- The API key never reaches the browser; all lookups go through the server.
+- Strict Content Security Policy (no inline script), and the front end never builds HTML from data, so hostile player names display as text.
+- Every route is rate-limited; upstream lookups are cached; request bodies are capped at 4 KB; inputs are validated (tags, names, decks).
+- Errors are generic; there are no API docs or schema endpoints and no server banner.
+- The server binds to 127.0.0.1 only. Putting it on a network comes with HTTPS in the deployment step.
 
 ## Development
 

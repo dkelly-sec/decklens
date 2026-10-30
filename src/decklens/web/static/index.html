@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>DeckLens</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <script src="/static/app.js" defer></script>
+</head>
+<body>
+  <header>
+    <h1>DeckLens</h1>
+    <p class="tagline">Ranked matchup scouting for Clash Royale</p>
+  </header>
+
+  <main>
+    <section aria-labelledby="me-heading">
+      <h2 id="me-heading">You</h2>
+      <form id="me-form" autocomplete="off">
+        <label for="me-tag">Your player tag</label>
+        <div class="row">
+          <input id="me-tag" name="tag" placeholder="#2PPGJQ8V" maxlength="16" required>
+          <button type="submit">Look up</button>
+        </div>
+      </form>
+      <div id="me-result" class="result" aria-live="polite"></div>
+    </section>
+
+    <section aria-labelledby="last-heading">
+      <h2 id="last-heading">Last opponent</h2>
+      <p class="hint">Your most recent ranked opponent, their deck, and how the matchup tends to go.</p>
+      <button id="last-button" type="button">Scout my last opponent</button>
+      <div id="last-result" class="result" aria-live="polite"></div>
+    </section>
+
+    <section aria-labelledby="find-heading">
+      <h2 id="find-heading">Find an opponent</h2>
+      <form id="find-form" autocomplete="off">
+        <label for="find-name">Opponent's name (just the letters you can see)</label>
+        <div class="row">
+          <input id="find-name" name="name" placeholder="dipo" maxlength="40" required>
+          <button type="submit">Search</button>
+        </div>
+      </form>
+      <div id="find-result" class="result" aria-live="polite"></div>
+    </section>
+  </main>
+
+  <footer>
+    <p>This content is not affiliated with, endorsed, sponsored, or specifically approved by
+      Supercell and Supercell is not responsible for it. For more information see
+      <a href="https://supercell.com/en/fan-content-policy/" rel="noopener noreferrer">Supercell's Fan Content Policy</a>.</p>
+  </footer>
+</body>
+</html>

@@ -122,3 +122,49 @@ def test_training_loader_reads_decided_ranked_battles(conn):
 
     recent, _ = load_matchups(conn, since=datetime(2026, 10, 30, 1, 30, tzinfo=timezone.utc))
     assert [m.battle_id for m in recent] == [second.battle_id]  # the 01:15 battle is too old
+
+
+def test_opponent_search_by_name(conn):
+    from decklens.storage import save_rank_entries
+    from decklens.web.search import search_players
+
+    entries = [
+        RankEntry("#2PP", "⚔️⚡D I P O⚡⚔️", None, 900, "Clan", "Clan"),
+        RankEntry("#9QJ", "Dipolar", None, 120, None, None),
+        RankEntry("#8YY", "Dípo Fan", None, None, None, None),
+        RankEntry("#LLL", "Someone else", None, 5, None, None),
+    ]
+    save_rank_entries(conn, entries, NOW, "leaderboard")
+
+    found = search_players(conn, "dipo")
+    assert [r["tag"] for r in found] == ["#9QJ", "#2PP", "#8YY"]  # best rank first, unranked last
+    assert found[1]["name"] == "⚔️⚡D I P O⚡⚔️"                      # original name kept for display
+
+    near = search_players(conn, "DIPO", near_rank=850)
+    assert near[0]["tag"] == "#2PP"                                  # closest to my rank first
+
+    assert search_players(conn, "zz") == []
+    with pytest.raises(ValueError):
+        search_players(conn, "%")                                     # nothing searchable
+
+
+def test_web_role_can_only_read(conn):
+    """The web app's role can read the player index and nothing else."""
+    def drop_role():
+        if conn.execute("SELECT 1 FROM pg_roles WHERE rolname = 'decklens_web_test'").fetchone():
+            conn.execute("REVOKE ALL ON players, player_rank_snapshots FROM decklens_web_test")
+            conn.execute("DROP ROLE decklens_web_test")
+
+    drop_role()
+    conn.execute("CREATE ROLE decklens_web_test")
+    conn.execute("GRANT SELECT ON players, player_rank_snapshots TO decklens_web_test")
+    conn.execute("SET ROLE decklens_web_test")
+    try:
+        conn.execute("SELECT count(*) FROM players")
+        for statement in ("DELETE FROM players", "SELECT count(*) FROM battles",
+                          "UPDATE players SET name = 'x'"):
+            with pytest.raises(psycopg.errors.InsufficientPrivilege):
+                conn.execute(statement)
+    finally:
+        conn.execute("RESET ROLE")
+        drop_role()
