@@ -247,22 +247,22 @@ def main(argv: list[str] | None = None) -> int:
             return datetime.now(timezone.utc)
 
         with psycopg.connect(settings.database_url) as conn:
-            seeds: list[tuple[int | None, str]] = []
             if args.seed_leaderboard:
                 entries, source = fetch_leaderboard(
                     client, location=args.location, season=args.season,
                     limit=args.seed_leaderboard,
                 )
                 save_rank_entries(conn, entries, now(), source)
-                seeds += [(e.rank, e.tag) for e in entries]
                 log.info("seeded %d players from the %s", len(entries), source)
 
-            due = players_due_for_crawl(
+            # Leaderboard players are now in the database with their rank, so one
+            # query picks who to visit: best-ranked first, skipping anyone crawled
+            # within the last --recrawl-hours.
+            seeds = players_due_for_crawl(
                 conn, now=now(), recrawl_after=timedelta(hours=args.recrawl_hours),
                 limit=args.max_players,
             )
-            seeds += due
-            log.info("%d known players due for a re-crawl", len(due))
+            log.info("%d players due for a crawl", len(seeds))
 
             stats = crawl(client, _PgStore(conn, now), seeds,
                           max_players=args.max_players, pause=args.pause)
