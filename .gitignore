@@ -1,0 +1,29 @@
+# --- Secrets: never commit these ---
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+build/
+dist/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# --- Data and models (regenerate, don't commit) ---
+data/
+*.parquet
+*.joblib
+*.pkl
+
+# --- Editors / OS ---
+.vscode/
+.idea/
+.DS_Store

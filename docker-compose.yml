@@ -1,0 +1,15 @@
+# Local development database. Credentials come from .env (never hard-coded here).
+services:
+  db:
+    image: postgres:16
+    restart: unless-stopped
+    env_file: .env
+    ports:
+      # Bound to localhost only, so the database is not exposed to your network.
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./db/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+
+volumes:
+  pgdata:
