@@ -27,3 +27,6 @@ data/
 .vscode/
 .idea/
 .DS_Store
+
+# --- Logs from scheduled runs ---
+logs/

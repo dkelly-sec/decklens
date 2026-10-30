@@ -120,3 +120,63 @@ def test_redirect_is_not_followed():
     client, _, _ = make(FakeResponse(302, headers={"Location": "https://evil.example"}))
     with pytest.raises(ApiError):
         client.get_player("#2PP")
+
+
+# --- Ranked leaderboard paging -------------------------------------------------
+
+
+def page(tags, after=None):
+    body = {"items": [{"tag": t, "rank": i} for i, t in enumerate(tags, 1)]}
+    if after:
+        body["paging"] = {"cursors": {"after": after}}
+    return FakeResponse(200, body)
+
+
+def test_leaderboard_follows_cursor_paging():
+    client, session, _ = make(page(["#2PP", "#9QJ"], after="eyJwb3MiOjJ9"), page(["#8YY"]))
+    items = client.get_ranked_leaderboard("global", max_items=10)
+    assert [i["tag"] for i in items] == ["#2PP", "#9QJ", "#8YY"]
+    first_url, first_kwargs = session.calls[0]
+    assert first_url == f"{BASE_URL}/locations/global/pathoflegend/players"
+    assert first_kwargs["params"] == {"limit": 10}
+    assert session.calls[1][1]["params"] == {"limit": 8, "after": "eyJwb3MiOjJ9"}
+
+
+def test_leaderboard_stops_at_max_items():
+    client, session, _ = make(page(["#2PP", "#9QJ", "#8YY"], after="abc"))
+    items = client.get_ranked_leaderboard("global", max_items=2)
+    assert len(items) == 2
+    assert len(session.calls) == 1
+
+
+def test_untrusted_cursor_stops_paging():
+    client, session, _ = make(page(["#2PP"], after="../../players?x=1"))
+    client.get_ranked_leaderboard("global", max_items=10)
+    assert len(session.calls) == 1
+
+
+def test_empty_leaderboard_returns_nothing():
+    client, _, _ = make(FakeResponse(200, {"items": []}))
+    assert client.get_ranked_leaderboard("global") == []
+
+
+@pytest.mark.parametrize("bad", ["../players", "global/../x", "57000006?x", "", "abc"])
+def test_invalid_location_never_reaches_the_network(bad):
+    client, session, _ = make()
+    with pytest.raises(ValueError):
+        client.get_ranked_leaderboard(bad)
+    assert session.calls == []
+
+
+def test_numeric_location_is_allowed():
+    client, session, _ = make(FakeResponse(200, {"items": []}))
+    client.get_ranked_leaderboard("57000006")
+    assert session.calls[0][0].endswith("/locations/57000006/pathoflegend/players")
+
+
+def test_season_leaderboard_path_and_validation():
+    client, session, _ = make(FakeResponse(200, {"items": []}))
+    client.get_ranked_season_leaderboard("2026-09")
+    assert session.calls[0][0] == f"{BASE_URL}/locations/global/pathoflegend/2026-09/rankings/players"
+    with pytest.raises(ValueError):
+        client.get_ranked_season_leaderboard("2026-09/../../players")

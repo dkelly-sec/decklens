@@ -1,6 +1,6 @@
 # DeckLens threat model
 
-Living document: update it as features are added. Last reviewed: week 1.
+Living document: update it as features are added. Last reviewed: week 2.
 
 ## Assets
 
@@ -27,9 +27,12 @@ Living document: update it as features are added. Last reviewed: week 1.
 | Tag input altering upstream URL (SSRF / path traversal) | Fixed base URL, allowlist regex, percent-encoding; tested with traversal payloads | Done |
 | SQL injection via names or tags | Parameterised queries throughout | Done |
 | Database exposed to the network | Docker port bound to 127.0.0.1 | Done |
-| Over-privileged database access | `decklens_app` role without DROP/ALTER/TRUNCATE | Done (run `db/roles.sql`) |
+| Over-privileged database access | `decklens_app` role without DROP/ALTER/TRUNCATE; schema changes only via owner-run migrations | Done (verified: DROP denied) |
 | Stored XSS via player names | Escape on output, CSP | Planned (week 5) |
 | Proxy abuse / quota burning | Per-IP rate limits, caching | Planned (week 5) |
 | Scraping the player index | Rate-limited search, capped results, minimum query length | Planned (week 5) |
-| Vulnerable dependencies | pip-audit in CI | Done |
-| Over-retention of player data | Drop players not seen for 90 days | Planned |
+| Vulnerable dependencies | pip-audit in CI, Dependabot weekly updates | Done |
+| Overloading or abusing the upstream API | Crawler request budget, minimum pause between requests, backoff on 429, stops on 403 or repeated failures | Done |
+| Untrusted values from API responses (leaderboard cursors, ids, ranks) | Location and season ids allowlisted; paging cursors validated before reuse; numbers accepted only as plain integers | Done |
+| Supply chain: CI actions | Dependabot updates actions; pin to commit SHAs | Partly done |
+| Over-retention of player data | Nightly crawl deletes players not seen for 90 days | Done |

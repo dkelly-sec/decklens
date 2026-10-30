@@ -31,6 +31,7 @@ class BattlePlayer:
     starting_trophies: int | None
     clan_tag: str | None
     clan_name: str | None
+    global_rank: int | None = None  # Ranked leaderboard position at battle time, if ranked
 
 
 @dataclass(frozen=True)
@@ -41,6 +42,14 @@ class Battle:
     game_mode: str | None
     players: tuple[BattlePlayer, BattlePlayer]  # canonical order: lower tag first
     winner: int | None  # index into players, None for a draw
+    league_number: int | None = None  # Ranked league the battle was played in
+
+
+def opt_int(value: Any) -> int | None:
+    """Return value as an int if it is a plain integer, else None (never trust types)."""
+    if isinstance(value, bool) or not isinstance(value, int):
+        return None
+    return value
 
 
 def parse_battle_time(raw: str) -> datetime:
@@ -64,9 +73,10 @@ def _player(raw: dict[str, Any]) -> BattlePlayer:
         crowns=int(raw.get("crowns", 0)),
         card_ids=tuple(sorted(int(c["id"]) for c in cards)),
         cards=cards,
-        starting_trophies=raw.get("startingTrophies"),
+        starting_trophies=opt_int(raw.get("startingTrophies")),
         clan_tag=clan.get("tag"),
         clan_name=clan.get("name"),
+        global_rank=opt_int(raw.get("globalRank")),
     )
 
 
@@ -96,6 +106,7 @@ def parse_battle(raw: dict[str, Any]) -> Battle | None:
         game_mode=(raw.get("gameMode") or {}).get("name"),
         players=players,
         winner=winner,
+        league_number=opt_int(raw.get("leagueNumber")),
     )
 
 

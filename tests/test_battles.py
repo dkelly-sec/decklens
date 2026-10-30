@@ -80,3 +80,24 @@ def test_long_names_are_truncated():
     raw = battle()
     raw["team"][0]["name"] = "x" * 500
     assert all(len(p.name) <= 64 for p in parse_battle(raw).players)
+
+
+def test_rank_at_battle_time_and_league_are_kept():
+    raw = battle()
+    raw["leagueNumber"] = 10
+    raw["team"][0]["globalRank"] = 150
+    b = parse_battle(raw)
+    ranks = {p.tag: p.global_rank for p in b.players}
+    assert ranks == {"#2PP": 150, "#9QJ": None}
+    assert b.league_number == 10
+
+
+def test_non_integer_numbers_are_ignored():
+    raw = battle()
+    raw["leagueNumber"] = "10; DROP TABLE battles"
+    raw["team"][0]["globalRank"] = True
+    raw["team"][0]["startingTrophies"] = 9.5
+    b = parse_battle(raw)
+    assert b.league_number is None
+    alice = next(p for p in b.players if p.tag == "#2PP")
+    assert alice.global_rank is None and alice.starting_trophies is None

@@ -2,7 +2,7 @@
 
 A Clash Royale matchup predictor trained on top-ladder battles, built on the official API and secured like a production service.
 
-> **Status:** week 1 of 8. Data pipeline in progress: API client, battle-log collector and database schema.
+> **Status:** week 2 of 8. Data pipeline: Ranked leaderboard seeding, opponent crawling, rank-at-battle-time tracking and a nightly schedule.
 
 ## Security from the first commit
 
@@ -37,7 +37,38 @@ See [THREAT_MODEL.md](THREAT_MODEL.md) for the full threat model as it develops.
    python -m decklens.collector --tag "#YOURTAG" --dry-run   # fetch and summarise only
    python -m decklens.collector --tag "#YOURTAG"             # fetch and store
    ```
-   The dry run prints which battle types were skipped. Check that ranked battles appear as kept, and adjust `KEPT_BATTLE_TYPES` in `src/decklens/battles.py` if the API uses a different name.
+   The dry run prints which battle types were skipped. Ranked battles are type `pathOfLegend`; event challenges (`trail`) and friendlies (`clanMate`) are skipped.
+
+## Collecting at scale
+
+The crawler seeds from the Ranked leaderboard, then follows opponents best-ranked first. Top players mostly face each other, so each battle log reveals more of them.
+
+```powershell
+python -m decklens.crawl --probe                 # check response shapes; stores nothing
+python -m decklens.crawl --max-players 100       # small first run
+python -m decklens.crawl                         # full run: top 1,000 seeds, up to 1,500 battle logs
+```
+
+Each battle log is one API request. Runs pause between requests, back off when rate-limited, and stop at once on a 403 (bad key or IP). Each player's leaderboard rank at the time of every battle is stored, which powers the Ultimate Champion / top 1,000 / top 200 tiers. Players not seen for 90 days are deleted (retention policy).
+
+**Upgrading an existing database** (run once, as the owner):
+
+```powershell
+Get-Content db\migrations\002_ranks_and_crawl.sql | docker compose exec -T db psql -U decklens -d decklens -v ON_ERROR_STOP=1 -f -
+```
+
+### Nightly schedule (Windows)
+
+`scripts/nightly.ps1` starts the database if needed, runs the crawl, and writes to `logs\crawl-YYYY-MM-DD.log`. Register it once:
+
+```powershell
+$action  = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-NoProfile -ExecutionPolicy Bypass -File `"$PWD\scripts\nightly.ps1`""
+$trigger = New-ScheduledTaskTrigger -Daily -At 3am
+$settings = New-ScheduledTaskSettingsSet -StartWhenAvailable
+Register-ScheduledTask -TaskName "DeckLens nightly crawl" -Action $action -Trigger $trigger -Settings $settings
+```
+
+The PC must be on, Docker Desktop running, and your public IP must still match the API key.
 
 ## Development
 

@@ -1,13 +1,15 @@
 -- DeckLens schema. Runs automatically the first time the Docker database starts.
+-- Existing databases are upgraded with the files in db/migrations/ instead.
 
 -- Every player DeckLens has seen. Powers opponent lookup by name.
 CREATE TABLE IF NOT EXISTS players (
-    tag          TEXT PRIMARY KEY CHECK (tag ~ '^#[0289PYLQGRJCUV]{3,15}$'),
-    name         TEXT NOT NULL,           -- original display name: escape when rendering
-    search_key   TEXT NOT NULL,           -- normalised letters/digits only (see names.py)
-    clan_tag     TEXT,
-    clan_name    TEXT,
-    last_seen    TIMESTAMPTZ NOT NULL
+    tag             TEXT PRIMARY KEY CHECK (tag ~ '^#[0289PYLQGRJCUV]{3,15}$'),
+    name            TEXT NOT NULL,        -- original display name: escape when rendering
+    search_key      TEXT NOT NULL,        -- normalised letters/digits only (see names.py)
+    clan_tag        TEXT,
+    clan_name       TEXT,
+    last_seen       TIMESTAMPTZ NOT NULL,
+    last_crawled_at TIMESTAMPTZ           -- when we last fetched this player's battle log
 );
 -- text_pattern_ops makes prefix searches (search_key LIKE 'dav%') use the index.
 CREATE INDEX IF NOT EXISTS players_search_key_idx ON players (search_key text_pattern_ops);
@@ -19,16 +21,19 @@ CREATE TABLE IF NOT EXISTS player_rank_snapshots (
     observed_at  TIMESTAMPTZ NOT NULL,
     rating       INTEGER,
     rank         INTEGER,
+    source       TEXT NOT NULL DEFAULT 'leaderboard'
+                 CHECK (source IN ('leaderboard', 'season', 'profile', 'battle')),
     PRIMARY KEY (tag, observed_at)
 );
 
 CREATE TABLE IF NOT EXISTS battles (
-    battle_id    TEXT PRIMARY KEY,        -- sha256 of time + both tags, so duplicates collapse
-    battle_time  TIMESTAMPTZ NOT NULL,
-    battle_type  TEXT NOT NULL,
-    game_mode    TEXT,
-    winner_side  SMALLINT CHECK (winner_side IN (0, 1)),  -- NULL = draw
-    collected_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    battle_id     TEXT PRIMARY KEY,       -- sha256 of time + both tags, so duplicates collapse
+    battle_time   TIMESTAMPTZ NOT NULL,
+    battle_type   TEXT NOT NULL,
+    game_mode     TEXT,
+    league_number SMALLINT,               -- Ranked league the battle was played in
+    winner_side   SMALLINT CHECK (winner_side IN (0, 1)),  -- NULL = draw
+    collected_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS battles_time_idx ON battles (battle_time);
 
@@ -40,6 +45,7 @@ CREATE TABLE IF NOT EXISTS battle_players (
     card_ids           INTEGER[] NOT NULL CHECK (cardinality(card_ids) = 8),
     cards              JSONB NOT NULL,
     starting_trophies  INTEGER,
+    global_rank        INTEGER,           -- leaderboard rank at battle time (top players only)
     PRIMARY KEY (battle_id, side)
 );
 CREATE INDEX IF NOT EXISTS battle_players_tag_idx ON battle_players (player_tag);
