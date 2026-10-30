@@ -417,6 +417,11 @@ def test_challenge_decks_get_their_own_tab_and_other_trail_modes_are_ignored():
 
     data = app.get("/api/players/%232PP/decks").json()
     assert [d["games"] for d in data["modes"]["challenge"]] == [3]
+    challenge_deck = data["modes"]["challenge"][0]["deck"]
+    assert challenge_deck["summary"]["fixed_levels"] is True               # event sets levels
+    assert challenge_deck["summary"]["maxed"] is None
+    assert all(c["below_max"] is None for c in challenge_deck["cards"])
+    assert data["modes"]["ranked"][0]["deck"]["summary"]["maxed"] == 8     # ranked keeps levels
     assert data["modes"]["challenge"][0]["wins"] == 2
     assert [d["games"] for d in data["modes"]["ranked"]] == [1]
     assert data["recent_modes"] == {"20-win challenge": 3, "Trophy Road": 1, "Ranked": 1}

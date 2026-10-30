@@ -129,8 +129,15 @@ def deck_summary(cards: Sequence[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
-def _deck(cards: list[dict[str, Any]]) -> dict[str, Any]:
-    return {"cards": cards, "summary": deck_summary(cards)}
+def _deck(cards: list[dict[str, Any]], mode: str | None = None) -> dict[str, Any]:
+    """Cards plus summary. Challenge games play at levels fixed by the event
+    (every card shows the same gap below max), so levels are left out there."""
+    if mode == "challenge":
+        cards = [{**c, "below_max": None} for c in cards]
+    summary = deck_summary(cards)
+    if mode == "challenge":
+        summary["fixed_levels"] = True
+    return {"cards": cards, "summary": summary}
 
 
 def summarise_player(profile: dict[str, Any]) -> dict[str, Any]:
@@ -172,8 +179,8 @@ def last_opponent(tag: str, battle_log: list[dict[str, Any]]) -> dict[str, Any] 
             "tag": opp.tag, "name": opp.name, "clan": opp.clan_name,
             "rank": opp.global_rank, "your_result": result, "mode": mode_of(b),
             "time": b.battle_time.isoformat(),
-            "deck": _deck(_cards(list(opp.cards))),  # their own levels and evolutions
-            "your_deck": _deck(_cards(list(b.players[me].cards))),
+            "deck": _deck(_cards(list(opp.cards)), mode_of(b)),  # their slots and evolutions
+            "your_deck": _deck(_cards(list(b.players[me].cards)), mode_of(b)),
         }
     return None
 
@@ -228,7 +235,7 @@ def recent_decks(tag: str, battle_log: list[dict[str, Any]], top: int = 3
             latest[(mode, deck)] = {"cards": list(b.players[me].cards),
                                     "last_played": b.battle_time.isoformat()}
     return {
-        mode: [{"deck": _deck(_cards(latest[(mode, deck)]["cards"])), "games": n,
+        mode: [{"deck": _deck(_cards(latest[(mode, deck)]["cards"]), mode), "games": n,
                 "wins": won[mode][deck], "last_played": latest[(mode, deck)]["last_played"]}
                for deck, n in played[mode].most_common(top)]
         for mode in MODES

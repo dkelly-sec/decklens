@@ -103,7 +103,8 @@ function deckView(deck) {
   if (s.evolutions) facts.push(plural(s.evolutions, "evolution", "evolutions"));
   if (s.heroes) facts.push(plural(s.heroes, "hero", "heroes"));
   if (s.either) facts.push(s.either + " evo or hero");
-  if (s.maxed !== null && s.maxed !== undefined) facts.push(s.maxed + "/" + s.levels_known + " cards maxed");
+  if (s.fixed_levels) facts.push("Levels set by the challenge");
+  else if (s.maxed !== null && s.maxed !== undefined) facts.push(s.maxed + "/" + s.levels_known + " cards maxed");
   if (facts.length) box.append(el("p", facts.join(" · "), "deck-facts"));
   const list = el("ul", null, "deck");
   for (const card of deck.cards) list.append(cardTile(card));
