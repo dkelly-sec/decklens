@@ -7,7 +7,7 @@ from the SQL text, so player names and tags can never inject SQL.
 from __future__ import annotations
 
 from datetime import datetime, timedelta
-from typing import Iterable
+from typing import Any, Iterable
 
 from psycopg import Connection
 from psycopg.types.json import Jsonb
@@ -151,6 +151,18 @@ def save_players(conn: Connection, entries: Iterable[RankEntry], observed_at: da
                 (e.tag, e.name, search_key(e.name), e.clan_tag, e.clan_name, observed_at,
                  _rating(e.rating), _clan_key(e.clan_name)),
             )
+            count += 1
+    return count
+
+
+def save_seen_players(conn: Connection, players: Iterable[Any], when: datetime) -> int:
+    """Name-index entries for players seen in games we don't store (e.g. the
+    20-win challenge): name, clan and when they were seen, nothing else."""
+    count = 0
+    with conn.transaction(), conn.cursor() as cur:
+        for p in players:
+            cur.execute(_UPSERT_PLAYER, (p.tag, p.name, search_key(p.name), p.clan_tag,
+                                         p.clan_name, when, None, _clan_key(p.clan_name)))
             count += 1
     return count
 

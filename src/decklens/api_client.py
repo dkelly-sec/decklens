@@ -109,6 +109,25 @@ class ClashRoyaleClient:
         sid = _validate_season_id(season_id)
         return self._get_paged(f"/locations/global/pathoflegend/{sid}/rankings/players", max_items)
 
+    def search_clans(self, name: str, *, limit: int = 10) -> list[dict[str, Any]]:
+        """Clans whose name matches (the API needs at least 3 characters).
+
+        The name only ever goes in the query string, encoded by requests, so it
+        can't change which path or host is called.
+        """
+        name = name.strip() if isinstance(name, str) else ""
+        if not 3 <= len(name) <= 50 or any(ord(ch) < 32 for ch in name):
+            raise ValueError("clan names must be 3-50 characters")
+        data = self._get("/clans", {"name": name, "limit": max(1, min(int(limit), 50))})
+        items = data.get("items") if isinstance(data, dict) else None
+        return [i for i in items if isinstance(i, dict)] if isinstance(items, list) else []
+
+    def get_clan_members(self, tag: str) -> list[dict[str, Any]]:
+        """A clan's members (up to 50), with each one's lastSeen time."""
+        data = self._get(f"/clans/{encode_tag(tag)}/members")
+        items = data.get("items") if isinstance(data, dict) else None
+        return [i for i in items if isinstance(i, dict)] if isinstance(items, list) else []
+
     def get_cards(self) -> list[dict[str, Any]]:
         """Every card in the game, with names, rarities and official image URLs."""
         data = self._get("/cards")

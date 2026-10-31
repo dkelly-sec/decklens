@@ -30,7 +30,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Callable, Iterable, Protocol
 
 from .api_client import ApiError, ClashRoyaleClient, NotFoundError
-from .battles import Battle, parse_battle_log
+from .battles import CHALLENGE_GAME_MODE, Battle, BattlePlayer, parse_battle_log
 from .config import ConfigError, load_settings
 from .rankings import RankEntry, parse_leaderboard
 from .validation import InvalidTagError, normalize_tag
@@ -46,6 +46,7 @@ PROGRESS_EVERY = 25  # countries between progress lines in the log
 class Store(Protocol):
     def save_battles(self, battles: list[Battle]) -> int: ...
     def mark_crawled(self, tag: str) -> None: ...
+    def save_seen_players(self, players: list[BattlePlayer], when: datetime) -> int: ...
 
 
 @dataclass
@@ -56,6 +57,7 @@ class CrawlStats:
     battles_seen: int = 0
     battles_new: int = 0
     discovered: int = 0
+    challenge_players: int = 0  # 20-win challenge players added to the name index
     invalid_seeds: int = 0
     skipped_types: dict[str, int] = field(default_factory=dict)
 
@@ -120,6 +122,7 @@ def crawl(
             stats.skipped_types[kind] = stats.skipped_types.get(kind, 0) + n
         stats.battles_seen += len(battles)
         stats.battles_new += store.save_battles(battles)
+        stats.challenge_players += _index_challenge_players(store, entries)
         store.mark_crawled(tag)
 
         for battle in battles:
@@ -168,6 +171,26 @@ def fetch_leaderboard(
     log.info("using season %s", season_id)
     items = client.get_ranked_season_leaderboard(season_id, max_items=limit)
     return parse_leaderboard(items), "season"
+
+
+_TRAIL = frozenset({"trail"})
+
+
+def _index_challenge_players(store: Store, entries: list) -> int:
+    """Add both sides of 20-win challenge games to the name index (names and
+    clans only; the games themselves aren't stored). Alt accounts that never
+    reach a leaderboard become searchable once they've met a crawled player."""
+    battles, _ = parse_battle_log(entries, types=_TRAIL, allow_hidden_card=True)
+    seen: dict[str, tuple[BattlePlayer, datetime]] = {}
+    for b in battles:
+        if b.game_mode == CHALLENGE_GAME_MODE:
+            for p in b.players:
+                if p.tag not in seen or seen[p.tag][1] < b.battle_time:
+                    seen[p.tag] = (p, b.battle_time)
+    if not seen:
+        return 0
+    newest = max(when for _, when in seen.values())
+    return store.save_seen_players([p for p, _ in seen.values()], newest)
 
 
 @dataclass
@@ -281,6 +304,11 @@ class _PgStore:
 
         mark_crawled(self._conn, tag, self._now())
 
+    def save_seen_players(self, players: list[BattlePlayer], when: datetime) -> int:
+        from .storage import save_seen_players
+
+        return save_seen_players(self._conn, players, when)
+
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Seed from the Ranked leaderboard and crawl.")
@@ -370,9 +398,10 @@ def main(argv: list[str] | None = None) -> int:
                               max_players=args.max_players, pause=args.pause)
                 log.info(
                     "done: %d players crawled, %d battles seen, %d new, "
-                    "%d new players discovered, %d not found, %d failures",
+                    "%d new players discovered, %d challenge players indexed, "
+                    "%d not found, %d failures",
                     stats.players_crawled, stats.battles_seen, stats.battles_new,
-                    stats.discovered, stats.not_found, stats.failures,
+                    stats.discovered, stats.challenge_players, stats.not_found, stats.failures,
                 )
                 if stats.skipped_types:
                     log.info("skipped battle types: %s", stats.skipped_types)

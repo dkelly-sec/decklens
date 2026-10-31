@@ -9,11 +9,15 @@ browser, never as HTML.
 from __future__ import annotations
 
 from collections import Counter
+from datetime import datetime
 from dataclasses import dataclass
-from typing import Any, Sequence
+from typing import Any, Callable, Sequence
 
 from ..archetypes import ArchetypeModel
-from ..battles import Battle, opt_int, parse_battle_log
+from ..battles import (
+    CHALLENGE_GAME_MODE, Battle, opt_int, parse_battle_log, parse_battle_time,
+)
+from ..names import search_key
 from ..model import LinearMatchupModel, wilson_interval
 from ..validation import InvalidTagError, normalize_tag
 
@@ -23,7 +27,6 @@ from ..validation import InvalidTagError, normalize_tag
 # "trail" is also used for Trophy Road ("Ladder") and friendlies, so challenge
 # games are picked out by their game mode name, not their type.
 RANKED = "pathOfLegend"
-CHALLENGE_GAME_MODE = "Challenge_AllCards_EventDeck_NoSet"
 MODES = ("ranked", "challenge")
 SCOUTED_TYPES = frozenset({RANKED, "trail"})
 
@@ -294,6 +297,64 @@ class Predictor:
                     parts.append({"card": vocab.name(cid), "deck": side,
                                   "effect": round(sign * float(weights[col]), 3)})
         return sorted(parts, key=lambda p: abs(p["effect"]), reverse=True)[:top]
+
+
+# --- live clan lookup ------------------------------------------------------------
+# For opponents who aren't in our index (alts, Trophy Road players): ask the
+# API for clans with that name, then list their members, most recently seen
+# first. Someone in a match with you right now was seen minutes ago.
+
+CLANS_TO_CHECK = 5
+ACTIVE_MINUTES = 15
+MAX_LIVE_RESULTS = 10
+
+
+def _minutes_ago(raw: Any, now: datetime) -> int | None:
+    try:
+        seen = parse_battle_time(raw)
+    except (TypeError, ValueError):
+        return None
+    return max(0, int((now - seen).total_seconds() // 60))
+
+
+def live_clan_lookup(clans: list[dict[str, Any]], members_of: Callable[[str], list[dict[str, Any]]],
+                     clan_name: str, name: str | None, now: datetime) -> dict[str, Any]:
+    """Recently active members of the clans that best match clan_name.
+
+    clans is the API's clan search result; members_of(tag) fetches one clan's
+    members. Exact name matches are checked first, at most CLANS_TO_CHECK clans.
+    """
+    want = search_key(clan_name)
+    valid = []
+    for c in clans:
+        try:
+            valid.append((normalize_tag(c.get("tag")), _text(c.get("name")), c))
+        except InvalidTagError:
+            continue
+    # Exact name matches first, then the API's own order (stable sort).
+    valid.sort(key=lambda t: search_key(t[1]) != want)
+    name_key = search_key(name) if name else ""
+    players, checked = [], []
+    for tag, cname, _ in valid[:CLANS_TO_CHECK]:
+        checked.append(cname)
+        for m in members_of(tag):
+            try:
+                mtag = normalize_tag(m.get("tag"))
+            except InvalidTagError:
+                continue
+            mname = _text(m.get("name"))
+            if name_key and name_key not in search_key(mname):
+                continue  # letters typed for the name must appear in it
+            minutes = _minutes_ago(m.get("lastSeen"), now)
+            players.append({
+                "tag": mtag, "name": mname, "clan": cname, "rank": None, "rating": None,
+                "trophies": opt_int(m.get("trophies")),
+                "last_seen_minutes": minutes,
+                "active": minutes is not None and minutes <= ACTIVE_MINUTES,
+            })
+    players.sort(key=lambda p: (p["last_seen_minutes"] is None, p["last_seen_minutes"] or 0))
+    return {"clans_checked": checked, "clans_found": len(valid),
+            "players": players[:MAX_LIVE_RESULTS]}
 
 
 def validate_deck(deck: Sequence[Any], known: set[int]) -> tuple[int, ...]:

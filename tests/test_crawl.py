@@ -46,6 +46,11 @@ class FakeStore:
     def mark_crawled(self, tag):
         self.crawled.append(tag)
 
+    def save_seen_players(self, players, when):
+        self.seen_players = getattr(self, "seen_players", []) + [(p.tag, p.clan_name, when)
+                                                                  for p in players]
+        return len(players)
+
 
 def run(client, seeds, **kw):
     store = FakeStore()
@@ -243,3 +248,17 @@ def test_invalid_seeds_are_counted_and_reported(caplog):
     stats, _, _ = run(FakeClient({}), [("#2PP", 5), (None, None), (3, "#9QJ")], max_players=5)
     assert stats.invalid_seeds == 2 and stats.players_crawled == 1
     assert "ignored 2 seeds" in caplog.text
+
+
+def test_challenge_opponents_go_into_the_name_index_but_their_games_are_not_stored():
+    challenge = ranked_battle("#2PP", "#UUU", kind="trail", minute=5) | {
+        "gameMode": {"id": 72000474, "name": "Challenge_AllCards_EventDeck_NoSet"}}
+    challenge["opponent"][0]["clan"] = {"tag": "#CLAN", "name": "Eatropa Theotôn"}
+    trophy_road = ranked_battle("#2PP", "#LLL", kind="trail", minute=4) | {
+        "gameMode": {"id": 72000006, "name": "Ladder"}}
+    client = FakeClient({"#2PP": [challenge, trophy_road, ranked_battle("#2PP", "#9QJ", 50)]})
+    stats, store, _ = run(client, [(1, "#2PP")], max_players=1)
+    assert stats.challenge_players == 2 and stats.battles_new == 1      # only the ranked game stored
+    assert {t for t, _, _ in store.seen_players} == {"#2PP", "#UUU"}     # Trophy Road ignored
+    assert ("#UUU", "Eatropa Theotôn") in {(t, c) for t, c, _ in store.seen_players}
+    assert "#UUU" not in client.calls                                    # not crawled, just indexed

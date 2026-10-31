@@ -13,6 +13,7 @@ import logging
 import os
 from contextlib import contextmanager
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from importlib import resources
 from pathlib import Path
 from typing import Any, Callable, Iterator, Literal
@@ -31,8 +32,8 @@ from .security import (
     TTLCache,
 )
 from .services import (
-    Predictor, battle_mix, card_ids, last_opponent, recent_decks, safe_tag, summarise_player,
-    validate_deck,
+    Predictor, battle_mix, card_ids, last_opponent, live_clan_lookup, recent_decks, safe_tag,
+    summarise_player, validate_deck,
 )
 
 log = logging.getLogger("decklens.web")
@@ -43,6 +44,7 @@ RATE_LIMITS = {
     "predict": (60, 60.0),
     "images": (600, 60.0),  # card art: a page shows up to ~40 cards at once
     "login": (10, 60.0),    # password guesses per client, on top of per-username lockout
+    "clan_lookup": (6, 60.0),  # live clan lookups cost up to 6 API calls each
 }
 STATIC_DIR = Path(str(resources.files("decklens") / "web" / "static"))
 
@@ -98,18 +100,22 @@ def create_app(services: Services, *, hsts: bool = False) -> FastAPI:
 
     signed_in = [Depends(require_user)]
 
-    def upstream(kind: str, tag: str) -> Any:
-        fetch = services.client.get_player if kind == "player" else services.client.get_battle_log
+    def cached_call(key: tuple, fetch: Callable[[], Any], not_found: str) -> Any:
+        """Upstream API call through the shared cache, with safe error messages."""
         try:
-            return services.cache.get_or_set((kind, tag), lambda: fetch(tag))
+            return services.cache.get_or_set(key, fetch)
         except NotFoundError:
-            raise HTTPException(404, "No player with that tag") from None
+            raise HTTPException(404, not_found) from None
         except ApiError as exc:
             if exc.status == 403:
                 log.error("Clash Royale API rejected our key (check the key and its IP whitelist)")
                 raise HTTPException(503, "Lookups are unavailable right now") from None
             log.warning("Clash Royale API error: %s", exc)
             raise HTTPException(502, "The Clash Royale API isn't responding") from None
+
+    def upstream(kind: str, tag: str) -> Any:
+        fetch = services.client.get_player if kind == "player" else services.client.get_battle_log
+        return cached_call((kind, tag), lambda: fetch(tag), "No player with that tag")
 
     def tag_or_400(raw: str) -> str:
         try:
@@ -176,6 +182,31 @@ def create_app(services: Services, *, hsts: bool = False) -> FastAPI:
         except psycopg.OperationalError as exc:  # database down or wrong login
             log.warning("player search database unavailable: %s", type(exc).__name__)
             raise HTTPException(503, "Search is unavailable right now") from None
+
+    @app.get("/api/clan-lookup", dependencies=[*signed_in, Depends(limit("clan_lookup"))])
+    def clan_lookup(clan: str = Query(min_length=3, max_length=50),
+                    name: str | None = Query(default=None, max_length=40)) -> dict[str, Any]:
+        """Live lookup for players who aren't in the index: recently active
+        members of clans with this name, straight from the Clash Royale API."""
+        clan = clan.strip()
+        if len(clan) < 3:
+            raise HTTPException(400, "Type at least 3 characters of the clan name")
+        try:
+            clans = cached_call(("clans", clan.lower()),
+                                lambda: services.client.search_clans(clan), "No clans found")
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from None
+
+        def members_of(tag: str) -> list[dict[str, Any]]:
+            try:
+                return cached_call(("members", tag),
+                                   lambda: services.client.get_clan_members(tag), "")
+            except HTTPException as exc:
+                if exc.status_code == 404:
+                    return []  # clan disbanded since the search: skip it
+                raise
+
+        return live_clan_lookup(clans, members_of, clan, name, datetime.now(timezone.utc))
 
     @app.post("/api/predict", dependencies=[*signed_in, Depends(limit("predict"))])
     def predict(body: PredictRequest, model: Predictor = Depends(predictor)) -> dict[str, Any]:

@@ -25,6 +25,10 @@ KEPT_BATTLE_TYPES = frozenset({"pathOfLegend", "PvP"})
 # (the models train on full decks); scouting accepts 7 and marks the gap.
 DECK_SIZE = 8
 
+# The 20-win challenge: type "trail" (shared with Trophy Road and friendlies),
+# told apart by this game mode name (checked against a real battle log, Oct 2026).
+CHALLENGE_GAME_MODE = "Challenge_AllCards_EventDeck_NoSet"
+
 
 @dataclass(frozen=True)
 class BattlePlayer:

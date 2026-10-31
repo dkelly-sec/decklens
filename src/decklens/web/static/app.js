@@ -128,6 +128,13 @@ function knownIds(deck) {
   return deck.cards.filter((c) => c.id !== null && c.id !== undefined).map((c) => c.id);
 }
 
+function seenText(minutes) {
+  if (minutes < 2) return "online now";
+  if (minutes < 60) return "seen " + minutes + " min ago";
+  if (minutes < 48 * 60) return "seen " + Math.round(minutes / 60) + " h ago";
+  return "seen " + Math.round(minutes / 1440) + " days ago";
+}
+
 // Names and clans go in <bdi> so right-to-left text (Arabic, Hebrew) stays
 // inside its own part and can't reorder the tag and numbers around it.
 function playerLine(player) {
@@ -136,6 +143,10 @@ function playerLine(player) {
   if (player.clan) parts.push(el("bdi", player.clan));
   if (player.rank) parts.push("rank #" + player.rank);
   if (player.rating) parts.push("rating " + player.rating);
+  if (player.trophies) parts.push(player.trophies.toLocaleString() + " trophies");
+  if (player.last_seen_minutes !== null && player.last_seen_minutes !== undefined) {
+    parts.push(seenText(player.last_seen_minutes));
+  }
   parts.forEach((part, i) => {
     if (i) line.append(" · ");
     line.append(part);  // strings become text nodes: still never HTML
@@ -335,6 +346,48 @@ async function scoutLast() {
 
 // --- find an opponent --------------------------------------------------------
 
+function resultList(players) {
+  const list = el("ul", null, "results");
+  for (const r of players) {
+    const item = el("li");
+    const button = el("button", null, "result-button" + (r.active ? " active" : ""));
+    button.type = "button";
+    button.append(playerLine(r));
+    button.addEventListener("click", () => showOpponentDecks(r, item));
+    item.append(button);
+    list.append(item);
+  }
+  return list;
+}
+
+// Asks the game directly (not our index): recently active members of clans
+// with this name. For alts and Trophy Road players DeckLens hasn't seen.
+async function liveClanLookup(clan, name, out) {
+  show(out, el("p", "Checking clans named “" + clan + "” in the game…", "muted"));
+  const params = new URLSearchParams({ clan });
+  if (name) params.set("name", name);
+  try {
+    const found = await api("/api/clan-lookup?" + params.toString());
+    if (!found.clans_found) {
+      show(out, el("p", "The game has no clan called “" + clan + "”. Check the spelling.", "muted"));
+      return;
+    }
+    if (!found.players.length) {
+      show(out, el("p", "Nobody" + (name ? " with that name" : "") + " in " +
+        plural(found.clans_checked.length, "clan", "clans") + " called “" + clan + "”.", "muted"));
+      return;
+    }
+    const note = found.players.some((p) => p.active)
+      ? "Your opponent is probably near the top: they're playing right now."
+      : "Nobody here has been online in the last 15 minutes. It may be a different clan with the same name.";
+    show(out, el("p", "Checked " + plural(found.clans_checked.length, "clan", "clans") +
+      " called “" + clan + "”, most recently online first. " + note, "hint"),
+      resultList(found.players));
+  } catch (error) {
+    show(out, errorBox(error));
+  }
+}
+
 async function findOpponent(event) {
   event.preventDefault();
   const out = document.getElementById("find-result");
@@ -351,29 +404,32 @@ async function findOpponent(event) {
   // Ranked matches players of similar rating, so players nearest yours come first.
   if (state.me && state.me.rating) path += "&near_rating=" + encodeURIComponent(state.me.rating);
   show(out, el("p", "Searching…", "muted"));
+  let results = [];
   try {
-    const { results } = await api(path);
-    if (!results.length) {
-      show(out, el("p", clan
-        ? "No players found. Check the clan name, or try fewer letters of it."
-        : "No players found. If their name is emoji or a language you can't type, " +
-          "search by their clan instead.", "muted"));
+    results = (await api(path)).results;
+  } catch (error) {
+    if (clan.length < 3) {
+      show(out, errorBox(error));
       return;
     }
-    const list = el("ul", null, "results");
-    for (const r of results) {
-      const item = el("li");
-      const button = el("button", null, "result-button");
-      button.type = "button";
-      button.append(playerLine(r));
-      button.addEventListener("click", () => showOpponentDecks(r, item));
-      item.append(button);
-      list.append(item);
-    }
-    show(out, el("p", "Tap the right player:", "hint"), list);
-  } catch (error) {
-    show(out, errorBox(error));
   }
+  if (!results.length) {
+    if (clan.length >= 3) {
+      await liveClanLookup(clan, name, out);  // not in our index: ask the game
+    } else {
+      show(out, el("p", "No players found. If their name is emoji or a language you can't type, " +
+        "search by their clan instead.", "muted"));
+    }
+    return;
+  }
+  const parts = [el("p", "Tap the right player:", "hint"), resultList(results)];
+  if (clan.length >= 3) {
+    const live = el("button", "Not here? Check the clan live", "link-button");
+    live.type = "button";
+    live.addEventListener("click", () => liveClanLookup(clan, name, out));
+    parts.push(live);
+  }
+  show(out, ...parts);
 }
 
 const MODE_NAMES = { ranked: "Ranked", challenge: "20-win challenge" };

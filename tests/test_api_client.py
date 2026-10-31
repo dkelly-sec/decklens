@@ -180,3 +180,28 @@ def test_season_leaderboard_path_and_validation():
     assert session.calls[0][0] == f"{BASE_URL}/locations/global/pathoflegend/2026-09/rankings/players"
     with pytest.raises(ValueError):
         client.get_ranked_season_leaderboard("2026-09/../../players")
+
+
+def test_clan_search_puts_the_name_only_in_the_query_string():
+    client, session, _ = make(FakeResponse(200, {"items": [{"tag": "#9QJ", "name": "x"}, "junk"]}))
+    clans = client.search_clans("  ../../players/#2PP?x=1 ", limit=999)
+    url, kwargs = session.calls[0]
+    assert url == BASE_URL + "/clans"                       # path never changes
+    assert kwargs["params"] == {"name": "../../players/#2PP?x=1", "limit": 50}
+    assert clans == [{"tag": "#9QJ", "name": "x"}]
+
+
+@pytest.mark.parametrize("bad", ["", "ab", "  ab  ", "x" * 51, "bad\nname", None])
+def test_clan_search_validates_before_any_request(bad):
+    client, session, _ = make()
+    with pytest.raises(ValueError):
+        client.search_clans(bad)
+    assert session.calls == []
+
+
+def test_clan_members_path_is_fixed_and_tag_encoded():
+    client, session, _ = make(FakeResponse(200, {"items": [{"tag": "#2PP", "lastSeen": "x"}]}))
+    assert client.get_clan_members("#9qj") == [{"tag": "#2PP", "lastSeen": "x"}]
+    assert session.calls[0][0] == BASE_URL + "/clans/%239QJ/members"
+    with pytest.raises(InvalidTagError):
+        client.get_clan_members("../players")

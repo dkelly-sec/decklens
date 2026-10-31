@@ -713,3 +713,93 @@ def test_card_images_degrade_gracefully():
     assert app.get("/cards/26000010.png").status_code == 404
     no_images = TestClient(create_app(Services(client=FakeClient())))
     assert no_images.get("/cards/26000010.png").status_code == 404
+
+
+# --- live clan lookup ---------------------------------------------------------------
+
+
+def _seen(minutes_ago):
+    from datetime import datetime, timedelta, timezone
+
+    t = datetime.now(timezone.utc) - timedelta(minutes=minutes_ago)
+    return t.strftime("%Y%m%dT%H%M%S.000Z")
+
+
+class ClanClient(FakeClient):
+    def __init__(self, error=None):
+        super().__init__()
+        self.clan_error = error
+
+    def search_clans(self, name, limit=10):
+        self.calls.append(("clans", name))
+        if self.clan_error:
+            raise self.clan_error
+        if len(name.strip()) < 3:
+            raise ValueError("clan names must be 3-50 characters")
+        return [
+            {"tag": "#2QQ", "name": "Eatropa Theotôn 2"},                    # close, not exact
+            {"tag": "#9YY", "name": "Eatropa Theotôn"},                      # exact: checked first
+            {"tag": "../evil", "name": "Eatropa Theotôn"},                   # bad tag: skipped
+        ] + [{"tag": f"#{c}2{c}", "name": f"Eatropa {c}"} for c in "GJLQRUV"]
+
+    def get_clan_members(self, tag):
+        self.calls.append(("members", tag))
+        if tag == "#9YY":
+            return [
+                {"tag": "#V8Q9LV8GC", "name": "+Kaua", "lastSeen": _seen(1), "trophies": 11862},
+                {"tag": "#2PP", "name": HOSTILE, "lastSeen": _seen(300)},
+                {"tag": "#8YY", "name": "🔥🔥", "lastSeen": "garbage"},
+                {"tag": "bad tag", "name": "x", "lastSeen": _seen(0)},
+            ]
+        return [{"tag": "#LLL", "name": "Someone", "lastSeen": _seen(40)}]
+
+
+def test_live_clan_lookup_puts_whoever_is_online_first():
+    client = ClanClient()
+    app, _, _ = make(client=client)
+    data = app.get("/api/clan-lookup", params={"clan": "eatropa theoton"}).json()
+    assert data["clans_checked"][0] == "Eatropa Theotôn" and len(data["clans_checked"]) == 5
+    assert data["clans_found"] == 9                                    # the bad tag was dropped
+    first = data["players"][0]
+    assert (first["tag"], first["active"], first["trophies"]) == ("#V8Q9LV8GC", True, 11862)
+    assert first["last_seen_minutes"] <= 2
+    assert data["players"][-1]["tag"] == "#8YY" and data["players"][-1]["last_seen_minutes"] is None
+    assert all(p["tag"] != "BAD TAG" for p in data["players"])
+    assert len(data["players"]) <= 10
+    member_calls = [c for c in client.calls if c[0] == "members"]
+    assert len(member_calls) == 5                                      # at most 5 clans checked
+
+    again = app.get("/api/clan-lookup", params={"clan": "Eatropa Theoton"})
+    assert again.status_code == 200 and len(client.calls) == len(member_calls) + 1  # cached
+
+
+def test_live_clan_lookup_can_filter_by_name_letters():
+    app, _, _ = make(client=ClanClient())
+    data = app.get("/api/clan-lookup", params={"clan": "eatropa", "name": "kau"}).json()
+    assert [p["tag"] for p in data["players"]] == ["#V8Q9LV8GC"]
+
+
+@pytest.mark.parametrize("params, status", [
+    ({"clan": "ab"}, 422), ({"clan": "   ab   "}, 400), ({"clan": "x" * 51}, 422),
+    ({}, 422), ({"clan": "eatropa", "name": "x" * 41}, 422),
+])
+def test_live_clan_lookup_input_validation(params, status):
+    app, _, _ = make(client=ClanClient())
+    assert app.get("/api/clan-lookup", params=params).status_code == status
+
+
+@pytest.mark.parametrize("error, status", [
+    (ApiError("403 forbidden", 403), 503), (ApiError("HTTP 500", 500), 502),
+    (NotFoundError("not found", 404), 404),
+])
+def test_live_clan_lookup_upstream_errors(error, status):
+    app, _, _ = make(client=ClanClient(error=error))
+    response = app.get("/api/clan-lookup", params={"clan": "eatropa"})
+    assert response.status_code == status and "token" not in response.text.lower()
+
+
+def test_live_clan_lookup_has_its_own_tight_rate_limit():
+    app, _, _ = make(client=ClanClient())
+    codes = [app.get("/api/clan-lookup", params={"clan": f"clan {i}"}).status_code
+             for i in range(7)]
+    assert codes[:6] == [200] * 6 and codes[6] == 429

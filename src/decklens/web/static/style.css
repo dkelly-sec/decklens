@@ -201,3 +201,4 @@ footer { font-size: 13px; padding-bottom: 32px; }
 #find-form { display: grid; gap: 8px; }
 #find-form .hint { font-weight: 400; }
 .login form button { justify-self: start; margin-top: 4px; }
+.result-button.active { border-color: var(--accent); }

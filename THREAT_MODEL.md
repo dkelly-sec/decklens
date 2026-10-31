@@ -42,6 +42,7 @@ Living document: update it as features are added. Last reviewed: week 7 (logins)
 | Web app able to change data | Separate read-only database role (db/web_role.sql, db/web_grants.sql) plus read-only connections; tested that it can't insert, update, delete or truncate | Done |
 | Untrusted model files | Only plain JSON models are loaded, with shape and range checks | Done |
 | Vulnerable dependencies | pip-audit in CI, Dependabot weekly updates | Done |
+| Live clan lookup burning the API quota or reaching other endpoints | Login required; 6 lookups a minute per client; at most 1 clan search + 5 member lists per lookup; results cached 60 s; clan name only ever sent in the query string of the fixed /clans path (3-50 characters, no control characters); clan tags validated before the members path is built | Done |
 | Strangers using the site and its API quota | Login required for every page, API route and card image; no sign-up page, accounts only from the command line | Done |
 | Password guessing | 5 failures lock a username for 15 minutes (whether or not it exists); 10 login attempts per minute per client; 12+ character passwords | Done |
 | Stolen password database | scrypt hashes (OWASP parameters) with per-password salts; plain text impossible by database check; hashes with absurd cost parameters refused | Done |

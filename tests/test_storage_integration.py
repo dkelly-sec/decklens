@@ -303,6 +303,9 @@ def test_crawl_queue_from_the_database_actually_gets_crawled(conn):
         def mark_crawled(self, tag):
             pass
 
+        def save_seen_players(self, players, when):
+            return 0
+
     client = Client()
     stats = crawl(client, Store(), due, max_players=10, sleep=lambda s: None)
     assert client.calls == ["#9QJ", "#2PP"] and stats.invalid_seeds == 0  # best rank first
@@ -387,3 +390,22 @@ def test_search_by_clan_for_names_you_cannot_type(conn):
     assert backfill_clan_keys(conn, batch=2) == 4                 # everyone with a clan
     assert len(search_players(conn, None, clan="persian")) == 3
     assert backfill_clan_keys(conn) == 0                          # nothing left to do
+
+
+def test_challenge_players_are_searchable_by_clan(conn):
+    from decklens.battles import parse_battle_log
+    from decklens.storage import save_rank_entries, save_seen_players
+    from decklens.web.search import search_players
+
+    save_rank_entries(conn, [RankEntry("#9QJ", "Ranked guy", 2600, 50, "#C9", "Old clan")],
+                      NOW, "leaderboard")
+    raw = battle(team_tag="#2PP", opp_tag="#9QJ")
+    raw["type"] = "trail"
+    raw["opponent"][0]["clan"] = {"tag": "#C1", "name": "Eatropa Theotôn"}
+    raw["team"][0]["clan"] = {"tag": "#C1", "name": "Eatropa Theotôn"}
+    challenge = parse_battle_log([raw], types=frozenset({"trail"}))[0][0]
+    save_seen_players(conn, challenge.players, NOW + timedelta(hours=1))
+
+    found = search_players(conn, None, clan="eatropa theoton")
+    assert {r["tag"] for r in found} == {"#2PP", "#9QJ"}
+    assert next(r for r in found if r["tag"] == "#9QJ")["rating"] == 2600   # rating kept
