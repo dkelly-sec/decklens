@@ -32,6 +32,9 @@ CSP = "; ".join([
 ])
 
 
+REVALIDATE_PAGES = frozenset({"/", "/login"})
+
+
 class SecurityHeadersMiddleware:
     def __init__(self, app: ASGIApp, *, hsts: bool = False):
         self.app = app
@@ -58,8 +61,15 @@ class SecurityHeadersMiddleware:
                 message.setdefault("headers", [])
                 message["headers"] = list(message["headers"]) + [
                     (k, v) for k, v in self.headers if k not in existing]
-                if scope["path"].startswith("/api/"):
+                path = scope["path"]
+                if path.startswith("/api/"):
                     message["headers"].append((b"cache-control", b"no-store"))
+                elif (path in REVALIDATE_PAGES or path.startswith("/static/")) \
+                        and b"cache-control" not in existing:
+                    # The browser may keep a copy but must check it's current
+                    # (a cheap 304 when unchanged), so an update never leaves a
+                    # new page running with yesterday's script or styles.
+                    message["headers"].append((b"cache-control", b"no-cache"))
             await send(message)
 
         await self.app(scope, receive, send_with_headers)

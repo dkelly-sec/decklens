@@ -118,6 +118,18 @@ def test_security_headers_on_every_response():
     assert app.get("/api/health").headers["cache-control"] == "no-store"
 
 
+def test_page_and_static_files_are_revalidated_so_updates_show_up():
+    # Without this, a browser may reuse yesterday's style.css/app.js after an update.
+    app, _, _ = make()
+    for path in ("/", "/static/app.js", "/static/style.css"):
+        assert app.get(path).headers["cache-control"] == "no-cache", path
+    first = app.get("/static/style.css")
+    again = app.get("/static/style.css", headers={"if-none-match": first.headers["etag"]})
+    assert again.status_code == 304  # unchanged files cost almost nothing to check
+    # Routes that set their own caching keep it.
+    assert app.get("/favicon.ico").headers["cache-control"] == "public, max-age=86400"
+
+
 def test_hsts_when_https():
     app = TestClient(create_app(Services(client=FakeClient()), hsts=True))
     assert app.get("/").headers["strict-transport-security"] == "max-age=31536000"
