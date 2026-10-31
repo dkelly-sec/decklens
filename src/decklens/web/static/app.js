@@ -467,22 +467,42 @@ async function findOpponent(event, options = {}) {
 
 const auto = { lastId: null, timer: null };
 
+// One line saying whether the screen watcher can see your phone, and why not.
+const WATCHER_STATES = {
+  connected: ["on", (d) => "Connected to " + (d || "your phone screen")],
+  screen_only: ["warn", (d) => "Connected to " + (d || "your phone screen") +
+    ", but keep Phone Link visible: it can't be read behind other windows"],
+  starting: ["idle", () => "Starting the screen reader…"],
+  no_window: ["off", () => "Not connected: open your phone screen in Phone Link"],
+  minimised: ["off", () => "Not connected: Phone Link is minimised (it can sit behind other windows)"],
+  unavailable: ["off", (d) => "Not connected: " + (d || "the screen watcher can't run")],
+};
+
+function showWatcherStatus(watcher, latest) {
+  const status = document.getElementById("auto-status");
+  const [kind, text] = watcher && WATCHER_STATES[watcher.state]
+    ? [WATCHER_STATES[watcher.state][0], WATCHER_STATES[watcher.state][1](watcher.detail)]
+    : ["off", "Not connected: the screen watcher isn't running"];
+  let line = text;
+  if (kind === "on" || kind === "warn") {
+    line += latest ? " · last opponent: " + latest.name + (latest.clan ? " (" + latest.clan + ")" : "")
+      : " · waiting for a battle";
+  }
+  show(status, el("span", null, "status-dot " + kind), el("span", line));
+}
+
 async function pollWatcher() {
   if (document.visibilityState !== "visible") return;
-  const status = document.getElementById("auto-status");
-  let latest;
+  let latest, watcher;
   try {
-    latest = (await api("/api/watch")).latest;
+    ({ latest, watcher } = await api("/api/watch"));
   } catch {
     return;  // offline for a moment: try again next time
   }
-  if (!latest) {
-    status.textContent = "Waiting for the screen watcher… (python -m decklens.watcher)";
-    return;
-  }
+  showWatcherStatus(watcher, latest);
+  if (!latest) return;
   const fresh = auto.lastId === null ? latest.age_seconds < 60 : latest.id !== auto.lastId;
   auto.lastId = latest.id;
-  status.textContent = "Last seen by the watcher: " + latest.name + (latest.clan ? " (" + latest.clan + ")" : "");
   if (!fresh) return;
   document.getElementById("find-name").value = latest.name;
   document.getElementById("find-clan").value = latest.clan || "";
@@ -499,7 +519,7 @@ function setAutoScout(on) {
   auto.timer = null;
   auto.lastId = null;
   if (on) {
-    status.textContent = "Connecting to the screen watcher…";
+    show(status, el("span", null, "status-dot idle"), el("span", "Checking the screen watcher…"));
     pollWatcher();
     auto.timer = setInterval(pollWatcher, 2000);
   }

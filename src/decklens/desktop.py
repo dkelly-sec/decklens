@@ -203,23 +203,36 @@ class Splash:
 
 def run_watcher(board: Any, stop: threading.Event) -> None:
     """The screen watcher, inside the app: reports straight to the watch board."""
+    from .web.watch import SCREEN_KEY
+
+    def status(state: str, detail: str | None = None) -> None:
+        board.set_status(SCREEN_KEY, state, detail)
+
+    def keep_saying(state: str, detail: str | None) -> None:
+        """A watcher that can't run keeps saying so (statuses go stale after 10 s)."""
+        while True:
+            status(state, detail)
+            if stop.wait(5.0):
+                return
+
+    status("starting")
     try:
         from .watcher import Watcher, read_config, text_reader, window_grabber
-        from .web.watch import SCREEN_KEY
     except ImportError:
         log.warning("screen watcher not installed (pip install -e \".[watcher]\"): Auto-scout is off")
-        return
+        return keep_saying("unavailable", "screen reader not installed")
     try:
         remembered = read_config().get("window")
         titles = [remembered] if isinstance(remembered, str) and remembered else []
-        watcher = Watcher(window_grabber(titles), text_reader(),
+        grab = window_grabber(titles, on_status=status)
+        watcher = Watcher(grab, text_reader(),
                           lambda name, clan: board.report(SCREEN_KEY, name, clan))
     except ImportError as exc:  # screen capture / text recognition packages missing
         log.warning("screen watcher not installed (%s): pip install -e \".[watcher]\"", exc.name)
-        return
+        return keep_saying("unavailable", "screen reader not installed")
     except Exception:  # noqa: BLE001 - the website should keep working without it
         log.exception("screen watcher couldn't start")
-        return
+        return keep_saying("unavailable", "screen watcher couldn't start (see the log)")
     log.info("screen watcher running")
     while not stop.wait(1.0):
         try:

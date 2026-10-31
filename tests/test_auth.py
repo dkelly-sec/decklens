@@ -217,7 +217,7 @@ def log_in(client, username="david", password=PASSWORD):
     ("get", "/api/players/%232PP/last-opponent"), ("get", "/api/search?name=dipo"),
     ("post", "/api/predict"), ("get", "/cards/26000000.png"), ("get", "/api/me"),
     ("get", "/api/watch"), ("post", "/api/watch"), ("get", "/api/clan-lookup?clan=abc"),
-    ("post", "/api/desktop/quit"),
+    ("post", "/api/desktop/quit"), ("post", "/api/watch/status"),
 ])
 def test_everything_useful_needs_a_login(site, method, path):
     client, _, _ = site
@@ -398,4 +398,4 @@ def test_each_user_only_sees_their_own_watcher_reports():
     log_in(friend, "friend")
     david.post("/api/watch", json={"name": "Florent", "clan": "Sunny"})
     assert david.get("/api/watch").json()["latest"]["name"] == "Florent"
-    assert friend.get("/api/watch").json() == {"latest": None}
+    assert friend.get("/api/watch").json()["latest"] is None

@@ -48,6 +48,7 @@ RATE_LIMITS = {
     "clan_lookup": (6, 60.0),  # live clan lookups cost up to 6 API calls each
     "watch": (60, 60.0),       # screen watcher reports: about one per match
     "watch_poll": (120, 60.0), # the page checks for a new report every 2 seconds
+    "watch_status": (40, 60.0),  # the stand-alone watcher's heartbeat (every 5 s or on change)
 }
 STATIC_DIR = Path(str(resources.files("decklens") / "web" / "static"))
 
@@ -76,6 +77,14 @@ class WatchReport(BaseModel):
     model_config = ConfigDict(extra="forbid")
     name: str = Field(min_length=1, max_length=40)
     clan: str | None = Field(default=None, max_length=50)
+
+
+class WatchStatus(BaseModel):
+    """The stand-alone watcher's heartbeat: what it can see."""
+    model_config = ConfigDict(extra="forbid")
+    state: Literal["connected", "screen_only", "no_window", "minimised", "starting",
+                   "unavailable"]
+    detail: str | None = Field(default=None, max_length=80)
 
 
 class PredictRequest(BaseModel):
@@ -237,7 +246,13 @@ def create_app(services: Services, *, hsts: bool = False) -> FastAPI:
 
     @app.get("/api/watch", dependencies=[*signed_in, Depends(limit("watch_poll"))])
     def watch_latest(request: Request) -> dict[str, Any]:
-        return {"latest": services.watch.latest(watch_key(request))}
+        key = watch_key(request)
+        return {"latest": services.watch.latest(key), "watcher": services.watch.status(key)}
+
+    @app.post("/api/watch/status", dependencies=[*signed_in, Depends(limit("watch_status"))])
+    def watch_status(body: WatchStatus, request: Request) -> dict[str, Any]:
+        services.watch.set_status(watch_key(request), body.state, body.detail)
+        return {"ok": True}
 
     @app.post("/api/predict", dependencies=[*signed_in, Depends(limit("predict"))])
     def predict(body: PredictRequest, model: Predictor = Depends(predictor)) -> dict[str, Any]:

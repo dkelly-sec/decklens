@@ -851,7 +851,7 @@ def test_live_clan_lookup_without_a_name_is_most_recent_first():
 
 def test_watcher_reports_reach_the_page_as_text():
     app, services, _ = make()
-    assert app.get("/api/watch").json() == {"latest": None}
+    assert app.get("/api/watch").json()["latest"] is None
     sent = app.post("/api/watch", json={"name": "  FIOReNt ", "clan": "Sunny"})
     assert sent.status_code == 200
     latest = app.get("/api/watch").json()["latest"]
@@ -922,3 +922,31 @@ def test_favicon_is_served():
     r = app.get("/favicon.ico")
     assert r.status_code == 200 and r.headers["content-type"] == "image/x-icon"
     assert r.content[:4] == b"\x00\x00\x01\x00"                  # an .ico file
+
+
+
+def test_watcher_status_reaches_the_page_and_goes_stale():
+    from decklens.web.watch import SCREEN_KEY, WatchBoard
+
+    app, services, _ = make()
+    assert app.get("/api/watch").json() == {"latest": None, "watcher": None}   # not running
+    assert app.post("/api/watch/status", json={"state": "connected", "detail": "David's A53"}
+                    ).status_code == 200
+    assert app.get("/api/watch").json()["watcher"] == {"state": "connected",
+                                                       "detail": "David's A53"}
+
+    now = [1000.0]
+    board = WatchBoard(clock=lambda: now[0])
+    board.set_status(SCREEN_KEY, "connected", "David's A53")          # the desktop app's watcher
+    assert board.status("david")["state"] == "connected"
+    now[0] += 11                                                       # went quiet: not running
+    assert board.status("david") is None
+
+
+@pytest.mark.parametrize("body", [
+    {"state": "hacked"}, {"state": "connected", "detail": "x" * 81}, {},
+    {"state": "connected", "extra": 1},
+])
+def test_watcher_status_is_validated(body):
+    app, _, _ = make()
+    assert app.post("/api/watch/status", json=body).status_code == 422

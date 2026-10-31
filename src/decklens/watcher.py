@@ -243,6 +243,28 @@ class NeedLogin(Exception):
     pass
 
 
+class Heartbeat:
+    """Sends the watcher's status: straight away when it changes, otherwise
+    every few seconds so the page knows the watcher is still running."""
+
+    def __init__(self, send: Callable[[str, str | None], None], *, every: float = 5.0,
+                 clock: Callable[[], float] = time.monotonic):
+        self.send, self.every, self.clock = send, every, clock
+        self.last: tuple[str, str | None] | None = None
+        self.sent_at = float("-inf")
+
+    def __call__(self, state: str, detail: str | None = None) -> None:
+        now = self.clock()
+        if (state, detail) == self.last and now - self.sent_at < self.every:
+            return
+        try:
+            self.send(state, detail)
+        except (OSError, NeedLogin) as exc:  # the next beat will try again
+            log.debug("couldn't send the watcher status: %s", type(exc).__name__)
+            return
+        self.last, self.sent_at = (state, detail), now
+
+
 class DeckLensClient:
     """Logs in like the page does and posts what the watcher read (text only)."""
 
@@ -266,6 +288,13 @@ class DeckLensClient:
             detail = r.json().get("detail") if r.headers.get("content-type", "").startswith(
                 "application/json") else None
             raise NeedLogin(detail or f"login failed (HTTP {r.status_code})")
+
+    def status(self, state: str, detail: str | None) -> None:
+        r = self.session.post(self.base + "/api/watch/status", timeout=5,
+                              json={"state": state, "detail": (detail or None) and detail[:80]})
+        if r.status_code == 401:
+            raise NeedLogin("session expired")
+        r.raise_for_status()
 
     def report(self, name: str, clan: str | None) -> None:
         r = self.session.post(self.base + "/api/watch", timeout=10,
@@ -322,48 +351,60 @@ def screen_grabber(region: dict[str, int]) -> Callable[[], Any]:
     return grab
 
 
-def window_grabber(titles: list[str]) -> Callable[[], Any]:
+# What the watcher can see, shown on the DeckLens page as connected / not connected.
+STATES = ("connected", "screen_only", "no_window", "minimised", "starting", "unavailable")
+Status = Callable[[str, "str | None"], None]
+
+
+def window_grabber(titles: list[str], on_status: Status | None = None) -> Callable[[], Any]:
     """Reads the Phone Link window's own picture (works with other windows on
     top), then cuts out the game picture inside it. Returns None while the
-    window is closed or minimised."""
-    import mss
+    window is closed or minimised. on_status(state, detail) hears what it saw."""
     import numpy as np
 
     from . import wincapture
 
-    state: dict[str, Any] = {"window": None, "said": None}
-    sct = mss.mss()
+    state: dict[str, Any] = {"window": None, "said": None, "screen": None}
 
-    def say(message: str) -> None:
+    def report(status: str, detail: str | None, message: str) -> None:
+        if on_status is not None:
+            on_status(status, detail)
         if state["said"] != message:  # log each change once, not every second
             state["said"] = message
             log.info(message)
+
+    def read_screen(box: tuple[int, int, int, int]) -> Any:
+        if state["screen"] is None:
+            import mss
+            state["screen"] = mss.mss()
+        left, top, width, height = box
+        shot = np.asarray(state["screen"].grab({"left": left, "top": top,
+                                                "width": width, "height": height}))
+        return shot[:, :, 2::-1].copy()
 
     def grab() -> Any:
         window = state["window"] or wincapture.find_window(titles)
         if window is None:
             wanted = (" or ".join(repr(t) for t in titles) if titles
                       else "Phone Link's phone screen")
-            say(f"waiting for {wanted}: open the phone screen in Phone Link "
-                "(python -m decklens.watcher --list-windows shows what it can see)")
+            report("no_window", None, f"waiting for {wanted}: open the phone screen in "
+                   "Phone Link (python -m decklens.watcher --list-windows shows what it can see)")
             return None
         image = wincapture.capture(window)
         if image is None:
             box = wincapture.client_box(window)
             if box is None:
                 state["window"] = wincapture.find_window(titles)  # closed or minimised
-                say("the Phone Link window is minimised or closed: restore it (it can sit "
-                    "behind other windows)")
+                report("minimised", window.title, "the Phone Link window is minimised or "
+                       "closed: restore it (it can sit behind other windows)")
                 return None
             # Windows wouldn't draw it for us: read that part of the screen instead.
-            say("reading the Phone Link window from the screen: keep it visible "
-                "(not covered) while you play")
-            left, top, width, height = box
-            shot = np.asarray(sct.grab({"left": left, "top": top, "width": width,
-                                        "height": height}))
-            image = shot[:, :, 2::-1].copy()
+            report("screen_only", window.title, "reading the Phone Link window from the "
+                   "screen: keep it visible (not covered) while you play")
+            image = read_screen(box)
         else:
-            say(f"reading the window {window.title!r} (it can sit behind other windows)")
+            report("connected", window.title,
+                   f"reading the window {window.title!r} (it can sit behind other windows)")
         state["window"] = window
         return phone_area(image)
     return grab
@@ -517,6 +558,16 @@ def main(argv: list[str] | None = None) -> int:
             client.report(name, clan)
         log.info("opponent: %s%s -> sent to DeckLens", name, f" ({clan})" if clan else "")
 
+    heartbeat = Heartbeat(client.status)
+    heartbeat("starting")
+    if args.manual:
+        box_grab = grab
+
+        def grab() -> Any:  # the dragged box is always "there": say so on each look
+            heartbeat("connected", "your calibrated box")
+            return box_grab()
+    else:
+        grab = window_grabber(titles, on_status=heartbeat)
     watcher = Watcher(grab, text_reader(), send)
     log.info("watching your phone screen (Ctrl+C to stop). Tick Auto-scout on the DeckLens page.")
     try:

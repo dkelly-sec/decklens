@@ -108,9 +108,15 @@ def test_window_handed_to_a_running_browser_keeps_the_app_open():
 def test_missing_watcher_packages_leave_the_website_running(monkeypatch, caplog):
     import decklens.watcher as watcher_module
 
-    def no_mss(titles):
+    def no_mss(titles, on_status=None):
         raise ModuleNotFoundError("No module named 'mss'", name="mss")
 
     monkeypatch.setattr(watcher_module, "window_grabber", no_mss)
-    desktop.run_watcher(object(), threading.Event())       # returns instead of crashing
+    from decklens.web.watch import WatchBoard
+
+    board, stop = WatchBoard(), threading.Event()
+    stop.set()                                              # app closing: don't keep waiting
+    desktop.run_watcher(board, stop)                        # returns instead of crashing
     assert "screen watcher not installed (mss)" in caplog.text
+    assert board.status("anyone") == {"state": "unavailable",
+                                      "detail": "screen reader not installed"}

@@ -261,3 +261,66 @@ def test_real_window_list_from_a_pc():
             Window(5, "Settings", "applicationframehost.exe"), Window(6, "XBOX", "xboxpcapp.exe"),
             Window(7, "Program Manager", "explorer.exe")]
     assert choose_window(real, []).title == "David's A53"
+
+
+
+# --- connection status ---------------------------------------------------------------
+
+from decklens.watcher import Heartbeat, window_grabber  # noqa: E402
+
+
+def test_heartbeat_sends_changes_at_once_and_repeats_every_few_seconds():
+    clock, sent = [0.0], []
+    beat = Heartbeat(lambda s, d: sent.append((s, d)), every=5, clock=lambda: clock[0])
+    beat("starting")
+    beat("connected", "David's A53")
+    beat("connected", "David's A53")                 # same, too soon: skipped
+    clock[0] = 6
+    beat("connected", "David's A53")                 # still alive: repeated
+    assert sent == [("starting", None), ("connected", "David's A53"),
+                    ("connected", "David's A53")]
+
+
+def test_heartbeat_survives_network_trouble():
+    calls = []
+
+    def flaky(state, detail):
+        calls.append(state)
+        if len(calls) == 1:
+            raise OSError("server restarting")
+
+    beat = Heartbeat(flaky, every=5, clock=lambda: 0.0)
+    beat("connected", "x")                           # fails quietly...
+    beat("connected", "x")                           # ...and is tried again next look
+    assert calls == ["connected", "connected"]
+
+
+def test_window_grabber_reports_what_it_can_see(monkeypatch):
+    import sys
+    import types
+
+    from decklens import wincapture
+
+    mirror = Window(4, "David's A53", "yourphoneappproxyhost.exe")
+    picture = np.full((1400, 2560, 3), 43, dtype=np.uint8)
+    picture[30:1390, 974:1586] = game_picture(612, 1360)
+    world = {"window": None, "image": None, "box": None}
+    monkeypatch.setattr(wincapture, "find_window", lambda titles: world["window"])
+    monkeypatch.setattr(wincapture, "capture", lambda w: world["image"])
+    monkeypatch.setattr(wincapture, "client_box", lambda w: world["box"])
+
+    class FakeScreen:
+        def grab(self, box):
+            return np.dstack([picture[:, :, ::-1], np.full(picture.shape[:2], 255, np.uint8)])
+
+    monkeypatch.setitem(sys.modules, "mss", types.SimpleNamespace(mss=FakeScreen))
+    seen = []
+    grab = window_grabber([], on_status=lambda s, d: seen.append((s, d)))
+
+    assert grab() is None and seen[-1] == ("no_window", None)          # Phone Link not open
+    world.update(window=mirror, image=picture)
+    assert grab().shape[:2] == (1360, 612) and seen[-1] == ("connected", "David's A53")
+    world.update(image=None, box=None)                                 # minimised
+    assert grab() is None and seen[-1] == ("minimised", "David's A53")
+    world.update(box=(0, 0, 2560, 1400))                               # visible, but no window picture
+    assert grab().shape[:2] == (1360, 612) and seen[-1] == ("screen_only", "David's A53")
