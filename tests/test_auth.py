@@ -217,6 +217,7 @@ def log_in(client, username="david", password=PASSWORD):
     ("get", "/api/players/%232PP/last-opponent"), ("get", "/api/search?name=dipo"),
     ("post", "/api/predict"), ("get", "/cards/26000000.png"), ("get", "/api/me"),
     ("get", "/api/watch"), ("post", "/api/watch"), ("get", "/api/clan-lookup?clan=abc"),
+    ("post", "/api/desktop/quit"),
 ])
 def test_everything_useful_needs_a_login(site, method, path):
     client, _, _ = site
@@ -243,7 +244,7 @@ def test_login_flow_and_logout(site):
     response = log_in(client, "David")
     assert response.status_code == 200 and response.json() == {"username": "david"}
     assert "HttpOnly" in response.headers["set-cookie"]
-    assert client.get("/api/me").json() == {"username": "david", "login": True}
+    assert client.get("/api/me").json() == {"username": "david", "login": True, "desktop": False}
     assert client.get("/api/players/%232PP").status_code == 200
 
     out = client.post("/api/logout")

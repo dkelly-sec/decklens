@@ -157,6 +157,17 @@ How it's secured:
 - The website's database role can read logins but not create or change them, so a compromised web app can't give itself an account.
 - The server binds to 127.0.0.1 only. Putting it on a network comes with HTTPS in the deployment step.
 
+## Desktop app
+
+One double-click instead of PowerShell windows. Install the shortcut once:
+
+```powershell
+pip install -e ".[watcher]"
+powershell -ExecutionPolicy Bypass -File scripts\install-desktop.ps1
+```
+
+Then open **DeckLens** from the desktop or Start menu. It shows a small "Starting DeckLens…" window while it makes sure the database is up (starting Docker Desktop and the container if needed), starts the website (127.0.0.1 only) and the screen watcher inside the app, then opens DeckLens in its own app window (Edge's app mode with its own profile, so you stay logged in). Auto-scout is on by default. Close the window, or press **Quit**, to stop everything; Docker keeps running for the nightly crawl. Logs go to `logs\desktop-YYYY-MM-DD.log`. Opening it again while it's running just opens another window.
+
 ## Auto-scout from your mirrored phone
 
 Mirror your Android phone to your PC (Phone Link, as for streaming), run the watcher, and tick **Auto-scout** on the DeckLens page. When a battle starts, the watcher reads your opponent's name and clan from the top-left of the battle screen and the page searches them (live clan check included) and opens the best match's decks by itself: the first player in the clan that was read (or online right now), marked **Auto-picked**, otherwise the top result marked **Best guess**. Tap someone else if it ever picks wrong.

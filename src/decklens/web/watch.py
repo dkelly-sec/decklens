@@ -18,6 +18,10 @@ from typing import Any, Callable
 
 REPORT_TTL_SECONDS = 600
 MAX_USERS = 1000
+# Reports from the watcher built into the desktop app (same PC, no login of its
+# own) go here and are shown to whoever is logged in on that PC. No HTTP route
+# can write to this key: the web routes always use a username (or "local").
+SCREEN_KEY = "*screen*"
 
 
 class WatchBoard:
@@ -38,8 +42,11 @@ class WatchBoard:
         return entry
 
     def latest(self, user: str) -> dict[str, Any] | None:
+        """The newest report for this user (including the desktop app's own)."""
         with self._lock:
-            entry = self._latest.get(user)
-        if entry is None or self.clock() - entry["at"] > REPORT_TTL_SECONDS:
+            entries = [e for e in (self._latest.get(user), self._latest.get(SCREEN_KEY)) if e]
+        entries = [e for e in entries if self.clock() - e["at"] <= REPORT_TTL_SECONDS]
+        if not entries:
             return None
+        entry = max(entries, key=lambda e: e["id"])
         return {**entry, "age_seconds": round(self.clock() - entry["at"], 1)}

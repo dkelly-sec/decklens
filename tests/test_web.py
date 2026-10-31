@@ -886,3 +886,39 @@ def test_watcher_needs_same_site_origin():
     services = Services(client=FakeClient())
     app = TestClient(create_app(services), raise_server_exceptions=False)
     assert app.post("/api/watch", json={"name": "x"}).status_code == 403
+
+
+# --- desktop app ----------------------------------------------------------------------
+
+
+def test_desktop_mode_flag_and_quit_button():
+    app, services, _ = make()
+    assert app.get("/api/me").json()["desktop"] is False
+    assert app.post("/api/desktop/quit").status_code == 404        # not inside the app
+    quits = []
+    services.quit_app = lambda: quits.append(1)
+    assert app.get("/api/me").json()["desktop"] is True
+    assert app.post("/api/desktop/quit").json() == {"ok": True} and quits == [1]
+
+
+def test_quit_needs_same_site_request():
+    services = Services(client=FakeClient(), quit_app=lambda: None)
+    app = TestClient(create_app(services), raise_server_exceptions=False)
+    assert app.post("/api/desktop/quit").status_code == 403
+
+
+def test_desktop_watcher_reports_reach_the_logged_in_user():
+    from decklens.web.watch import SCREEN_KEY
+
+    app, services, _ = make()
+    services.watch.report(SCREEN_KEY, "FIOReNt", "Sunny")
+    assert app.get("/api/watch").json()["latest"]["name"] == "FIOReNt"
+    app.post("/api/watch", json={"name": "Newer", "clan": None})     # newest report wins
+    assert app.get("/api/watch").json()["latest"]["name"] == "Newer"
+
+
+def test_favicon_is_served():
+    app, _, _ = make()
+    r = app.get("/favicon.ico")
+    assert r.status_code == 200 and r.headers["content-type"] == "image/x-icon"
+    assert r.content[:4] == b"\x00\x00\x01\x00"                  # an .ico file

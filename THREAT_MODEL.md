@@ -46,6 +46,9 @@ Living document: update it as features are added. Last reviewed: week 7 (logins)
 | Screen watcher leaking screenshots or the password | Screenshots stay in memory for one read and are never saved or sent; only name and clan text is posted (the API refuses any other field). Password read with getpass, never stored; session kept in memory. Refuses plain http to anything but this computer | Done |
 | Fake or flooded watcher reports | Same login as the page (cookie session), same-origin check, 60 reports a minute, text length limits; reports are per user and in memory only, expire after 10 minutes | Done |
 | Account risk from the game's rules | Watcher only reads pixels of the mirror window: no input to the phone or game, no emulator, no game files, memory or traffic | By design |
+| Desktop app exposing the site on the network | Website bound to 127.0.0.1 only; the app window is a local browser profile | Done |
+| Anyone making the desktop app quit | Quit route exists only inside the desktop app, needs a login and a same-site request | Done |
+| Watcher inside the desktop app | Reports straight to the in-memory board under a key no web route can write; shown only to users logged in on that PC | Done |
 | Strangers using the site and its API quota | Login required for every page, API route and card image; no sign-up page, accounts only from the command line | Done |
 | Password guessing | 5 failures lock a username for 15 minutes (whether or not it exists); 10 login attempts per minute per client; 12+ character passwords | Done |
 | Stolen password database | scrypt hashes (OWASP parameters) with per-password salts; plain text impossible by database check; hashes with absurd cost parameters refused | Done |

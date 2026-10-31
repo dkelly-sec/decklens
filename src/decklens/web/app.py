@@ -62,6 +62,7 @@ class Services:
     limiter: RateLimiter = field(default_factory=lambda: RateLimiter(RATE_LIMITS))
     cache: TTLCache = field(default_factory=lambda: TTLCache(ttl=60.0, max_items=2000))
     watch: WatchBoard = field(default_factory=WatchBoard)
+    quit_app: Callable[[], None] | None = None   # set only by the desktop app
 
 
 class LoginRequest(BaseModel):
@@ -89,6 +90,7 @@ def create_app(services: Services, *, hsts: bool = False) -> FastAPI:
     app.add_middleware(BodySizeLimitMiddleware, max_bytes=4096)
     app.add_middleware(SameOriginMiddleware)
     app.add_middleware(SecurityHeadersMiddleware, hsts=hsts)
+    app.state.services = services  # the desktop app reaches the watch board through this
     auth = services.auth
 
     def limit(bucket: str) -> Callable[[Request], None]:
@@ -295,7 +297,17 @@ def create_app(services: Services, *, hsts: bool = False) -> FastAPI:
         user = current_user(request)
         if auth is not None and user is None:
             raise HTTPException(401, "Please log in")
-        return {"username": user.username if user else None, "login": auth is not None}
+        return {"username": user.username if user else None, "login": auth is not None,
+                "desktop": services.quit_app is not None}
+
+    @app.post("/api/desktop/quit", dependencies=signed_in)
+    def quit_desktop_app() -> dict[str, Any]:
+        """Close the desktop app (website and watcher). Only exists inside it."""
+        if services.quit_app is None:
+            raise HTTPException(404, "Not found")
+        log.info("quit requested from the page")
+        services.quit_app()
+        return {"ok": True}
 
     # --- pages ------------------------------------------------------------------
 
@@ -304,6 +316,11 @@ def create_app(services: Services, *, hsts: bool = False) -> FastAPI:
         if auth is not None and current_user(request) is None:
             return RedirectResponse("/login", status_code=303)
         return FileResponse(STATIC_DIR / "index.html")
+
+    @app.get("/favicon.ico", include_in_schema=False)
+    def favicon() -> FileResponse:
+        return FileResponse(STATIC_DIR / "decklens.ico", media_type="image/x-icon",
+                            headers={"Cache-Control": "public, max-age=86400"})
 
     @app.get("/login", include_in_schema=False, response_model=None)
     def login_page(request: Request) -> Response:

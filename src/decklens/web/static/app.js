@@ -624,10 +624,32 @@ async function showOpponentDecks(player, container) {
 async function showAccount() {
   try {
     const me = await api("/api/me");
+    if (me.desktop) setUpDesktop();
     if (!me.login) return;  // logins switched off (local use only)
     document.getElementById("account-name").textContent = me.username;
     document.getElementById("account").hidden = false;
   } catch { /* api() already redirects to the login page on 401 */ }
+}
+
+// Inside the DeckLens desktop app: a Quit button, and Auto-scout on by default
+// (the app runs the screen watcher itself) unless you've switched it off.
+function setUpDesktop() {
+  const quit = document.getElementById("quit-button");
+  quit.hidden = false;
+  quit.addEventListener("click", async () => {
+    clearInterval(auto.timer);
+    try {
+      await fetch("/api/desktop/quit", { method: "POST" });
+    } finally {
+      document.body.replaceChildren(el("p", "DeckLens has closed. You can close this window.", "muted"));
+      window.close();
+    }
+  });
+  const box = document.getElementById("auto-scout");
+  if (storageGet("decklens.autoScout") === null && !box.checked) {
+    box.checked = true;
+    setAutoScout(true);
+  }
 }
 
 async function logOut() {
