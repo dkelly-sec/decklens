@@ -327,13 +327,18 @@ def main(argv: list[str] | None = None) -> int:
         import psycopg
 
         from .storage import (
-            players_due_for_crawl, prune_stale_players, save_players, save_rank_entries,
+            backfill_clan_keys, players_due_for_crawl, prune_stale_players, save_players,
+            save_rank_entries,
         )
 
         def now() -> datetime:
             return datetime.now(timezone.utc)
 
         with psycopg.connect(settings.database_url) as conn:
+            filled = backfill_clan_keys(conn)  # players stored before clan search existed
+            if filled:
+                log.info("clan search: indexed clans for %d older players", filled)
+
             if args.seed_leaderboard:
                 entries, source = fetch_leaderboard(
                     client, location=args.location, season=args.season,

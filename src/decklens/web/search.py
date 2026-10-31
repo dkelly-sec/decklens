@@ -1,4 +1,4 @@
-"""Opponent search by name over the player index.
+"""Opponent search by name and/or clan over the player index.
 
 Names are matched on their normalised search key (see names.py), so emoji,
 fancy fonts and look-alike letters don't get in the way. Results are capped,
@@ -18,9 +18,10 @@ MIN_QUERY = 2
 MAX_RESULTS = 10
 MAX_RATING = 20_000
 
-# Order: exact name matches first; then players whose rating is closest to
-# yours (Ranked matchmaking pairs similar ratings, so your opponent is almost
-# always among them); then best global rank; then most recently seen.
+# Filters: name prefix and/or clan prefix (either may be left out). Order:
+# exact name, then exact clan matches first; then players whose rating is
+# closest to yours (Ranked matchmaking pairs similar ratings, so your opponent
+# is almost always among them); then best global rank; then most recently seen.
 _SEARCH = r"""
     SELECT p.tag, p.name, p.clan_name, r.rank, p.rating
     FROM players p
@@ -29,9 +30,11 @@ _SEARCH = r"""
         WHERE s.tag = p.tag AND s.rank IS NOT NULL
         ORDER BY s.observed_at DESC LIMIT 1
     ) r ON true
-    WHERE p.search_key LIKE %(pattern)s ESCAPE '\'
+    WHERE (%(pattern)s::text IS NULL OR p.search_key LIKE %(pattern)s ESCAPE '\')
+      AND (%(clan_pattern)s::text IS NULL OR p.clan_key LIKE %(clan_pattern)s ESCAPE '\')
     ORDER BY
         (p.search_key = %(key)s) DESC,
+        (p.clan_key = %(clan_key)s) DESC,
         CASE WHEN %(near)s::int IS NULL THEN 0
              ELSE abs(coalesce(p.rating, -100000) - %(near)s::int) END,
         r.rank ASC NULLS LAST,
@@ -45,15 +48,24 @@ def _like_prefix(key: str) -> str:
     return key.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
 
 
-def search_players(conn: Connection, query: str, *, near_rating: int | None = None
-                   ) -> list[dict[str, Any]]:
-    key = search_key(query)
-    if len(key) < MIN_QUERY:
-        raise ValueError(f"type at least {MIN_QUERY} letters or digits of the name")
+def search_players(conn: Connection, query: str | None = None, *, clan: str | None = None,
+                   near_rating: int | None = None) -> list[dict[str, Any]]:
+    """Players by name, by clan, or both. A name with nothing typeable in it
+    (all emoji, say) is ignored when a clan is given, so the clan alone works."""
+    key = search_key(query) if query else ""
+    clan_key = search_key(clan) if clan else ""
+    use_name, use_clan = len(key) >= MIN_QUERY, len(clan_key) >= MIN_QUERY
+    if not (use_name or use_clan):
+        raise ValueError(f"type at least {MIN_QUERY} letters or digits of their name "
+                         "or of their clan")
     if near_rating is not None and not 0 <= near_rating <= MAX_RATING:
         raise ValueError("rating out of range")
+    params = {
+        "pattern": _like_prefix(key) if use_name else None, "key": key or None,
+        "clan_pattern": _like_prefix(clan_key) if use_clan else None,
+        "clan_key": clan_key or None, "near": near_rating, "limit": MAX_RESULTS,
+    }
     with conn.cursor() as cur:
-        cur.execute(_SEARCH, {"pattern": _like_prefix(key), "key": key, "near": near_rating,
-                              "limit": MAX_RESULTS})
+        cur.execute(_SEARCH, params)
         return [{"tag": tag, "name": name, "clan": clan, "rank": rank, "rating": rating}
                 for tag, name, clan, rank, rating in cur.fetchall()]

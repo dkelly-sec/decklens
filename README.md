@@ -56,6 +56,8 @@ Each battle log is one API request. Runs pause between requests, back off when r
 ```powershell
 Get-Content db\migrations\002_ranks_and_crawl.sql | docker compose exec -T db psql -U decklens -d decklens -v ON_ERROR_STOP=1 -f -
 Get-Content db\migrations\003_player_rating.sql  | docker compose exec -T db psql -U decklens -d decklens -v ON_ERROR_STOP=1 -f -
+Get-Content db\migrations\004_web_users.sql      | docker compose exec -T db psql -U decklens -d decklens -v ON_ERROR_STOP=1 -f -
+Get-Content db\migrations\005_clan_search.sql    | docker compose exec -T db psql -U decklens -d decklens -v ON_ERROR_STOP=1 -f -
 ```
 
 ### Nightly schedule (Windows)
@@ -129,7 +131,7 @@ Other commands: `passwd` (new password, logs out everywhere), `logout-all`, `dis
 What the page does:
 - **You:** type your name (picked from the player index) or your tag to load your current deck; your tag is remembered in your browser.
 - **Last opponent:** your most recent Ranked or 20-win challenge opponent, their deck, and how your archetype tends to do against theirs.
-- **Find an opponent:** type the letters you can see in their name; pick them from the matches (exact names first, then closest rating to yours) to see their recent decks in separate **Ranked** and **20-win challenge** tabs, with the matchup against your deck (your latest challenge deck on the challenge tab). Challenge games are recognised by their game mode (`Challenge_AllCards_EventDeck_NoSet`), since Trophy Road and friendlies share the same battle type. Matchup numbers come from Ranked games only.
+- **Find an opponent:** type the letters you can see in their name, their clan, or both (clan search is the fallback for names that are all emoji or in a script you can't type); pick them from the matches (exact names and clans first, then closest rating to yours) to see their recent decks in separate **Ranked** and **20-win challenge** tabs, with the matchup against your deck (your latest challenge deck on the challenge tab). Challenge games are recognised by their game mode (`Challenge_AllCards_EventDeck_NoSet`), since Trophy Road and friendlies share the same battle type. Matchup numbers come from Ranked games only.
 - **Deck details:** card art, elixir, evolutions and levels for every card, plus average elixir, 4-card cycle cost and how many cards are maxed.
 - **Matchup grid:** your win rate against their deck over the last 14 days, by how closely decks must match (exact, 7+ of 8 cards, 6+ of 8 cards on both sides, or same archetype) and by tier (top 200, top 1,000, all players). A game counts in a tier only if both players were inside it at the time: rank from the battle itself for the top 500, otherwise from the leaderboard snapshot within a day of it. Every cell shows its number of games and a 95% range; small samples are flagged.
 

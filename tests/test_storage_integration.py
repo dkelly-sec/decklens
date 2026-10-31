@@ -358,3 +358,32 @@ def test_database_refuses_bad_usernames_and_plain_text_passwords(conn):
         with pytest.raises(psycopg.errors.CheckViolation):
             conn.execute("INSERT INTO web_users (username, password_hash) VALUES (%s, %s)",
                          (name, pw))
+
+
+def test_search_by_clan_for_names_you_cannot_type(conn):
+    from decklens.storage import backfill_clan_keys, save_players
+    from decklens.web.search import search_players
+
+    save_players(conn, [
+        RankEntry("#2PP", "🔥🔥🔥", 2079, None, "#C1", "Persian Warrior"),
+        RankEntry("#9QJ", "محمد", 2500, None, "#C1", "Persian Warrior"),
+        RankEntry("#8YY", "李小龍", 2140, None, "#C2", "Persian Warriors II"),
+        RankEntry("#LLL", "AJ", 2100, None, "#C3", "⚔️⚔️"),          # all-emoji clan
+        RankEntry("#UUU", "AJ", 2000, None, None, None),            # no clan
+    ], NOW)
+
+    found = search_players(conn, None, clan="persian warrior", near_rating=2136)
+    assert [r["tag"] for r in found] == ["#2PP", "#9QJ", "#8YY"]   # exact clan first, then rating
+    assert found[0]["name"] == "🔥🔥🔥" and found[0]["clan"] == "Persian Warrior"
+
+    emoji_name = search_players(conn, "🔥", clan="PERSIAN")        # emoji name ignored
+    assert {r["tag"] for r in emoji_name} == {"#2PP", "#9QJ", "#8YY"}
+    assert [r["tag"] for r in search_players(conn, "aj", clan="persian")] == []  # both must match
+    assert [r["tag"] for r in search_players(conn, "aj")] in (["#LLL", "#UUU"], ["#UUU", "#LLL"])
+
+    # Players stored before clan search existed get their clan indexed later.
+    conn.execute("UPDATE players SET clan_key = NULL")
+    assert search_players(conn, None, clan="persian") == []
+    assert backfill_clan_keys(conn, batch=2) == 4                 # everyone with a clan
+    assert len(search_players(conn, None, clan="persian")) == 3
+    assert backfill_clan_keys(conn) == 0                          # nothing left to do

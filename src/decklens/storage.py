@@ -30,17 +30,38 @@ _INSERT_SIDE = """
 """
 
 _UPSERT_PLAYER = """
-    INSERT INTO players (tag, name, search_key, clan_tag, clan_name, last_seen, rating)
-    VALUES (%s, %s, %s, %s, %s, %s, %s)
+    INSERT INTO players (tag, name, search_key, clan_tag, clan_name, last_seen, rating, clan_key)
+    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
     ON CONFLICT (tag) DO UPDATE SET
         name = EXCLUDED.name,
         search_key = EXCLUDED.search_key,
         clan_tag = EXCLUDED.clan_tag,
         clan_name = EXCLUDED.clan_name,
+        clan_key = EXCLUDED.clan_key,
         last_seen = EXCLUDED.last_seen,
         rating = COALESCE(EXCLUDED.rating, players.rating)
     WHERE players.last_seen < EXCLUDED.last_seen
 """
+
+def _clan_key(clan_name: str | None) -> str | None:
+    """Search key for a clan name ('' for an all-emoji clan, None for no clan)."""
+    return search_key(clan_name) if isinstance(clan_name, str) else None
+
+
+def backfill_clan_keys(conn: Connection, *, batch: int = 5000) -> int:
+    """Work out clan_key for players stored before clan search existed."""
+    done = 0
+    while True:
+        with conn.transaction(), conn.cursor() as cur:
+            cur.execute("SELECT tag, clan_name FROM players "
+                        "WHERE clan_key IS NULL AND clan_name IS NOT NULL LIMIT %s", (batch,))
+            rows = cur.fetchall()
+            if not rows:
+                return done
+            cur.executemany("UPDATE players SET clan_key = %s WHERE tag = %s",
+                            [(search_key(name), tag) for tag, name in rows])
+            done += len(rows)
+
 
 def _rating(value: int | None) -> int | None:
     """A plausible Ranked rating, or None (never store junk from the API)."""
@@ -78,7 +99,7 @@ def save_battles(conn: Connection, battles: Iterable[Battle]) -> int:
                 cur.execute(
                     _UPSERT_PLAYER,
                     (p.tag, p.name, search_key(p.name), p.clan_tag, p.clan_name,
-                     battle.battle_time, None),
+                     battle.battle_time, None, _clan_key(p.clan_name)),
                 )
                 if p.global_rank is not None:  # rank as it was when this battle was played
                     cur.execute(
@@ -112,7 +133,7 @@ def save_rank_entries(
             cur.execute(
                 _UPSERT_PLAYER,
                 (e.tag, e.name, search_key(e.name), e.clan_tag, e.clan_name, observed_at,
-                 _rating(e.rating)),
+                 _rating(e.rating), _clan_key(e.clan_name)),
             )
             cur.execute(_INSERT_SNAPSHOT, (e.tag, observed_at, e.rating, e.rank, source))
             count += 1
@@ -128,7 +149,7 @@ def save_players(conn: Connection, entries: Iterable[RankEntry], observed_at: da
             cur.execute(
                 _UPSERT_PLAYER,
                 (e.tag, e.name, search_key(e.name), e.clan_tag, e.clan_name, observed_at,
-                 _rating(e.rating)),
+                 _rating(e.rating), _clan_key(e.clan_name)),
             )
             count += 1
     return count

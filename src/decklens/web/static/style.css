@@ -198,4 +198,6 @@ footer { font-size: 13px; padding-bottom: 32px; }
   font-weight: 600;
 }
 .login form { display: grid; gap: 8px; max-width: 360px; }
+#find-form { display: grid; gap: 8px; }
+#find-form .hint { font-weight: 400; }
 .login form button { justify-self: start; margin-top: 4px; }

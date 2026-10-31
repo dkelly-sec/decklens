@@ -43,8 +43,10 @@
       <h2 id="find-heading">Find an opponent</h2>
       <form id="find-form" autocomplete="off">
         <label for="find-name">Opponent's name (just the letters you can see)</label>
+        <input id="find-name" name="name" placeholder="dipo" maxlength="40">
+        <label for="find-clan">Their clan <span class="hint">(if the name is emoji or a language you can't type)</span></label>
         <div class="row">
-          <input id="find-name" name="name" placeholder="dipo" maxlength="40" required>
+          <input id="find-clan" name="clan" placeholder="Persian Warrior" maxlength="40">
           <button type="submit">Search</button>
         </div>
       </form>

@@ -221,8 +221,21 @@ def test_search_normalises_and_escapes(predictor):
     assert response.status_code == 200
     assert response.json()["results"][0]["tag"] == "#9QJ"
     params = conn.executed[0]
-    assert params == {"pattern": "dipo%", "key": "dipo", "near": 2136, "limit": 10}  # no wildcards
+    assert params == {"pattern": "dipo%", "key": "dipo", "clan_pattern": None, "clan_key": None,
+                      "near": 2136, "limit": 10}  # no user wildcards survive
     assert response.json()["results"][0]["rating"] == 2400
+
+
+def test_search_by_clan_when_the_name_is_all_emoji():
+    app, _, conn = make(rows=[("#9QJ", "🔥🔥🔥", "Persian Warrior", None, 2079)])
+    response = app.get("/api/search", params={"name": "🔥🔥", "clan": "Persian War%_"})
+    assert response.status_code == 200 and response.json()["results"][0]["name"] == "🔥🔥🔥"
+    params = conn.executed[0]
+    assert params["pattern"] is None and params["key"] is None           # emoji name ignored
+    assert params["clan_pattern"] == "persianwar%" and params["clan_key"] == "persianwar"
+
+    app.get("/api/search", params={"name": "aj", "clan": "persian"})     # both narrow it down
+    assert conn.executed[1]["pattern"] == "aj%" and conn.executed[1]["clan_pattern"] == "persian%"
 
 
 @pytest.mark.parametrize("params, status", [
@@ -230,7 +243,9 @@ def test_search_normalises_and_escapes(predictor):
     ({"name": "x" * 41}, 422),           # too long
     ({"name": "dipo", "near_rating": -1}, 422),
     ({"name": "dipo", "near_rating": 99999}, 422),
-    ({}, 422),
+    ({}, 400),                           # neither name nor clan
+    ({"name": "🔥", "clan": "⚔️"}, 400),  # nothing searchable in either
+    ({"clan": "x" * 41}, 422),
 ])
 def test_search_input_validation(params, status):
     app, _, _ = make()

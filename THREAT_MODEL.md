@@ -30,9 +30,10 @@ Living document: update it as features are added. Last reviewed: week 7 (logins)
 | SQL injection via names or tags | Parameterised queries throughout | Done |
 | Database exposed to the network | Docker port bound to 127.0.0.1 | Done |
 | Over-privileged database access | `decklens_app` role without DROP/ALTER/TRUNCATE; schema changes only via owner-run migrations | Done (verified: DROP denied) |
+| Right-to-left names reordering what's shown (e.g. a name that makes a tag or rating look different) | Names and clans rendered inside `<bdi>` so their text direction can't leak into the rest of the line | Done |
 | Stored XSS via player names | Front end only uses textContent (a test fails the build on innerHTML, eval and similar); strict CSP with no inline script; verified with hostile names in a DOM test | Done |
 | Proxy abuse / quota burning | Per-client rate limits (429 + Retry-After); upstream results cached 60s in a size-bounded cache | Done |
-| Scraping the player index | Search rate-limited to 20/min, at most 5 results, at least 2 letters after normalisation, LIKE wildcards escaped | Done |
+| Scraping the player index | Login required; search rate-limited to 20/min, at most 10 results, at least 2 letters of a name or clan after normalisation, LIKE wildcards escaped | Done |
 | SSRF through the card image route | Browser sends only a card id; image URLs come from the official card list and must be https on api-assets.clashroyale.com with a strict path; no redirects; separate session so the API key is never sent; PNG checked by type and signature; 256 KB cap; cached | Done |
 | Third-party tracking of visitors | Card art is served from our own origin (CSP img-src 'self'), so visitors' browsers never contact Supercell's servers | Done |
 | Clickjacking | frame-ancestors 'none' and X-Frame-Options: DENY | Done |

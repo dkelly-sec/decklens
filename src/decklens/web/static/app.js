@@ -128,12 +128,19 @@ function knownIds(deck) {
   return deck.cards.filter((c) => c.id !== null && c.id !== undefined).map((c) => c.id);
 }
 
+// Names and clans go in <bdi> so right-to-left text (Arabic, Hebrew) stays
+// inside its own part and can't reorder the tag and numbers around it.
 function playerLine(player) {
-  const parts = [player.name || "Unknown", player.tag];
-  if (player.clan) parts.push(player.clan);
+  const line = el("p", null, "player");
+  const parts = [el("bdi", player.name || "Unknown"), player.tag];
+  if (player.clan) parts.push(el("bdi", player.clan));
   if (player.rank) parts.push("rank #" + player.rank);
   if (player.rating) parts.push("rating " + player.rating);
-  return el("p", parts.join(" · "), "player");
+  parts.forEach((part, i) => {
+    if (i) line.append(" · ");
+    line.append(part);  // strings become text nodes: still never HTML
+  });
+  return line;
 }
 
 const COLUMN_NAMES = { 200: "Top 200", 1000: "Top 1,000" };
@@ -331,15 +338,26 @@ async function scoutLast() {
 async function findOpponent(event) {
   event.preventDefault();
   const out = document.getElementById("find-result");
-  const name = document.getElementById("find-name").value;
-  let path = "/api/search?name=" + encodeURIComponent(name);
+  const name = document.getElementById("find-name").value.trim();
+  const clan = document.getElementById("find-clan").value.trim();
+  if (!name && !clan) {
+    show(out, el("p", "Type some of their name, their clan, or both.", "error"));
+    return;
+  }
+  const params = new URLSearchParams();
+  if (name) params.set("name", name);
+  if (clan) params.set("clan", clan);
+  let path = "/api/search?" + params.toString();
   // Ranked matches players of similar rating, so players nearest yours come first.
   if (state.me && state.me.rating) path += "&near_rating=" + encodeURIComponent(state.me.rating);
   show(out, el("p", "Searching…", "muted"));
   try {
     const { results } = await api(path);
     if (!results.length) {
-      show(out, el("p", "No players found. They may not be in the index yet.", "muted"));
+      show(out, el("p", clan
+        ? "No players found. Check the clan name, or try fewer letters of it."
+        : "No players found. If their name is emoji or a language you can't type, " +
+          "search by their clan instead.", "muted"));
       return;
     }
     const list = el("ul", null, "results");

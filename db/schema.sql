@@ -10,10 +10,14 @@ CREATE TABLE IF NOT EXISTS players (
     clan_name       TEXT,
     last_seen       TIMESTAMPTZ NOT NULL,
     last_crawled_at TIMESTAMPTZ,          -- when we last fetched this player's battle log
-    rating          INTEGER               -- latest Ranked rating from a leaderboard, if known
+    rating          INTEGER,              -- latest Ranked rating from a leaderboard, if known
+    clan_key        TEXT                  -- clan name normalised like search_key, for clan search
 );
 -- text_pattern_ops makes prefix searches (search_key LIKE 'dav%') use the index.
 CREATE INDEX IF NOT EXISTS players_search_key_idx ON players (search_key text_pattern_ops);
+-- (Older databases get clan_key from migration 005; this keeps re-running the schema safe.)
+ALTER TABLE players ADD COLUMN IF NOT EXISTS clan_key TEXT;
+CREATE INDEX IF NOT EXISTS players_clan_key_idx ON players (clan_key text_pattern_ops);
 
 -- Rank and rating over time, so each battle can be placed in a skill tier
 -- (Ultimate Champion / top 1,000 / top 200) as it was when it was played.
