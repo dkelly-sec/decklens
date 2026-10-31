@@ -220,7 +220,8 @@ def test_search_normalises_and_escapes(predictor):
     response = app.get("/api/search", params={"name": "🔥Dípo%_", "near_rating": 2136})
     assert response.status_code == 200
     assert response.json()["results"][0]["tag"] == "#9QJ"
-    params = conn.executed[0]
+    assert conn.executed[0] == ("0.45",)                                  # fuzzy threshold
+    params = conn.executed[1]
     assert params == {"pattern": "dipo%", "key": "dipo", "clan_pattern": None, "clan_key": None,
                       "near": 2136, "limit": 10}  # no user wildcards survive
     assert response.json()["results"][0]["rating"] == 2400
@@ -230,12 +231,12 @@ def test_search_by_clan_when_the_name_is_all_emoji():
     app, _, conn = make(rows=[("#9QJ", "🔥🔥🔥", "Persian Warrior", None, 2079)])
     response = app.get("/api/search", params={"name": "🔥🔥", "clan": "Persian War%_"})
     assert response.status_code == 200 and response.json()["results"][0]["name"] == "🔥🔥🔥"
-    params = conn.executed[0]
+    params = conn.executed[1]
     assert params["pattern"] is None and params["key"] is None           # emoji name ignored
     assert params["clan_pattern"] == "persianwar%" and params["clan_key"] == "persianwar"
 
     app.get("/api/search", params={"name": "aj", "clan": "persian"})     # both narrow it down
-    assert conn.executed[1]["pattern"] == "aj%" and conn.executed[1]["clan_pattern"] == "persian%"
+    assert conn.executed[3]["pattern"] == "aj%" and conn.executed[3]["clan_pattern"] == "persian%"
 
 
 @pytest.mark.parametrize("params, status", [
@@ -826,3 +827,19 @@ def test_most_recent_deck_comes_first_not_the_most_played():
     assert decks[0]["last_played"].startswith("2026-10-30T01:09")
     assert decks[1]["last_played"].startswith("2026-10-30T01:08")      # its most recent game
     assert decks[2]["last_played"].startswith("2026-10-30T01:04")      # fourth deck dropped
+
+
+def test_live_clan_lookup_forgives_typos_in_name_and_clan():
+    app, _, _ = make(client=ClanClient())
+    data = app.get("/api/clan-lookup", params={"clan": "eatrpa theoton", "name": "kua"}).json()
+    assert "Eatropa Theotôn" in data["clans_checked"][:2]     # closest clan names checked first
+    assert data["players"][0]["tag"] == "#V8Q9LV8GC"          # "kua" still finds +Kaua
+    assert all(p["name"] != "Someone" for p in data["players"])  # unrelated names left out
+
+
+def test_live_clan_lookup_without_a_name_is_most_recent_first():
+    app, _, _ = make(client=ClanClient())
+    minutes = [p["last_seen_minutes"] for p in
+               app.get("/api/clan-lookup", params={"clan": "eatropa"}).json()["players"]]
+    known = [m for m in minutes if m is not None]
+    assert known == sorted(known) and minutes[-1] is None

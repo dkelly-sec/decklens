@@ -12,6 +12,7 @@ names are attacker-controlled input.
 from __future__ import annotations
 
 import unicodedata
+from difflib import SequenceMatcher
 
 MAX_NAME_LENGTH = 64
 
@@ -56,3 +57,22 @@ def search_key(name: str) -> str:
             out.append(ch)
 
     return unicodedata.normalize("NFC", "".join(out))
+
+
+def fuzzy_score(query_key: str, key: str) -> float:
+    """How well a typed (normalised) query matches a (normalised) name, 0-1.
+
+    1.0 if it appears unbroken anywhere in the name; otherwise the best
+    similarity between the query and any same-length part of the name (or the
+    whole name), so partial names, swapped and missing letters still score
+    well: "kua" vs "+kaua" -> 0.86, "persainwarrior" vs "persianwarrior" -> 0.93.
+    """
+    if not query_key or not key:
+        return 0.0
+    if query_key in key:
+        return 1.0
+    best = SequenceMatcher(None, query_key, key).ratio()
+    width = len(query_key)
+    for start in range(max(0, len(key) - width) + 1):
+        best = max(best, SequenceMatcher(None, query_key, key[start:start + width + 1]).ratio())
+    return best

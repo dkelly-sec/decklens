@@ -17,7 +17,7 @@ from ..archetypes import ArchetypeModel
 from ..battles import (
     CHALLENGE_GAME_MODE, Battle, opt_int, parse_battle_log, parse_battle_time,
 )
-from ..names import search_key
+from ..names import fuzzy_score, search_key
 from ..model import LinearMatchupModel, wilson_interval
 from ..validation import InvalidTagError, normalize_tag
 
@@ -314,6 +314,7 @@ class Predictor:
 CLANS_TO_CHECK = 5
 ACTIVE_MINUTES = 15
 MAX_LIVE_RESULTS = 10
+NAME_MATCH_MIN = 0.6  # how close typed name letters must be (see names.fuzzy_score)
 
 
 def _minutes_ago(raw: Any, now: datetime) -> int | None:
@@ -335,11 +336,14 @@ def live_clan_lookup(clans: list[dict[str, Any]], members_of: Callable[[str], li
     valid = []
     for c in clans:
         try:
-            valid.append((normalize_tag(c.get("tag")), _text(c.get("name")), c))
+            tag, cname = normalize_tag(c.get("tag")), _text(c.get("name"))
         except InvalidTagError:
             continue
-    # Exact name matches first, then the API's own order (stable sort).
-    valid.sort(key=lambda t: search_key(t[1]) != want)
+        key = search_key(cname)
+        score = 1.1 if key == want else max(fuzzy_score(want, key), fuzzy_score(key, want))
+        valid.append((tag, cname, score))
+    # Closest clan names first; ties keep the API's own order (stable sort).
+    valid.sort(key=lambda t: -round(t[2], 1))
     name_key = search_key(name) if name else ""
     players, checked = [], []
     for tag, cname, _ in valid[:CLANS_TO_CHECK]:
@@ -350,16 +354,22 @@ def live_clan_lookup(clans: list[dict[str, Any]], members_of: Callable[[str], li
             except InvalidTagError:
                 continue
             mname = _text(m.get("name"))
-            if name_key and name_key not in search_key(mname):
-                continue  # letters typed for the name must appear in it
+            match = fuzzy_score(name_key, search_key(mname)) if name_key else 1.0
+            if match < NAME_MATCH_MIN:
+                continue  # typed name letters don't resemble this player's name
             minutes = _minutes_ago(m.get("lastSeen"), now)
             players.append({
                 "tag": mtag, "name": mname, "clan": cname, "rank": None, "rating": None,
                 "trophies": opt_int(m.get("trophies")),
                 "last_seen_minutes": minutes,
                 "active": minutes is not None and minutes <= ACTIVE_MINUTES,
+                "_match": match,
             })
-    players.sort(key=lambda p: (p["last_seen_minutes"] is None, p["last_seen_minutes"] or 0))
+    # Best name match first (when a name was typed), then most recently online.
+    players.sort(key=lambda p: (-round(p["_match"], 1), p["last_seen_minutes"] is None,
+                                p["last_seen_minutes"] or 0))
+    for p in players:
+        del p["_match"]
     return {"clans_checked": checked, "clans_found": len(valid),
             "players": players[:MAX_LIVE_RESULTS]}
 

@@ -381,7 +381,8 @@ def test_search_by_clan_for_names_you_cannot_type(conn):
 
     emoji_name = search_players(conn, "🔥", clan="PERSIAN")        # emoji name ignored
     assert {r["tag"] for r in emoji_name} == {"#2PP", "#9QJ", "#8YY"}
-    assert [r["tag"] for r in search_players(conn, "aj", clan="persian")] == []  # both must match
+    both = search_players(conn, "aj", clan="persian")      # either can match; neither has both
+    assert {r["tag"] for r in both} == {"#LLL", "#UUU", "#2PP", "#9QJ", "#8YY"}
     assert [r["tag"] for r in search_players(conn, "aj")] in (["#LLL", "#UUU"], ["#UUU", "#LLL"])
 
     # Players stored before clan search existed get their clan indexed later.
@@ -409,3 +410,29 @@ def test_challenge_players_are_searchable_by_clan(conn):
     found = search_players(conn, None, clan="eatropa theoton")
     assert {r["tag"] for r in found} == {"#2PP", "#9QJ"}
     assert next(r for r in found if r["tag"] == "#9QJ")["rating"] == 2600   # rating kept
+
+
+def test_fuzzy_search_forgives_typos_and_ranks_name_plus_clan_highest(conn):
+    from decklens.storage import save_players
+    from decklens.web.search import search_players
+
+    save_players(conn, [
+        RankEntry("#2PP", "+Kaua", 2079, None, "#C1", "Eatropa Theotôn"),
+        RankEntry("#9QJ", "Kauan", 2900, None, "#C2", "Brasil Elite"),        # name only
+        RankEntry("#8YY", "Pedro", 2100, None, "#C1", "Eatropa Theotôn"),     # clan only
+        RankEntry("#LLL", "Zzz", 2136, None, "#C3", "Nothing alike"),
+    ], NOW)
+
+    # Typos in both boxes: the player who matches both still comes first.
+    found = search_players(conn, "kauaa", clan="eatrpa theoton", near_rating=2136)
+    assert found[0]["tag"] == "#2PP"                       # name and clan both close
+    assert {r["tag"] for r in found} == {"#2PP", "#9QJ", "#8YY"}   # one side close is enough
+    assert "#LLL" not in {r["tag"] for r in found}         # nothing alike: left out
+
+    # A misspelt clan on its own still finds its members.
+    assert {r["tag"] for r in search_players(conn, None, clan="eatropa theoton")} == {"#2PP", "#8YY"}
+    assert {r["tag"] for r in search_players(conn, None, clan="eatrpa theoton")} == {"#2PP", "#8YY"}
+    assert {r["tag"] for r in search_players(conn, None, clan="brasil elitee")} == {"#9QJ"}
+
+    # Part of a name from the middle ("kaua" inside "+kaua" after normalising) works too.
+    assert search_players(conn, "aua")[0]["tag"] in {"#2PP", "#9QJ"}

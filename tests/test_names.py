@@ -53,3 +53,18 @@ def test_long_input_is_truncated():
 
 def test_non_string_input():
     assert search_key(None) == ""
+
+
+@pytest.mark.parametrize("query, name, low, high", [
+    ("kau", "+Kaua", 1.0, 1.0),                    # appears unbroken: full marks
+    ("kua", "+Kaua", 0.8, 0.95),                   # swapped / missing letters
+    ("persainwarior", "Persian Warrior", 0.85, 0.95),
+    ("gokuu", "goku", 0.85, 0.95),
+    ("aj", "Masky", 0.0, 0.5),                     # unrelated: stays low
+    ("kaua", "Pedro", 0.0, 0.1),
+    ("", "Pedro", 0.0, 0.0), ("kaua", "", 0.0, 0.0),
+])
+def test_fuzzy_score(query, name, low, high):
+    from decklens.names import fuzzy_score
+
+    assert low <= fuzzy_score(search_key(query), search_key(name)) <= high

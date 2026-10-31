@@ -18,6 +18,10 @@ CREATE INDEX IF NOT EXISTS players_search_key_idx ON players (search_key text_pa
 -- (Older databases get clan_key from migration 005; this keeps re-running the schema safe.)
 ALTER TABLE players ADD COLUMN IF NOT EXISTS clan_key TEXT;
 CREATE INDEX IF NOT EXISTS players_clan_key_idx ON players (clan_key text_pattern_ops);
+-- Fuzzy matching for typos and partial names (see db/migrations/006_fuzzy_search.sql).
+CREATE EXTENSION IF NOT EXISTS pg_trgm;
+CREATE INDEX IF NOT EXISTS players_search_key_trgm_idx ON players USING gin (search_key gin_trgm_ops);
+CREATE INDEX IF NOT EXISTS players_clan_key_trgm_idx ON players USING gin (clan_key gin_trgm_ops);
 
 -- Rank and rating over time, so each battle can be placed in a skill tier
 -- (Ultimate Champion / top 1,000 / top 200) as it was when it was played.

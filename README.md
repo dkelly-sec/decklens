@@ -58,6 +58,7 @@ Get-Content db\migrations\002_ranks_and_crawl.sql | docker compose exec -T db ps
 Get-Content db\migrations\003_player_rating.sql  | docker compose exec -T db psql -U decklens -d decklens -v ON_ERROR_STOP=1 -f -
 Get-Content db\migrations\004_web_users.sql      | docker compose exec -T db psql -U decklens -d decklens -v ON_ERROR_STOP=1 -f -
 Get-Content db\migrations\005_clan_search.sql    | docker compose exec -T db psql -U decklens -d decklens -v ON_ERROR_STOP=1 -f -
+Get-Content db\migrations\006_fuzzy_search.sql   | docker compose exec -T db psql -U decklens -d decklens -v ON_ERROR_STOP=1 -f -
 ```
 
 ### Nightly schedule (Windows)
@@ -131,7 +132,7 @@ Other commands: `passwd` (new password, logs out everywhere), `logout-all`, `dis
 What the page does:
 - **You:** type your name (picked from the player index) or your tag to load your current deck; your tag is remembered in your browser.
 - **Last opponent:** your most recent Ranked or 20-win challenge opponent, their deck, and how your archetype tends to do against theirs.
-- **Find an opponent:** type the letters you can see in their name, their clan, or both (clan search is the fallback for names that are all emoji or in a script you can't type); pick them from the matches (exact names and clans first, then closest rating to yours) to see their most recent decks (newest first) in separate **Ranked** and **20-win challenge** tabs, with the matchup against your deck (your latest challenge deck on the challenge tab). Challenge games are recognised by their game mode (`Challenge_AllCards_EventDeck_NoSet`), since Trophy Road and friendlies share the same battle type. Matchup numbers come from Ranked games only.
+- **Find an opponent:** type the letters you can see in their name, their clan, or both (clan search is the fallback for names that are all emoji or in a script you can't type). Matching is fuzzy, so a typo or two in either box still works, and typing both ranks whoever matches both best at the top; ties go to the player closest to your rating to see their most recent decks (newest first) in separate **Ranked** and **20-win challenge** tabs, with the matchup against your deck (your latest challenge deck on the challenge tab). Challenge games are recognised by their game mode (`Challenge_AllCards_EventDeck_NoSet`), since Trophy Road and friendlies share the same battle type. Matchup numbers come from Ranked games only.
 - **Live clan lookup:** if nobody in DeckLens's index matches the clan you typed (alts, Trophy Road players), the site asks the game directly: it finds clans with that name (exact matches first, at most 5) and lists their members, most recently online first. Your opponent is in a game with you, so they're usually at the top, marked "online now". Works for anyone in a clan, whatever their rank.
 - **Challenge players in the index:** the nightly crawl also adds both sides of the 20-win challenge games it reads to the name index (names and clans only; those games aren't stored), so alts that have met a crawled player are searchable by name too.
 - **Deck details:** card art, elixir, evolutions and levels for every card, plus average elixir, 4-card cycle cost and how many cards are maxed.
