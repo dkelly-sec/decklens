@@ -155,3 +155,69 @@ def test_client_login_failures_and_expiry():
 def test_client_refuses_to_send_passwords_unencrypted_to_another_computer(url):
     with pytest.raises(ValueError):
         DeckLensClient(url, session=FakeSession())
+
+
+# --- finding the game picture inside the mirror window ---------------------------------
+
+from decklens.watcher import enlarge, phone_area  # noqa: E402
+
+
+def game_picture(w, h, seed=0):
+    """Colourful stand-in for the game, with a few near-grey rows like the arena has."""
+    rng = np.random.default_rng(seed)
+    img = rng.integers(60, 255, size=(h, w, 3), dtype=np.uint8)
+    img[h // 2:h // 2 + 3] = 50          # thin rows close to Phone Link's grey
+    return img
+
+
+def window(game, *, bg=(43, 43, 43), pad=(300, 300, 32, 0), toolbar=None):
+    left, right, top, bottom = pad
+    h, w = game.shape[:2]
+    win = np.zeros((h + top + bottom, w + left + right, 3), dtype=np.uint8)
+    win[:] = bg
+    if toolbar is not None:                       # a bar right across the top
+        win[:toolbar[0]] = toolbar[1]
+        win[5:15, 20:120] = 230                   # title text / icons
+    win[top:top + h, left:left + w] = game
+    return win, (top, left, h, w)
+
+
+@pytest.mark.parametrize("layout", [
+    dict(pad=(974, 973, 32, 1)),                                  # like the real window: wide, grey
+    dict(pad=(974, 973, 32, 1), toolbar=(28, (43, 43, 43))),     # title text in the top bar
+    dict(bg=(243, 243, 243), pad=(200, 200, 48, 8)),              # light theme
+    dict(bg=(0, 0, 0), pad=(30, 30, 0, 0)),                       # black side bars, game full height
+    dict(bg=(20, 20, 20), pad=(10, 10, 44, 10), toolbar=(40, (45, 45, 60))),  # coloured toolbar
+])
+def test_finds_the_game_inside_the_window(layout):
+    game = game_picture(612, 1360)
+    win, (top, left, h, w) = window(game, **layout)
+    found = phone_area(win)
+    assert found.shape[:2] == (h, w)
+    assert np.array_equal(found, game)
+
+
+def test_game_filling_the_window_is_used_whole():
+    game = game_picture(540, 1200)
+    assert phone_area(game).shape == game.shape
+
+
+def test_odd_shapes_fall_back_to_the_whole_window():
+    wide = np.full((400, 1600, 3), 43, dtype=np.uint8)
+    wide[50:350, 100:1500] = game_picture(1400, 300)   # landscape: not a phone
+    assert phone_area(wide).shape == wide.shape
+    assert phone_area(np.zeros((20, 20, 3), dtype=np.uint8)).shape == (20, 20, 3)
+
+
+def test_enlarge_leaves_big_regions_alone():
+    big = np.zeros((100, 600, 3), dtype=np.uint8)
+    assert enlarge(big) is big
+
+
+def test_window_missing_counts_as_not_in_battle():
+    frames = iter([None, None, None, frame(BATTLE), frame(BATTLE)])
+    sent = []
+    watcher = Watcher(lambda: next(frames), fake_ocr, lambda n, c: sent.append((n, c)))
+    for _ in range(5):
+        watcher.step()
+    assert sent == [("FIOReNt", "Sunny")]

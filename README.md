@@ -163,14 +163,15 @@ Mirror your Android phone to your PC (Phone Link, as for streaming), run the wat
 
 ```powershell
 pip install -e ".[watcher]"              # once
-python -m decklens.watcher --calibrate   # once: drag a box around the phone screen in the Phone Link window
 python -m decklens.watcher --check       # during a battle: shows what it reads
 python -m decklens.watcher               # run it; asks for your DeckLens password
 ```
 
+No setup: it finds the Phone Link mirror window (titled "Phone screen") by itself and captures **that window's own picture** (Windows `PrintWindow`), so DeckLens can sit on top of it; just don't minimise it. Inside the window it finds the game picture automatically by cutting away the title bar and plain borders. If it ever picks the wrong thing: `--list-windows` shows the titles it can see, `--window "Title"` picks one, and `--calibrate` then `--manual` lets you drag a box by hand.
+
 How it stays within the game's rules: the game runs on your phone untouched; the watcher only reads pixels from the mirror window on your PC, like stream capture software. It sends no input to the phone or game, doesn't touch game files, memory or network traffic, and doesn't save screenshots: each image lives in memory for one read and only the recognised text (name and clan) is sent to DeckLens. Supercell's terms ban emulators, bots, mods and software that modifies or interferes with the game; reading the screen isn't addressed explicitly, so judge for yourself.
 
-How it decides: every second it reads the top-right corner; the battle timer ("Time left: 2:54", or overtime) means a battle is on, so menus and the loading screen are ignored. It then reads the opponent's name and clan, waits for two reads that agree, sends them once, and re-arms after the battle ends. Text recognition is RapidOCR (offline ONNX models, nothing sent anywhere); fancy letters and misreads like "FIOReNt" are handled by the fuzzy search.
+How it decides: every second it reads the top-right corner of the game picture; the battle timer ("Time left: 2:54", or overtime) means a battle is on, so menus and the loading screen are ignored. It then reads the opponent's name and clan, waits for two reads that agree, sends them once, and re-arms after the battle ends. Text recognition is RapidOCR (offline ONNX models, nothing sent anywhere); fancy letters and misreads like "FIOReNt" are handled by the fuzzy search.
 
 ## Development
 
