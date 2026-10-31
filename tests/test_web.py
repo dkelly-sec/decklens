@@ -803,3 +803,26 @@ def test_live_clan_lookup_has_its_own_tight_rate_limit():
     codes = [app.get("/api/clan-lookup", params={"clan": f"clan {i}"}).status_code
              for i in range(7)]
     assert codes[:6] == [200] * 6 and codes[6] == 429
+
+
+def test_most_recent_deck_comes_first_not_the_most_played():
+    def played(minute, deck):
+        b = battle(minute)
+        b["team"][0]["cards"] = cards(deck)
+        return b
+
+    old_favourite = MY_DECK
+    new_deck = OPP_DECK
+    third = core_cards(2) + (card_id(46), card_id(47), card_id(48))
+    fourth = core_cards(3) + (card_id(49), card_id(50), card_id(51))
+    log = ([played(9, new_deck)]                                       # newest game
+           + [played(m, old_favourite) for m in (8, 7, 6, 5)]          # played the most
+           + [played(4, third), played(3, fourth)])                    # oldest, beyond top 3
+    client = FakeClient()
+    client.get_battle_log = lambda tag: log
+    app, _, _ = make(client=client)
+    decks = app.get("/api/players/%232PP/decks").json()["modes"]["ranked"]
+    assert [d["games"] for d in decks] == [1, 4, 1]                    # newest, then the favourite
+    assert decks[0]["last_played"].startswith("2026-10-30T01:09")
+    assert decks[1]["last_played"].startswith("2026-10-30T01:08")      # its most recent game
+    assert decks[2]["last_played"].startswith("2026-10-30T01:04")      # fourth deck dropped

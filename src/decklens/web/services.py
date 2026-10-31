@@ -221,7 +221,8 @@ def battle_mix(battle_log: list[dict[str, Any]]) -> dict[str, int]:
 
 def recent_decks(tag: str, battle_log: list[dict[str, Any]], top: int = 3
                  ) -> dict[str, list[dict[str, Any]]]:
-    """A player's most-played decks in each scouted mode, with their record."""
+    """A player's most recently played decks in each scouted mode (newest
+    first), each with how often they played it and their record with it."""
     tag = normalize_tag(tag)
     played: dict[str, Counter] = {m: Counter() for m in MODES}
     won: dict[str, Counter] = {m: Counter() for m in MODES}
@@ -237,10 +238,16 @@ def recent_decks(tag: str, battle_log: list[dict[str, Any]], top: int = 3
         if (mode, deck) not in latest:  # newest slot order, evolutions and heroes
             latest[(mode, deck)] = {"cards": list(b.players[me].cards),
                                     "last_played": b.battle_time.isoformat()}
+    def newest_first(mode: str) -> list[tuple[int, ...]]:
+        decks = list(played[mode])
+        decks.sort(key=lambda d: latest[(mode, d)]["last_played"], reverse=True)
+        return decks[:top]
+
     return {
-        mode: [{"deck": _deck(_cards(latest[(mode, deck)]["cards"]), mode), "games": n,
-                "wins": won[mode][deck], "last_played": latest[(mode, deck)]["last_played"]}
-               for deck, n in played[mode].most_common(top)]
+        mode: [{"deck": _deck(_cards(latest[(mode, deck)]["cards"]), mode),
+                "games": played[mode][deck], "wins": won[mode][deck],
+                "last_played": latest[(mode, deck)]["last_played"]}
+               for deck in newest_first(mode)]
         for mode in MODES
     }
 
