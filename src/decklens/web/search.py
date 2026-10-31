@@ -19,6 +19,7 @@ MIN_QUERY = 2
 MAX_RESULTS = 10
 MAX_RATING = 20_000
 FUZZY_THRESHOLD = 0.45
+CLAN_MATCH = 0.7  # clan score at which a result counts as "in that clan"
 
 # Fuzzy search on name and/or clan. A player is a candidate if what you typed
 # starts their name or clan, or closely resembles part of it (pg_trgm word
@@ -27,7 +28,7 @@ FUZZY_THRESHOLD = 0.45
 # the best combined match wins. Ties (scores rounded to 0.1) go to the player
 # whose rating is closest to yours, as Ranked pairs similar ratings.
 _SEARCH = r"""
-    SELECT p.tag, p.name, p.clan_name, r.rank, p.rating
+    SELECT p.tag, p.name, p.clan_name, r.rank, p.rating, m.clan_score >= %(clan_match)s
     FROM players p
     LEFT JOIN LATERAL (
         SELECT s.rank FROM player_rank_snapshots s
@@ -39,12 +40,13 @@ _SEARCH = r"""
             CASE WHEN %(key)s::text IS NULL THEN 0
                  WHEN p.search_key = %(key)s THEN 1.2
                  WHEN p.search_key LIKE %(pattern)s ESCAPE '\' THEN 1.0
-                 ELSE word_similarity(%(key)s, p.search_key) END
-          + CASE WHEN %(clan_key)s::text IS NULL OR p.clan_key IS NULL THEN 0
+                 ELSE word_similarity(%(key)s, p.search_key) END AS name_score,
+            CASE WHEN %(clan_key)s::text IS NULL OR p.clan_key IS NULL THEN 0
                  WHEN p.clan_key = %(clan_key)s THEN 1.2
                  WHEN p.clan_key LIKE %(clan_pattern)s ESCAPE '\' THEN 1.0
-                 ELSE word_similarity(%(clan_key)s, p.clan_key) END AS score
-    ) m
+                 ELSE word_similarity(%(clan_key)s, p.clan_key) END AS clan_score
+    ) s
+    CROSS JOIN LATERAL (SELECT s.name_score + s.clan_score AS score, s.clan_score) m
     WHERE (%(key)s::text IS NOT NULL
            AND (p.search_key LIKE %(pattern)s ESCAPE '\' OR %(key)s <%% p.search_key))
        OR (%(clan_key)s::text IS NOT NULL
@@ -81,6 +83,7 @@ def search_players(conn: Connection, query: str | None = None, *, clan: str | No
         "pattern": _like_prefix(key) if use_name else None, "key": key if use_name else None,
         "clan_pattern": _like_prefix(clan_key) if use_clan else None,
         "clan_key": clan_key if use_clan else None, "near": near_rating, "limit": MAX_RESULTS,
+        "clan_match": CLAN_MATCH,
     }
     with conn.cursor() as cur:
         # How close a fuzzy match must be (pg_trgm's default 0.6 drops common
@@ -88,5 +91,8 @@ def search_players(conn: Connection, query: str | None = None, *, clan: str | No
         cur.execute("SELECT set_config('pg_trgm.word_similarity_threshold', %s, false)",
                     (str(FUZZY_THRESHOLD),))
         cur.execute(_SEARCH, params)
-        return [{"tag": tag, "name": name, "clan": clan, "rank": rank, "rating": rating}
-                for tag, name, clan, rank, rating in cur.fetchall()]
+        # clan_match: is this player in a clan like the one typed? If nobody is,
+        # the page asks the game directly instead (live clan lookup).
+        return [{"tag": tag, "name": name, "clan": clan, "rank": rank, "rating": rating,
+                 "clan_match": bool(use_clan and in_clan)}
+                for tag, name, clan, rank, rating, in_clan in cur.fetchall()]

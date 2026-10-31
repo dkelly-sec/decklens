@@ -68,3 +68,40 @@ def test_fuzzy_score(query, name, low, high):
     from decklens.names import fuzzy_score
 
     assert low <= fuzzy_score(search_key(query), search_key(name)) <= high
+
+
+@pytest.mark.parametrize("fancy", [
+    "ʆʀaɴҡ",          # esh with curl, small capitals, Bashkir ka (a real opponent)
+    "ꜰʀᴀɴᴋ",          # small capitals
+    "ƒяαηк",          # Latin f with hook, Cyrillic ya, Greek alpha and eta, Cyrillic ka
+    "🇫🇷🇦🇳🇰",          # regional indicator letters
+    "ᖴᖇᗩᑎK",          # Canadian syllabics from fancy-text generators
+    "𝓕𝓻𝓪𝓷𝓴", "ⓕⓡⓐⓝⓚ", "Ｆｒａｎｋ",  # handled by NFKC
+])
+def test_fancy_alphabets_read_as_plain_letters(fancy):
+    assert search_key(fancy) == "frank"
+
+
+def test_real_scripts_still_match_themselves():
+    # Typing the real letters gives the same key as the stored name.
+    for name in ("محمد", "李小龍", "ДМИТРИЙ", "Ελένη"):
+        assert search_key(name) == search_key(name.lower()) and search_key(name)
+
+
+def test_every_character_is_handled_without_crashing():
+    """Regression: a look-alike mapped to "" crashed the normaliser (and so the
+    crawler and search) on any name containing it, e.g. "ʔ"."""
+    from decklens.names import _CONFUSABLES, fuzzy_score
+
+    assert search_key("ʔ") == "" and search_key("aʔb") == "ab"
+    for ch in _CONFUSABLES:
+        key = search_key(f"x{ch}y")
+        assert key.startswith("x") and key.endswith("y")
+    # Every code point up to U+FFFF (minus surrogates) plus emoji and flags.
+    sample = [chr(c) for c in range(0x20, 0x10000) if not 0xD800 <= c <= 0xDFFF]
+    sample += [chr(c) for c in range(0x1F1E6, 0x1F700)]
+    for start in range(0, len(sample), 50):
+        chunk = "".join(sample[start:start + 50])
+        key = search_key(chunk)
+        assert isinstance(key, str)
+        fuzzy_score("frank", key)

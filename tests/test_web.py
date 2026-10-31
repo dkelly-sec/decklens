@@ -215,7 +215,7 @@ def test_last_opponent_without_ranked_battles():
 
 
 def test_search_normalises_and_escapes(predictor):
-    rows = [("#9QJ", HOSTILE, "Clan", 812, 2400)]
+    rows = [("#9QJ", HOSTILE, "Clan", 812, 2400, False)]
     app, _, conn = make(rows=rows)
     response = app.get("/api/search", params={"name": "🔥Dípo%_", "near_rating": 2136})
     assert response.status_code == 200
@@ -223,14 +223,15 @@ def test_search_normalises_and_escapes(predictor):
     assert conn.executed[0] == ("0.45",)                                  # fuzzy threshold
     params = conn.executed[1]
     assert params == {"pattern": "dipo%", "key": "dipo", "clan_pattern": None, "clan_key": None,
-                      "near": 2136, "limit": 10}  # no user wildcards survive
+                      "near": 2136, "limit": 10, "clan_match": 0.7}  # no user wildcards survive
     assert response.json()["results"][0]["rating"] == 2400
 
 
 def test_search_by_clan_when_the_name_is_all_emoji():
-    app, _, conn = make(rows=[("#9QJ", "🔥🔥🔥", "Persian Warrior", None, 2079)])
+    app, _, conn = make(rows=[("#9QJ", "🔥🔥🔥", "Persian Warrior", None, 2079, True)])
     response = app.get("/api/search", params={"name": "🔥🔥", "clan": "Persian War%_"})
     assert response.status_code == 200 and response.json()["results"][0]["name"] == "🔥🔥🔥"
+    assert response.json()["results"][0]["clan_match"] is True
     params = conn.executed[1]
     assert params["pattern"] is None and params["key"] is None           # emoji name ignored
     assert params["clan_pattern"] == "persianwar%" and params["clan_key"] == "persianwar"

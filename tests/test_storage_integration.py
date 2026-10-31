@@ -249,7 +249,8 @@ def test_country_players_are_searchable_but_get_no_rank(conn):
     save_players(conn, [RankEntry(tag="#2PP", name="Ｃｏｕｎｔｒｙ ⚔ Star", rating=None, rank=None,
                                   clan_tag=None, clan_name="Clan")], NOW)
     assert search_players(conn, "country") == [
-        {"tag": "#2PP", "name": "Ｃｏｕｎｔｒｙ ⚔ Star", "clan": "Clan", "rank": None, "rating": None}]
+        {"tag": "#2PP", "name": "Ｃｏｕｎｔｒｙ ⚔ Star", "clan": "Clan", "rank": None, "rating": None,
+         "clan_match": False}]
     assert conn.execute("SELECT count(*) FROM player_rank_snapshots").fetchone()[0] == 0
 
 
@@ -436,3 +437,40 @@ def test_fuzzy_search_forgives_typos_and_ranks_name_plus_clan_highest(conn):
 
     # Part of a name from the middle ("kaua" inside "+kaua" after normalising) works too.
     assert search_players(conn, "aua")[0]["tag"] in {"#2PP", "#9QJ"}
+
+
+def test_fancy_letters_and_clan_match_flag(conn):
+    """The real case: "ʆʀaɴҡ" of Indo Chinese 4A, searched as "frank" + clan."""
+    from decklens.storage import save_players
+    from decklens.web.search import search_players
+
+    save_players(conn, [
+        RankEntry("#2PP", "ʆʀaɴҡ", None, None, "#C1", "Indo Chinese 4A"),
+        RankEntry("#9QJ", "Frank", 2136, None, "#C2", "Causas Army"),
+        RankEntry("#8YY", "ꜰʀᴀɴᴋ", 1900, None, "#C3", "House Of Dragon"),
+    ], NOW)
+    found = search_players(conn, "frank", clan="indo chinese 4a", near_rating=2136)
+    assert found[0]["tag"] == "#2PP" and found[0]["clan_match"] is True   # both match: first
+    assert {r["tag"] for r in found} == {"#2PP", "#9QJ", "#8YY"}
+    assert [r["clan_match"] for r in found[1:]] == [False, False]
+
+    # Clan typed but nobody in the index is in it: every result says so.
+    other = search_players(conn, "frank", clan="kurdistan is 1")
+    assert other and not any(r["clan_match"] for r in other)
+    # No clan typed: the flag is always false.
+    assert not any(r["clan_match"] for r in search_players(conn, "frank"))
+
+
+def test_reindex_applies_new_name_rules_to_stored_players(conn):
+    from decklens.storage import reindex_names, save_players
+    from decklens.web.search import search_players
+
+    save_players(conn, [RankEntry("#2PP", "ʆʀaɴҡ", None, None, "#C1", "ꜰᴀɴᴄʏ ᴄʟᴀɴ"),
+                        RankEntry("#9QJ", "plain", None, None, None, None)], NOW)
+    # Pretend these were stored under older rules.
+    conn.execute("UPDATE players SET search_key = name, clan_key = clan_name WHERE tag = '#2PP'")
+    assert search_players(conn, "frank") == []
+    assert reindex_names(conn, batch=1) == 1                  # only the stale row changes
+    assert search_players(conn, "frank")[0]["tag"] == "#2PP"
+    assert search_players(conn, None, clan="fancy clan")[0]["tag"] == "#2PP"
+    assert reindex_names(conn) == 0                           # nothing left to do

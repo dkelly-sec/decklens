@@ -362,30 +362,33 @@ function resultList(players) {
 
 // Asks the game directly (not our index): recently active members of clans
 // with this name. For alts and Trophy Road players DeckLens hasn't seen.
-async function liveClanLookup(clan, name, out) {
-  show(out, el("p", "Checking clans named “" + clan + "” in the game…", "muted"));
+// Returns the nodes to show.
+async function liveClanParts(clan, name) {
   const params = new URLSearchParams({ clan });
   if (name) params.set("name", name);
   try {
     const found = await api("/api/clan-lookup?" + params.toString());
     if (!found.clans_found) {
-      show(out, el("p", "The game has no clan called “" + clan + "”. Check the spelling.", "muted"));
-      return;
+      return [el("p", "The game has no clan called \u201c" + clan + "\u201d. Check the spelling.", "muted")];
     }
     if (!found.players.length) {
-      show(out, el("p", "Nobody" + (name ? " with that name" : "") + " in " +
-        plural(found.clans_checked.length, "clan", "clans") + " called “" + clan + "”.", "muted"));
-      return;
+      return [el("p", "Nobody" + (name ? " with a name like that" : "") + " in " +
+        plural(found.clans_checked.length, "clan", "clans") + " called \u201c" + clan + "\u201d.", "muted")];
     }
     const note = found.players.some((p) => p.active)
       ? "Your opponent is probably near the top: they're playing right now."
       : "Nobody here has been online in the last 15 minutes. It may be a different clan with the same name.";
-    show(out, el("p", "Checked " + plural(found.clans_checked.length, "clan", "clans") +
-      " called “" + clan + "”, most recently online first. " + note, "hint"),
-      resultList(found.players));
+    return [el("p", "Checked " + plural(found.clans_checked.length, "clan", "clans") +
+      " called \u201c" + clan + "\u201d in the game" + (name ? ", best name match first" : "") +
+      ", then most recently online. " + note, "hint"), resultList(found.players)];
   } catch (error) {
-    show(out, errorBox(error));
+    return [errorBox(error)];
   }
+}
+
+async function liveClanLookup(clan, name, out) {
+  show(out, el("p", "Checking clans named \u201c" + clan + "\u201d in the game…", "muted"));
+  show(out, ...(await liveClanParts(clan, name)));
 }
 
 async function findOpponent(event) {
@@ -413,8 +416,9 @@ async function findOpponent(event) {
       return;
     }
   }
+  const canGoLive = clan.length >= 3;
   if (!results.length) {
-    if (clan.length >= 3) {
+    if (canGoLive) {
       await liveClanLookup(clan, name, out);  // not in our index: ask the game
     } else {
       show(out, el("p", "No players found. If their name is emoji or a language you can't type, " +
@@ -422,8 +426,16 @@ async function findOpponent(event) {
     }
     return;
   }
+  if (canGoLive && !results.some((r) => r.clan_match)) {
+    // Nobody we know is in that clan: check the game first, keep the name
+    // matches from other clans underneath in case the clan was misread.
+    show(out, el("p", "Nobody DeckLens knows is in that clan. Checking the game…", "muted"));
+    const live = await liveClanParts(clan, name);
+    show(out, ...live, el("p", "Players with similar names in other clans:", "hint"), resultList(results));
+    return;
+  }
   const parts = [el("p", "Tap the right player:", "hint"), resultList(results)];
-  if (clan.length >= 3) {
+  if (canGoLive) {
     const live = el("button", "Not here? Check the clan live", "link-button");
     live.type = "button";
     live.addEventListener("click", () => liveClanLookup(clan, name, out));

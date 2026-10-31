@@ -63,6 +63,29 @@ def backfill_clan_keys(conn: Connection, *, batch: int = 5000) -> int:
             done += len(rows)
 
 
+def reindex_names(conn: Connection, *, batch: int = 5000) -> int:
+    """Recompute every player's name and clan search keys with the current
+    rules in names.py (run after those rules change). Returns rows changed."""
+    changed, after = 0, ""
+    while True:
+        with conn.transaction(), conn.cursor() as cur:
+            cur.execute("SELECT tag, name, search_key, clan_name, clan_key FROM players "
+                        "WHERE tag > %s ORDER BY tag LIMIT %s", (after, batch))
+            rows = cur.fetchall()
+            if not rows:
+                return changed
+            updates = []
+            for tag, name, old_key, clan_name, old_clan in rows:
+                key, clan_key = search_key(name), _clan_key(clan_name)
+                if key != old_key or clan_key != old_clan:
+                    updates.append((key, clan_key, tag))
+            if updates:
+                cur.executemany("UPDATE players SET search_key = %s, clan_key = %s WHERE tag = %s",
+                                updates)
+            changed += len(updates)
+            after = rows[-1][0]
+
+
 def _rating(value: int | None) -> int | None:
     """A plausible Ranked rating, or None (never store junk from the API)."""
     return value if value is not None and 0 <= value <= 20_000 else None
