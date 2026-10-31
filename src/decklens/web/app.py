@@ -27,6 +27,7 @@ from ..api_client import ApiError, ClashRoyaleClient, NotFoundError
 from ..archetypes import ArchetypeModel
 from ..model import LinearMatchupModel
 from .auth import Auth, User
+from .watch import WatchBoard
 from .security import (
     BodySizeLimitMiddleware, RateLimiter, SameOriginMiddleware, SecurityHeadersMiddleware,
     TTLCache,
@@ -45,6 +46,8 @@ RATE_LIMITS = {
     "images": (600, 60.0),  # card art: a page shows up to ~40 cards at once
     "login": (10, 60.0),    # password guesses per client, on top of per-username lockout
     "clan_lookup": (6, 60.0),  # live clan lookups cost up to 6 API calls each
+    "watch": (60, 60.0),       # screen watcher reports: about one per match
+    "watch_poll": (120, 60.0), # the page checks for a new report every 2 seconds
 }
 STATIC_DIR = Path(str(resources.files("decklens") / "web" / "static"))
 
@@ -58,12 +61,20 @@ class Services:
     auth: Auth | None = None                      # None only for local use without logins
     limiter: RateLimiter = field(default_factory=lambda: RateLimiter(RATE_LIMITS))
     cache: TTLCache = field(default_factory=lambda: TTLCache(ttl=60.0, max_items=2000))
+    watch: WatchBoard = field(default_factory=WatchBoard)
 
 
 class LoginRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     username: str = Field(max_length=64)
     password: str = Field(max_length=128)
+
+
+class WatchReport(BaseModel):
+    """What the screen watcher read off the battle screen: text only."""
+    model_config = ConfigDict(extra="forbid")
+    name: str = Field(min_length=1, max_length=40)
+    clan: str | None = Field(default=None, max_length=50)
 
 
 class PredictRequest(BaseModel):
@@ -207,6 +218,24 @@ def create_app(services: Services, *, hsts: bool = False) -> FastAPI:
                 raise
 
         return live_clan_lookup(clans, members_of, clan, name, datetime.now(timezone.utc))
+
+    # --- screen watcher hand-off ----------------------------------------------
+
+    def watch_key(request: Request) -> str:
+        user = current_user(request)
+        return user.username if user else "local"  # "local" only when logins are off
+
+    @app.post("/api/watch", dependencies=[*signed_in, Depends(limit("watch"))])
+    def watch_report(body: WatchReport, request: Request) -> dict[str, Any]:
+        name, clan = body.name.strip(), (body.clan or "").strip() or None
+        if not name:
+            raise HTTPException(400, "No name in the report")
+        entry = services.watch.report(watch_key(request), name, clan)
+        return {"id": entry["id"]}
+
+    @app.get("/api/watch", dependencies=[*signed_in, Depends(limit("watch_poll"))])
+    def watch_latest(request: Request) -> dict[str, Any]:
+        return {"latest": services.watch.latest(watch_key(request))}
 
     @app.post("/api/predict", dependencies=[*signed_in, Depends(limit("predict"))])
     def predict(body: PredictRequest, model: Predictor = Depends(predictor)) -> dict[str, Any]:

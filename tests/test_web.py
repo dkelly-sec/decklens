@@ -844,3 +844,45 @@ def test_live_clan_lookup_without_a_name_is_most_recent_first():
                app.get("/api/clan-lookup", params={"clan": "eatropa"}).json()["players"]]
     known = [m for m in minutes if m is not None]
     assert known == sorted(known) and minutes[-1] is None
+
+
+# --- screen watcher hand-off --------------------------------------------------------
+
+
+def test_watcher_reports_reach_the_page_as_text():
+    app, services, _ = make()
+    assert app.get("/api/watch").json() == {"latest": None}
+    sent = app.post("/api/watch", json={"name": "  FIOReNt ", "clan": "Sunny"})
+    assert sent.status_code == 200
+    latest = app.get("/api/watch").json()["latest"]
+    assert (latest["name"], latest["clan"], latest["id"]) == ("FIOReNt", "Sunny", sent.json()["id"])
+    app.post("/api/watch", json={"name": "Kaua", "clan": ""})
+    assert app.get("/api/watch").json()["latest"]["clan"] is None and \
+        app.get("/api/watch").json()["latest"]["name"] == "Kaua"
+
+
+@pytest.mark.parametrize("body", [
+    {}, {"name": ""}, {"name": "x" * 41}, {"name": "a", "clan": "x" * 51},
+    {"name": "a", "image": "data:..."},          # text only: nothing else accepted
+])
+def test_watcher_reports_are_validated(body):
+    app, _, _ = make()
+    assert app.post("/api/watch", json=body).status_code == 422
+
+
+def test_watcher_reports_expire():
+    from decklens.web.watch import WatchBoard
+
+    now = [1000.0]
+    board = WatchBoard(clock=lambda: now[0])
+    board.report("david", "Florent", "Sunny")
+    assert board.latest("david")["age_seconds"] == 0
+    assert board.latest("someone-else") is None
+    now[0] += 601
+    assert board.latest("david") is None
+
+
+def test_watcher_needs_same_site_origin():
+    services = Services(client=FakeClient())
+    app = TestClient(create_app(services), raise_server_exceptions=False)
+    assert app.post("/api/watch", json={"name": "x"}).status_code == 403

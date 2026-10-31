@@ -41,6 +41,9 @@
 
     <section aria-labelledby="find-heading">
       <h2 id="find-heading">Find an opponent</h2>
+      <label class="toggle"><input type="checkbox" id="auto-scout"> Auto-scout
+        <span class="hint">(searches whoever the screen watcher sees on your mirrored phone)</span></label>
+      <p id="auto-status" class="hint" aria-live="polite" hidden></p>
       <form id="find-form" autocomplete="off">
         <label for="find-name">Opponent's name <span class="hint">(the letters you can see; close is fine)</span></label>
         <input id="find-name" name="name" placeholder="dipo" maxlength="40">

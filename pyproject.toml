@@ -26,6 +26,11 @@ dev = [
     "pre-commit>=4.7.0",
     "httpx2>=2.16",  # used by the FastAPI test client
 ]
+# Screen watcher (python -m decklens.watcher), on the PC showing the mirrored phone.
+watcher = [
+    "mss>=10.2.0",                  # screen capture
+    "rapidocr-onnxruntime>=1.2.3",  # offline text recognition (ONNX models bundled)
+]
 
 [tool.setuptools.packages.find]
 where = ["src"]

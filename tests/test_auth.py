@@ -216,6 +216,7 @@ def log_in(client, username="david", password=PASSWORD):
     ("get", "/api/players/%232PP"), ("get", "/api/players/%232PP/decks"),
     ("get", "/api/players/%232PP/last-opponent"), ("get", "/api/search?name=dipo"),
     ("post", "/api/predict"), ("get", "/cards/26000000.png"), ("get", "/api/me"),
+    ("get", "/api/watch"), ("post", "/api/watch"), ("get", "/api/clan-lookup?clan=abc"),
 ])
 def test_everything_useful_needs_a_login(site, method, path):
     client, _, _ = site
@@ -385,3 +386,15 @@ def test_account_tool_rejects_bad_usernames(capsys):
     with pytest.raises(SystemExit):
         main(["add", "Bad Name!"])
     assert "usernames are 3-32 characters" in capsys.readouterr().err
+
+
+def test_each_user_only_sees_their_own_watcher_reports():
+    auth, store = make_auth([user("david"), user("friend")])
+    app = create_app(Services(client=FakeClient(), auth=auth))
+    david = TestClient(app, headers={"origin": "http://testserver"})
+    friend = TestClient(app, headers={"origin": "http://testserver"})
+    log_in(david, "david")
+    log_in(friend, "friend")
+    david.post("/api/watch", json={"name": "Florent", "clan": "Sunny"})
+    assert david.get("/api/watch").json()["latest"]["name"] == "Florent"
+    assert friend.get("/api/watch").json() == {"latest": None}

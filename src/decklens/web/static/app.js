@@ -352,6 +352,7 @@ function resultList(players) {
     const item = el("li");
     const button = el("button", null, "result-button" + (r.active ? " active" : ""));
     button.type = "button";
+    button.dataset.confident = String(Boolean(r.active || r.clan_match));
     button.append(playerLine(r));
     button.addEventListener("click", () => showOpponentDecks(r, item));
     item.append(button);
@@ -391,8 +392,15 @@ async function liveClanLookup(clan, name, out) {
   show(out, ...(await liveClanParts(clan, name)));
 }
 
-async function findOpponent(event) {
-  event.preventDefault();
+// Opens the top match when the search is confident it's the right player:
+// in the clan that was typed (index), or online right now (live lookup).
+function autoOpen(out) {
+  const first = out.querySelector(".result-button");
+  if (first && first.dataset.confident === "true") first.click();
+}
+
+async function findOpponent(event, options = {}) {
+  if (event) event.preventDefault();
   const out = document.getElementById("find-result");
   const name = document.getElementById("find-name").value.trim();
   const clan = document.getElementById("find-clan").value.trim();
@@ -420,6 +428,7 @@ async function findOpponent(event) {
   if (!results.length) {
     if (canGoLive) {
       await liveClanLookup(clan, name, out);  // not in our index: ask the game
+      if (options.auto) autoOpen(out);
     } else {
       show(out, el("p", "No players found. If their name is emoji or a language you can't type, " +
         "search by their clan instead.", "muted"));
@@ -432,6 +441,7 @@ async function findOpponent(event) {
     show(out, el("p", "Nobody DeckLens knows is in that clan. Checking the game…", "muted"));
     const live = await liveClanParts(clan, name);
     show(out, ...live, el("p", "Players with similar names in other clans:", "hint"), resultList(results));
+    if (options.auto) autoOpen(out);
     return;
   }
   const parts = [el("p", "Tap the right player:", "hint"), resultList(results)];
@@ -442,6 +452,49 @@ async function findOpponent(event) {
     parts.push(live);
   }
   show(out, ...parts);
+  if (options.auto) autoOpen(out);
+}
+
+// --- auto-scout (screen watcher) -------------------------------------------
+
+const auto = { lastId: null, timer: null };
+
+async function pollWatcher() {
+  if (document.visibilityState !== "visible") return;
+  const status = document.getElementById("auto-status");
+  let latest;
+  try {
+    latest = (await api("/api/watch")).latest;
+  } catch {
+    return;  // offline for a moment: try again next time
+  }
+  if (!latest) {
+    status.textContent = "Waiting for the screen watcher… (python -m decklens.watcher)";
+    return;
+  }
+  const fresh = auto.lastId === null ? latest.age_seconds < 60 : latest.id !== auto.lastId;
+  auto.lastId = latest.id;
+  status.textContent = "Last seen by the watcher: " + latest.name + (latest.clan ? " (" + latest.clan + ")" : "");
+  if (!fresh) return;
+  document.getElementById("find-name").value = latest.name;
+  document.getElementById("find-clan").value = latest.clan || "";
+  const results = document.getElementById("find-result");
+  if (results.scrollIntoView) results.scrollIntoView({ behavior: "smooth", block: "start" });
+  await findOpponent(null, { auto: true });
+}
+
+function setAutoScout(on) {
+  storageSet("decklens.autoScout", on ? "1" : "0");
+  const status = document.getElementById("auto-status");
+  status.hidden = !on;
+  clearInterval(auto.timer);
+  auto.timer = null;
+  auto.lastId = null;
+  if (on) {
+    status.textContent = "Connecting to the screen watcher…";
+    pollWatcher();
+    auto.timer = setInterval(pollWatcher, 2000);
+  }
 }
 
 const MODE_NAMES = { ranked: "Ranked", challenge: "20-win challenge" };
@@ -584,6 +637,10 @@ document.addEventListener("DOMContentLoaded", () => {
   document.getElementById("me-form").addEventListener("submit", lookUpMe);
   document.getElementById("last-button").addEventListener("click", scoutLast);
   document.getElementById("find-form").addEventListener("submit", findOpponent);
+  const autoBox = document.getElementById("auto-scout");
+  autoBox.addEventListener("change", () => setAutoScout(autoBox.checked));
+  autoBox.checked = storageGet("decklens.autoScout") === "1";
+  if (autoBox.checked) setAutoScout(true);
   const saved = asTag(storageGet("decklens.myTag") || "");
   if (saved) {
     document.getElementById("me-tag").value = saved;

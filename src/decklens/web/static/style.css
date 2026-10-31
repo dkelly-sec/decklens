@@ -202,3 +202,6 @@ footer { font-size: 13px; padding-bottom: 32px; }
 #find-form .hint { font-weight: 400; }
 .login form button { justify-self: start; margin-top: 4px; }
 .result-button.active { border-color: var(--accent); }
+.toggle { display: flex; align-items: center; gap: 8px; font-weight: 600; margin: 4px 0 8px; }
+.toggle input { width: auto; }
+.toggle .hint { font-weight: 400; }
