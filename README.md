@@ -159,7 +159,7 @@ How it's secured:
 
 ## Auto-scout from your mirrored phone
 
-Mirror your Android phone to your PC (Phone Link, as for streaming), run the watcher, and tick **Auto-scout** on the DeckLens page. When a battle starts, the watcher reads your opponent's name and clan from the top-left of the battle screen and the page searches them (live clan check included), opening their decks when the match is confident.
+Mirror your Android phone to your PC (Phone Link, as for streaming), run the watcher, and tick **Auto-scout** on the DeckLens page. When a battle starts, the watcher reads your opponent's name and clan from the top-left of the battle screen and the page searches them (live clan check included) and opens the best match's decks by itself: the first player in the clan that was read (or online right now), marked **Auto-picked**, otherwise the top result marked **Best guess**. Tap someone else if it ever picks wrong.
 
 ```powershell
 pip install -e ".[watcher]"              # once

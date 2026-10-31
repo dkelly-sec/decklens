@@ -392,11 +392,19 @@ async function liveClanLookup(clan, name, out) {
   show(out, ...(await liveClanParts(clan, name)));
 }
 
-// Opens the top match when the search is confident it's the right player:
-// in the clan that was typed (index), or online right now (live lookup).
+// Auto-scout picks the player for you: the first confident match (in the clan
+// that was read, or online right now), else the top result as a best guess.
+// Results are already sorted best-first. You can still tap someone else.
 function autoOpen(out) {
-  const first = out.querySelector(".result-button");
-  if (first && first.dataset.confident === "true") first.click();
+  const buttons = [...out.querySelectorAll(".result-button")];
+  const pick = buttons.find((b) => b.dataset.confident === "true") || buttons[0];
+  if (!pick) return;
+  const sure = pick.dataset.confident === "true";
+  for (const b of buttons) b.classList.remove("auto-picked");
+  pick.classList.add("auto-picked");
+  pick.prepend(el("span", sure ? "Auto-picked" : "Best guess", "pick-badge"));
+  pick.click();
+  if (pick.scrollIntoView) pick.scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
 async function findOpponent(event, options = {}) {
