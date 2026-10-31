@@ -34,16 +34,26 @@ class BITMAPINFO(ctypes.Structure):
     _fields_ = [("bmiHeader", BITMAPINFOHEADER), ("bmiColors", wintypes.DWORD * 3)]
 
 
+PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+# Phone Link's programs (it used to be called "Your Phone"). Its mirror window
+# is titled after your phone (e.g. "David's A53") and, as seen on a real PC,
+# belongs to YourPhoneAppProxyHost.exe, so the program is what identifies it.
+PHONE_LINK_PROCESSES = ("yourphoneappproxyhost.exe", "phoneexperiencehost.exe", "yourphone.exe")
+PHONE_LINK_MAIN_TITLES = ("phone link", "link to windows")
+
+
 @dataclass(frozen=True)
 class Window:
     handle: int
     title: str
+    process: str = ""  # program file name, lower case, e.g. "phoneexperiencehost.exe"
 
 
 def _api() -> tuple[Any, Any]:
     if sys.platform != "win32":
         raise OSError("window capture needs Windows")
     user32, gdi32 = ctypes.WinDLL("user32", use_last_error=True), ctypes.WinDLL("gdi32")
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
     H = wintypes.HANDLE
     sigs = {
         (user32, "EnumWindows"): ([ctypes.c_void_p, wintypes.LPARAM], wintypes.BOOL),
@@ -63,15 +73,43 @@ def _api() -> tuple[Any, Any]:
         (gdi32, "DeleteDC"): ([wintypes.HDC], wintypes.BOOL),
         (gdi32, "GetDIBits"): ([wintypes.HDC, H, wintypes.UINT, wintypes.UINT, ctypes.c_void_p,
                                ctypes.POINTER(BITMAPINFO), wintypes.UINT], ctypes.c_int),
+        (user32, "GetWindowThreadProcessId"): ([wintypes.HWND, ctypes.POINTER(wintypes.DWORD)],
+                                               wintypes.DWORD),
+        (kernel32, "OpenProcess"): ([wintypes.DWORD, wintypes.BOOL, wintypes.DWORD], H),
+        (kernel32, "QueryFullProcessImageNameW"): ([H, wintypes.DWORD, wintypes.LPWSTR,
+                                                    ctypes.POINTER(wintypes.DWORD)], wintypes.BOOL),
+        (kernel32, "CloseHandle"): ([H], wintypes.BOOL),
     }
+    global _kernel32
+    _kernel32 = kernel32
     for (dll, name), (args, result) in sigs.items():
         fn = getattr(dll, name)
         fn.argtypes, fn.restype = args, result
     return user32, gdi32
 
 
+_kernel32: Any = None
+
+
+def _process_name(user32: Any, hwnd: Any) -> str:
+    """File name of the program that owns a window ("" if Windows won't say)."""
+    pid = wintypes.DWORD(0)
+    user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+    handle = _kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid.value)
+    if not handle:
+        return ""
+    try:
+        size = wintypes.DWORD(1024)
+        buf = ctypes.create_unicode_buffer(size.value)
+        if not _kernel32.QueryFullProcessImageNameW(handle, 0, buf, ctypes.byref(size)):
+            return ""
+        return buf.value.replace("/", "\\").rsplit("\\", 1)[-1].lower()
+    finally:
+        _kernel32.CloseHandle(handle)
+
+
 def list_windows() -> list[Window]:
-    """Visible top-level windows that have a title."""
+    """Visible top-level windows that have a title, with the program they belong to."""
     user32, _ = _api()
     found: list[Window] = []
     proc_type = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
@@ -82,7 +120,7 @@ def list_windows() -> list[Window]:
             if length:
                 buf = ctypes.create_unicode_buffer(length + 1)
                 user32.GetWindowTextW(hwnd, buf, length + 1)
-                found.append(Window(int(hwnd), buf.value))
+                found.append(Window(int(hwnd), buf.value, _process_name(user32, hwnd)))
         return True
 
     callback = proc_type(each)  # keep a reference while Windows calls it
@@ -90,16 +128,21 @@ def list_windows() -> list[Window]:
     return found
 
 
-def find_window(titles: list[str]) -> Window | None:
-    """First window whose title is exactly one of `titles` (case-insensitive),
-    in the order given. Exact, so a browser tab mentioning "Clash Royale" or
-    "Phone Link" in its title is never picked by mistake."""
-    windows = list_windows()
+def choose_window(windows: list[Window], titles: list[str]) -> Window | None:
+    """The mirror window. Titles you named win (exact, case-insensitive, so a
+    browser tab mentioning them is never picked); otherwise a Phone Link window
+    that isn't Phone Link's main window: the mirror, titled after your phone."""
     for wanted in titles:
         for w in windows:
             if w.title.strip().lower() == wanted.strip().lower():
                 return w
-    return None
+    phone_link = [w for w in windows if w.process in PHONE_LINK_PROCESSES]
+    mirrors = [w for w in phone_link if w.title.strip().lower() not in PHONE_LINK_MAIN_TITLES]
+    return (mirrors or [None])[0]
+
+
+def find_window(titles: list[str]) -> Window | None:
+    return choose_window(list_windows(), titles)
 
 
 def client_box(window: Window) -> tuple[int, int, int, int] | None:

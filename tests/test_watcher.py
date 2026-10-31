@@ -221,3 +221,43 @@ def test_window_missing_counts_as_not_in_battle():
     for _ in range(5):
         watcher.step()
     assert sent == [("FIOReNt", "Sunny")]
+
+
+# --- choosing the mirror window -----------------------------------------------------
+
+from decklens.wincapture import Window, choose_window  # noqa: E402
+
+DESKTOP = [
+    Window(1, "DeckLens - Brave", "brave.exe"),
+    Window(2, "Phone Link guide | Clash Royale - Brave", "brave.exe"),  # mentions it: never picked
+    Window(3, "Phone Link", "phoneexperiencehost.exe"),               # Phone Link's main window
+    Window(4, "David's A53", "yourphoneappproxyhost.exe"),            # the mirror (real PC listing)
+    Window(5, "Windows PowerShell", "windowsterminal.exe"),
+]
+
+
+def test_mirror_window_found_through_phone_link_whatever_the_phone_is_called():
+    assert choose_window(DESKTOP, []).handle == 4
+    renamed = [w if w.handle != 4 else Window(4, "Pixel 9 Pro", w.process) for w in DESKTOP]
+    assert choose_window(renamed, []).handle == 4
+
+
+def test_only_phone_links_main_window_means_no_mirror_yet():
+    assert choose_window([w for w in DESKTOP if w.handle != 4], []) is None
+
+
+def test_a_named_window_wins_and_must_match_exactly():
+    assert choose_window(DESKTOP, ["david's a53"]).handle == 4
+    assert choose_window(DESKTOP, ["windows powershell"]).handle == 5
+    # Not an exact title: falls back to finding Phone Link, never a browser tab.
+    assert choose_window(DESKTOP, ["Phone Link guide"]).handle == 4
+
+
+def test_real_window_list_from_a_pc():
+    """What --list-windows showed on a real PC: the mirror is the only Phone Link window."""
+    real = [Window(1, "Windows PowerShell", "windowsterminal.exe"), Window(2, "Arc", "arc.exe"),
+            Window(3, "DeckLens - Brave", "brave.exe"),
+            Window(4, "David's A53", "yourphoneappproxyhost.exe"),
+            Window(5, "Settings", "applicationframehost.exe"), Window(6, "XBOX", "xboxpcapp.exe"),
+            Window(7, "Program Manager", "explorer.exe")]
+    assert choose_window(real, []).title == "David's A53"

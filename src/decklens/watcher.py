@@ -5,12 +5,12 @@ screen and sends them to the DeckLens page, which searches their decks.
     python -m decklens.watcher --check       # see what it reads right now
     python -m decklens.watcher               # run it (Ctrl+C to stop)
 
-It finds the Phone Link window ("Phone screen") by itself and reads that
-window's own picture, so DeckLens or anything else can sit on top of it; just
+It finds Phone Link's mirror window by itself (it's titled after your phone,
+e.g. "David's A53") and reads that window's own picture, so DeckLens or anything else can sit on top of it; just
 don't minimise it. Inside the window it finds the game picture by itself
 (cutting away the title bar and grey borders). If that ever goes wrong:
     python -m decklens.watcher --list-windows          # what windows it can see
-    python -m decklens.watcher --window "Some title"   # use a different window
+    python -m decklens.watcher --window "Some title"   # use (and remember) a window
     python -m decklens.watcher --calibrate             # or drag a box by hand, then
     python -m decklens.watcher --manual                # use that box
 
@@ -48,8 +48,8 @@ from .names import fuzzy_score, search_key
 log = logging.getLogger("decklens.watcher")
 
 CONFIG_FILE = Path.home() / ".decklens" / "watcher.json"
-# Phone Link's mirror window titles (exact match, so browser tabs never match).
-WINDOW_TITLES = ["Phone screen", "Phone Link"]
+# By default the mirror window is found through Phone Link's program (its title
+# is your phone's name). A title given with --window is remembered here.
 # Regions as fractions of the phone screen: (left, top, right, bottom).
 TOP_LEFT = (0.0, 0.0, 0.62, 0.10)     # opponent name and clan
 TOP_RIGHT = (0.78, 0.02, 1.0, 0.10)   # "Time left: 2:54" / overtime
@@ -288,15 +288,24 @@ def _dpi_aware() -> None:
             log.debug("couldn't enable DPI awareness: %s", exc)
 
 
-def load_region() -> dict[str, int]:
-    region: Any = None
+def read_config() -> dict[str, Any]:
     try:
-        region = json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
+        config = json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
     except (OSError, ValueError):
-        region = None
-    if isinstance(region, dict) and all(isinstance(region.get(k), int)
-                                        for k in ("left", "top", "width", "height")):
-        return region
+        return {}
+    return config if isinstance(config, dict) else {}
+
+
+def write_config(**changes: Any) -> None:
+    config = {**read_config(), **changes}
+    CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
+    CONFIG_FILE.write_text(json.dumps(config), encoding="utf-8")
+
+
+def load_region() -> dict[str, int]:
+    region = read_config()
+    if all(isinstance(region.get(k), int) for k in ("left", "top", "width", "height")):
+        return {k: region[k] for k in ("left", "top", "width", "height")}
     raise SystemExit("No box saved yet: run  python -m decklens.watcher --calibrate")
 
 
@@ -333,7 +342,10 @@ def window_grabber(titles: list[str]) -> Callable[[], Any]:
     def grab() -> Any:
         window = state["window"] or wincapture.find_window(titles)
         if window is None:
-            say(f"waiting for the Phone Link window ({' or '.join(repr(t) for t in titles)})")
+            wanted = (" or ".join(repr(t) for t in titles) if titles
+                      else "Phone Link's phone screen")
+            say(f"waiting for {wanted}: open the phone screen in Phone Link "
+                "(python -m decklens.watcher --list-windows shows what it can see)")
             return None
         image = wincapture.capture(window)
         if image is None:
@@ -404,8 +416,7 @@ def calibrate() -> None:
     root.mainloop()
     if not picked:
         raise SystemExit("Cancelled: nothing saved.")
-    CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
-    CONFIG_FILE.write_text(json.dumps(picked), encoding="utf-8")
+    write_config(**picked)
     ratio = picked["height"] / picked["width"]
     print(f"Saved the phone screen: {picked['width']}x{picked['height']} at "
           f"({picked['left']}, {picked['top']}).")
@@ -442,9 +453,13 @@ def check(grab: Callable[[], Any]) -> None:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Read your opponent off your mirrored phone.")
     parser.add_argument("--check", action="store_true", help="read the screen once and show it")
-    parser.add_argument("--window", action="append", metavar="TITLE",
-                        help="title of the mirror window (default: 'Phone screen', 'Phone Link')")
-    parser.add_argument("--list-windows", action="store_true", help="show window titles")
+    parser.add_argument("--window", metavar="TITLE",
+                        help="title of the mirror window, remembered for next time "
+                             "(default: found through Phone Link)")
+    parser.add_argument("--auto-window", action="store_true",
+                        help="forget a remembered --window title and find Phone Link again")
+    parser.add_argument("--list-windows", action="store_true",
+                        help="show window titles and their programs")
     parser.add_argument("--calibrate", action="store_true",
                         help="fallback: drag a box around the phone screen by hand")
     parser.add_argument("--manual", action="store_true", help="use the box from --calibrate")
@@ -457,14 +472,23 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.list_windows:
         from . import wincapture
+        chosen = wincapture.find_window([read_config().get("window")] if
+                                        read_config().get("window") else [])
         for window in wincapture.list_windows():
-            print(window.title)
+            mark = "  <- the watcher uses this one" if chosen and window.handle == chosen.handle else ""
+            print(f"{window.title}   [{window.process or '?'}]{mark}")
         return 0
+    if args.auto_window:
+        write_config(window=None)
+    if args.window:
+        write_config(window=args.window)
+        print(f"Using (and remembering) the window {args.window!r}.")
+    remembered = read_config().get("window")
+    titles = [remembered] if isinstance(remembered, str) and remembered else []
     if args.calibrate:
         calibrate()
         return 0
-    grab = (screen_grabber(load_region()) if args.manual
-            else window_grabber(args.window or WINDOW_TITLES))
+    grab = screen_grabber(load_region()) if args.manual else window_grabber(titles)
     if args.check:
         check(grab)
         return 0
