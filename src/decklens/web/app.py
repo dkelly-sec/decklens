@@ -18,15 +18,17 @@ from pathlib import Path
 from typing import Any, Callable, Iterator, Literal
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
-from fastapi.responses import FileResponse, JSONResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from ..api_client import ApiError, ClashRoyaleClient, NotFoundError
 from ..archetypes import ArchetypeModel
 from ..model import LinearMatchupModel
+from .auth import Auth, User
 from .security import (
-    BodySizeLimitMiddleware, RateLimiter, SecurityHeadersMiddleware, TTLCache,
+    BodySizeLimitMiddleware, RateLimiter, SameOriginMiddleware, SecurityHeadersMiddleware,
+    TTLCache,
 )
 from .services import (
     Predictor, battle_mix, card_ids, last_opponent, recent_decks, safe_tag, summarise_player,
@@ -40,6 +42,7 @@ RATE_LIMITS = {
     "search": (20, 60.0),   # name search: 20 a minute (slows down scraping the index)
     "predict": (60, 60.0),
     "images": (600, 60.0),  # card art: a page shows up to ~40 cards at once
+    "login": (10, 60.0),    # password guesses per client, on top of per-username lockout
 }
 STATIC_DIR = Path(str(resources.files("decklens") / "web" / "static"))
 
@@ -50,8 +53,15 @@ class Services:
     predictor: Predictor | None = None
     search_db: Callable[[], Any] | None = None    # returns a context manager yielding a connection
     images: Any = None                            # CardImages
+    auth: Auth | None = None                      # None only for local use without logins
     limiter: RateLimiter = field(default_factory=lambda: RateLimiter(RATE_LIMITS))
     cache: TTLCache = field(default_factory=lambda: TTLCache(ttl=60.0, max_items=2000))
+
+
+class LoginRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    username: str = Field(max_length=64)
+    password: str = Field(max_length=128)
 
 
 class PredictRequest(BaseModel):
@@ -64,7 +74,9 @@ def create_app(services: Services, *, hsts: bool = False) -> FastAPI:
     # No interactive docs or schema in production: less surface, nothing to probe.
     app = FastAPI(title="DeckLens", docs_url=None, redoc_url=None, openapi_url=None)
     app.add_middleware(BodySizeLimitMiddleware, max_bytes=4096)
+    app.add_middleware(SameOriginMiddleware)
     app.add_middleware(SecurityHeadersMiddleware, hsts=hsts)
+    auth = services.auth
 
     def limit(bucket: str) -> Callable[[Request], None]:
         def check(request: Request) -> None:
@@ -74,6 +86,17 @@ def create_app(services: Services, *, hsts: bool = False) -> FastAPI:
                 raise HTTPException(429, "Too many requests, slow down",
                                     headers={"Retry-After": str(int(wait) + 1)})
         return check
+
+    def current_user(request: Request) -> User | None:
+        if auth is None:
+            return None
+        return auth.session_user(request.cookies.get(auth.cookie_name))
+
+    def require_user(request: Request) -> None:
+        if auth is not None and current_user(request) is None:
+            raise HTTPException(401, "Please log in")
+
+    signed_in = [Depends(require_user)]
 
     def upstream(kind: str, tag: str) -> Any:
         fetch = services.client.get_player if kind == "player" else services.client.get_battle_log
@@ -109,11 +132,11 @@ def create_app(services: Services, *, hsts: bool = False) -> FastAPI:
         return {"status": "ok", "model": services.predictor is not None,
                 "search": services.search_db is not None}
 
-    @app.get("/api/players/{tag}", dependencies=[Depends(limit("lookup"))])
+    @app.get("/api/players/{tag}", dependencies=[*signed_in, Depends(limit("lookup"))])
     def player(tag: str) -> dict[str, Any]:
         return summarise_player(upstream("player", tag_or_400(tag)))
 
-    @app.get("/api/players/{tag}/decks", dependencies=[Depends(limit("lookup"))])
+    @app.get("/api/players/{tag}/decks", dependencies=[*signed_in, Depends(limit("lookup"))])
     def decks(tag: str) -> dict[str, Any]:
         tag = tag_or_400(tag)
         log_entries = upstream("battlelog", tag)
@@ -122,7 +145,7 @@ def create_app(services: Services, *, hsts: bool = False) -> FastAPI:
         return {"tag": tag, "modes": recent_decks(tag, log_entries),
                 "recent_modes": battle_mix(log_entries)}
 
-    @app.get("/api/players/{tag}/last-opponent", dependencies=[Depends(limit("lookup"))])
+    @app.get("/api/players/{tag}/last-opponent", dependencies=[*signed_in, Depends(limit("lookup"))])
     def last_opponent_route(tag: str) -> dict[str, Any]:
         tag = tag_or_400(tag)
         found = last_opponent(tag, upstream("battlelog", tag))
@@ -134,7 +157,7 @@ def create_app(services: Services, *, hsts: bool = False) -> FastAPI:
             found["matchup"] = services.predictor.predict(your, theirs)
         return found
 
-    @app.get("/api/search", dependencies=[Depends(limit("search"))])
+    @app.get("/api/search", dependencies=[*signed_in, Depends(limit("search"))])
     def search(name: str = Query(min_length=1, max_length=40),
                near_rating: int | None = Query(default=None, ge=0, le=20_000)) -> dict[str, Any]:
         if services.search_db is None:
@@ -152,7 +175,7 @@ def create_app(services: Services, *, hsts: bool = False) -> FastAPI:
             log.warning("player search database unavailable: %s", type(exc).__name__)
             raise HTTPException(503, "Search is unavailable right now") from None
 
-    @app.post("/api/predict", dependencies=[Depends(limit("predict"))])
+    @app.post("/api/predict", dependencies=[*signed_in, Depends(limit("predict"))])
     def predict(body: PredictRequest, model: Predictor = Depends(predictor)) -> dict[str, Any]:
         known = model.known_cards()
         try:
@@ -162,7 +185,7 @@ def create_app(services: Services, *, hsts: bool = False) -> FastAPI:
         return model.predict(deck_a, deck_b)
 
     @app.get("/cards/{card_id}.png", include_in_schema=False,
-             dependencies=[Depends(limit("images"))])
+             dependencies=[*signed_in, Depends(limit("images"))])
     def card_image(card_id: int, form: Literal["evo", "hero"] | None = None) -> Response:
         if services.images is None or not 0 < card_id < 10**9:
             raise HTTPException(404, "No image")
@@ -175,9 +198,56 @@ def create_app(services: Services, *, hsts: bool = False) -> FastAPI:
         return Response(data, media_type="image/png",
                         headers={"Cache-Control": "public, max-age=86400"})
 
-    @app.get("/", include_in_schema=False)
-    def index() -> FileResponse:
+    # --- logins ---------------------------------------------------------------
+
+    @app.post("/api/login", dependencies=[Depends(limit("login"))])
+    def login(body: LoginRequest, request: Request) -> Response:
+        if auth is None:
+            raise HTTPException(404, "Logins aren't enabled on this server")
+        client = request.client.host if request.client else "unknown"
+        user, wait = auth.login(body.username, body.password)
+        if wait:
+            log.warning("login refused from %s: username locked after repeated failures", client)
+            minutes = int(wait // 60) + 1
+            raise HTTPException(429, f"Too many attempts. Try again in {minutes} "
+                                     f"minute{'s' if minutes != 1 else ''}.",
+                                headers={"Retry-After": str(int(wait) + 1)})
+        if user is None:
+            # The attempted username isn't logged: people sometimes type a password there.
+            log.warning("failed login from %s", client)
+            raise HTTPException(401, "Wrong username or password")
+        log.info("%s logged in from %s", user.username, client)
+        response = JSONResponse({"username": user.username})
+        response.headers["set-cookie"] = auth.login_cookie(user)
+        return response
+
+    @app.post("/api/logout")
+    def logout() -> Response:
+        response = JSONResponse({"ok": True})
+        if auth is not None:
+            response.headers["set-cookie"] = auth.logout_cookie()
+        return response
+
+    @app.get("/api/me")
+    def me(request: Request) -> dict[str, Any]:
+        user = current_user(request)
+        if auth is not None and user is None:
+            raise HTTPException(401, "Please log in")
+        return {"username": user.username if user else None, "login": auth is not None}
+
+    # --- pages ------------------------------------------------------------------
+
+    @app.get("/", include_in_schema=False, response_model=None)
+    def index(request: Request) -> Response:
+        if auth is not None and current_user(request) is None:
+            return RedirectResponse("/login", status_code=303)
         return FileResponse(STATIC_DIR / "index.html")
+
+    @app.get("/login", include_in_schema=False, response_model=None)
+    def login_page(request: Request) -> Response:
+        if auth is None or current_user(request) is not None:
+            return RedirectResponse("/", status_code=303)
+        return FileResponse(STATIC_DIR / "login.html")
 
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
     return app
@@ -204,6 +274,28 @@ def load_predictor(model_dir: Path) -> Predictor | None:
         except (ValueError, KeyError):
             log.warning("ignoring %s: retrain to update it", linear_file.name)
     return Predictor(ArchetypeModel.from_json(archetype_file.read_text(encoding="utf-8")), linear)
+
+
+def _auth_from_env(search_db: Callable[[], Any] | None, https: bool) -> Auth | None:
+    """Logins are on unless DECKLENS_LOGIN=off, which is refused over HTTPS."""
+    from ..config import ConfigError
+    from .auth import MIN_SECRET_LENGTH, database_user_loader
+
+    if os.environ.get("DECKLENS_LOGIN", "on").strip().lower() == "off":
+        if https:
+            raise ConfigError("DECKLENS_LOGIN=off is only allowed for local use, not over HTTPS")
+        log.warning("logins are OFF (DECKLENS_LOGIN=off): only use this on your own computer")
+        return None
+    secret = os.environ.get("DECKLENS_SECRET_KEY", "").strip()
+    if len(secret) < MIN_SECRET_LENGTH or "replace-me" in secret:
+        raise ConfigError(
+            "DECKLENS_SECRET_KEY must be a random string of at least "
+            f"{MIN_SECRET_LENGTH} characters. Make one with:\n"
+            '  python -c "import secrets; print(secrets.token_urlsafe(48))"\n'
+            "and put it in .env (never in git).")
+    if search_db is None:
+        raise ConfigError("logins need the database: set WEB_DATABASE_URL in .env")
+    return Auth(database_user_loader(search_db), secret, secure_cookie=https)
 
 
 def create_app_from_env() -> FastAPI:
@@ -241,7 +333,8 @@ def create_app_from_env() -> FastAPI:
 
     from .cards import CardImages
 
+    https = os.environ.get("DECKLENS_HTTPS") == "1"
+    auth = _auth_from_env(search_db, https)
     client = ClashRoyaleClient(settings.api_token, timeout=settings.request_timeout)
     return create_app(Services(client=client, predictor=predictor, search_db=search_db,
-                               images=CardImages(client)),
-                      hsts=os.environ.get("DECKLENS_HTTPS") == "1")
+                               images=CardImages(client), auth=auth), hsts=https)

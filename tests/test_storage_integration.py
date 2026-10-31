@@ -30,7 +30,8 @@ def conn():
         c.execute((ROOT / "db" / "schema.sql").read_text())
         for migration in sorted((ROOT / "db" / "migrations").glob("*.sql")):
             c.execute(migration.read_text())  # migrations must be safe to re-run
-        c.execute("TRUNCATE battle_players, battles, player_rank_snapshots, players CASCADE")
+        c.execute("TRUNCATE battle_players, battles, player_rank_snapshots, players, web_users "
+                  "CASCADE")
         yield c
 
 
@@ -152,7 +153,8 @@ def test_web_role_can_only_read(conn):
     """The web app's role can read the player index and nothing else."""
     def drop_role():
         if conn.execute("SELECT 1 FROM pg_roles WHERE rolname = 'decklens_web_test'").fetchone():
-            conn.execute("REVOKE ALL ON players, player_rank_snapshots FROM decklens_web_test")
+            conn.execute("REVOKE ALL ON players, player_rank_snapshots, web_users "
+                         "FROM decklens_web_test")
             conn.execute("DROP ROLE decklens_web_test")
 
     grants = (ROOT / "db" / "web_grants.sql").read_text().replace("decklens_web", "decklens_web_test")
@@ -161,10 +163,16 @@ def test_web_role_can_only_read(conn):
     conn.execute(grants)
     conn.execute("SET ROLE decklens_web_test")
     try:
-        for table in ("players", "player_rank_snapshots", "battles", "battle_players"):
+        for table in ("players", "player_rank_snapshots", "battles", "battle_players",
+                      "web_users"):
             conn.execute(f"SELECT count(*) FROM {table}")  # reading is allowed
         for statement in ("DELETE FROM players", "UPDATE players SET name = 'x'",
                           "DELETE FROM battles", "TRUNCATE battle_players",
+                          # a compromised website can't make itself an account
+                          "INSERT INTO web_users (username, password_hash) VALUES ('evil', 'scrypt$x')",
+                          "UPDATE web_users SET password_hash = 'scrypt$x'",
+                          "UPDATE web_users SET session_version = 0",
+                          "DELETE FROM web_users",
                           "INSERT INTO battles (battle_id, battle_time, battle_type) "
                           "VALUES ('x', now(), 'x')"):
             with pytest.raises(psycopg.errors.InsufficientPrivilege):
@@ -298,3 +306,55 @@ def test_crawl_queue_from_the_database_actually_gets_crawled(conn):
     client = Client()
     stats = crawl(client, Store(), due, max_players=10, sleep=lambda s: None)
     assert client.calls == ["#9QJ", "#2PP"] and stats.invalid_seeds == 0  # best rank first
+
+
+def test_user_accounts_end_to_end(conn, monkeypatch):
+    """Accounts made with the command-line tool work for logging in to the site."""
+    from contextlib import contextmanager
+
+    from fastapi.testclient import TestClient
+
+    from decklens import users
+    from decklens.web import auth as auth_module
+    from decklens.web.app import Services, create_app
+
+    monkeypatch.setattr(users, "hash_password", lambda pw: auth_module.hash_password(pw, log_n=14))
+    users.add_user(conn, "david", "correct horse battery staple")
+    with pytest.raises(ValueError, match="already exists"):
+        users.add_user(conn, "david", "another long password")
+    assert [row[0] for row in users.list_users(conn)] == ["david"]
+    stored = conn.execute("SELECT password_hash FROM web_users").fetchone()[0]
+    assert stored.startswith("scrypt$") and "correct horse" not in stored  # never plain text
+
+    @contextmanager
+    def connect():
+        yield conn
+
+    auth = auth_module.Auth(auth_module.database_user_loader(connect), "s" * 40,
+                            secure_cookie=False, user_cache_seconds=0)
+    site = TestClient(create_app(Services(client=None, auth=auth)),
+                      headers={"origin": "http://testserver"})
+    assert site.post("/api/login", json={"username": "david",
+                                         "password": "correct horse battery staple"}).status_code == 200
+    assert site.get("/api/me").json()["username"] == "david"
+
+    users.set_password(conn, "david", "a brand new long password")   # logs out everywhere
+    assert site.get("/api/me").status_code == 401
+    assert site.post("/api/login", json={"username": "david",
+                                         "password": "a brand new long password"}).status_code == 200
+    users.logout_everywhere(conn, "david")
+    assert site.get("/api/me").status_code == 401
+
+    users.set_disabled(conn, "david", True)
+    assert site.post("/api/login", json={"username": "david",
+                                         "password": "a brand new long password"}).status_code == 401
+    users.remove_user(conn, "david")
+    with pytest.raises(ValueError, match="no user"):
+        users.remove_user(conn, "david")
+
+
+def test_database_refuses_bad_usernames_and_plain_text_passwords(conn):
+    for name, pw in (("Bad Name", "scrypt$x"), ("ok_name", "hunter2")):
+        with pytest.raises(psycopg.errors.CheckViolation):
+            conn.execute("INSERT INTO web_users (username, password_hash) VALUES (%s, %s)",
+                         (name, pw))

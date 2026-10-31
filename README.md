@@ -114,6 +114,18 @@ Get-Content db\web_role.sql | docker compose exec -T db psql -U decklens -d deck
 $pw | Set-Clipboard   # then set WEB_DATABASE_URL in .env (see .env.example)
 ```
 
+### Logins
+
+The site needs a login (on by default). There's no sign-up page: accounts are made from the command line by whoever controls the database.
+
+```powershell
+Get-Content db\migrations\004_web_users.sql | docker compose exec -T db psql -U decklens -d decklens -v ON_ERROR_STOP=1 -f -
+python -c "import secrets; print(secrets.token_urlsafe(48))"   # put this in .env as DECKLENS_SECRET_KEY
+python -m decklens.users add david                              # asks for a password (12+ characters)
+```
+
+Other commands: `passwd` (new password, logs out everywhere), `logout-all`, `disable` / `enable`, `remove`, `list`. Changing `DECKLENS_SECRET_KEY` logs everyone out. For a quick local session without logins, `DECKLENS_LOGIN=off` works on your own computer only; it's refused when `DECKLENS_HTTPS=1`.
+
 What the page does:
 - **You:** type your name (picked from the player index) or your tag to load your current deck; your tag is remembered in your browser.
 - **Last opponent:** your most recent Ranked or 20-win challenge opponent, their deck, and how your archetype tends to do against theirs.
@@ -133,6 +145,9 @@ How it's secured:
 - Strict Content Security Policy (no inline script), and the front end never builds HTML from data, so hostile player names display as text.
 - Every route is rate-limited; upstream lookups are cached; request bodies are capped at 4 KB; inputs are validated (tags, names, decks).
 - Errors are generic; there are no API docs or schema endpoints and no server banner.
+- **Logins:** passwords hashed with scrypt (N=2^17, r=8, p=1, random salt, constant-time check; unknown usernames take the same time). Sessions are HMAC-signed cookies, HttpOnly and SameSite=Lax, Secure with the `__Host-` prefix over HTTPS, valid 30 days and revocable per user. Five wrong passwords lock a username for 15 minutes (any username, so lockouts don't reveal which exist), on top of 10 login attempts per minute per client. Failed logins are logged without the attempted username or password.
+- **Cross-site requests:** every POST must come from this site's own origin (checked on the Origin header), with SameSite cookies as a second layer.
+- The website's database role can read logins but not create or change them, so a compromised web app can't give itself an account.
 - The server binds to 127.0.0.1 only. Putting it on a network comes with HTTPS in the deployment step.
 
 ## Development

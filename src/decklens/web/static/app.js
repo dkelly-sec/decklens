@@ -33,6 +33,10 @@ function storageSet(key, value) {
 
 async function api(path, options) {
   const response = await fetch(path, options);
+  if (response.status === 401) {  // session expired or logged out elsewhere
+    window.location.replace("/login");
+    throw new Error("Please log in");
+  }
   let body = null;
   try { body = await response.json(); } catch { /* not JSON */ }
   if (!response.ok) {
@@ -470,7 +474,27 @@ async function showOpponentDecks(player, container) {
 
 // --- start -------------------------------------------------------------------
 
+async function showAccount() {
+  try {
+    const me = await api("/api/me");
+    if (!me.login) return;  // logins switched off (local use only)
+    document.getElementById("account-name").textContent = me.username;
+    document.getElementById("account").hidden = false;
+  } catch { /* api() already redirects to the login page on 401 */ }
+}
+
+async function logOut() {
+  try {
+    await fetch("/api/logout", { method: "POST" });
+  } finally {
+    try { window.localStorage.removeItem("decklens.myTag"); } catch { /* fine */ }
+    window.location.replace("/login");
+  }
+}
+
 document.addEventListener("DOMContentLoaded", () => {
+  showAccount();
+  document.getElementById("logout-button").addEventListener("click", logOut);
   document.getElementById("me-form").addEventListener("submit", lookUpMe);
   document.getElementById("last-button").addEventListener("click", scoutLast);
   document.getElementById("find-form").addEventListener("submit", findOpponent);

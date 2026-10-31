@@ -1,6 +1,6 @@
 # DeckLens threat model
 
-Living document: update it as features are added. Last reviewed: week 5.
+Living document: update it as features are added. Last reviewed: week 7 (logins).
 
 ## Assets
 
@@ -8,6 +8,8 @@ Living document: update it as features are added. Last reviewed: week 5.
 | --- | --- |
 | Clash Royale API key | Lets anyone call the API as DeckLens; abuse could get the key revoked |
 | Database credentials | Full access to stored battles and the player index |
+| User accounts and sessions | Whoever logs in can spend the API quota and see the scouting tools |
+| Session secret (`DECKLENS_SECRET_KEY`) | Anyone with it could forge a session cookie for any user |
 | Player index | Names and tags of players DeckLens has seen; public data, but must not be scraped wholesale or kept forever |
 | Server | Runs everything with a whitelisted IP |
 
@@ -39,6 +41,14 @@ Living document: update it as features are added. Last reviewed: week 5.
 | Web app able to change data | Separate read-only database role (db/web_role.sql, db/web_grants.sql) plus read-only connections; tested that it can't insert, update, delete or truncate | Done |
 | Untrusted model files | Only plain JSON models are loaded, with shape and range checks | Done |
 | Vulnerable dependencies | pip-audit in CI, Dependabot weekly updates | Done |
+| Strangers using the site and its API quota | Login required for every page, API route and card image; no sign-up page, accounts only from the command line | Done |
+| Password guessing | 5 failures lock a username for 15 minutes (whether or not it exists); 10 login attempts per minute per client; 12+ character passwords | Done |
+| Stolen password database | scrypt hashes (OWASP parameters) with per-password salts; plain text impossible by database check; hashes with absurd cost parameters refused | Done |
+| Username discovery | Same message and same timing for unknown users and wrong passwords (dummy hash check); lockouts apply to any username | Done |
+| Session theft or forgery | HMAC-signed cookie, HttpOnly (scripts can't read it), Secure and `__Host-` over HTTPS, 30-day expiry, per-user revocation on password change or logout-all | Done |
+| Cross-site request forgery | Origin (or Referer) must match the site on every POST; SameSite=Lax cookies | Done |
+| Compromised web app creating accounts | The web role can only SELECT from web_users; tested that INSERT, UPDATE and DELETE are refused | Done |
+| Passwords or usernames leaking into logs | Failed logins logged with client IP only; passwords read with getpass in the account tool | Done |
 | Overloading or abusing the upstream API | Crawler request budget, minimum pause between requests, backoff on 429, stops on 403 or repeated failures | Done |
 | Untrusted values from API responses (leaderboard cursors, ids, ranks) | Location and season ids allowlisted; paging cursors validated before reuse; numbers accepted only as plain integers | Done |
 | Unsafe deserialisation of model files | Models exported as plain JSON (weights, archetype centroids, win counts), never pickle/joblib, so loading one can't run code; format tag, array shapes, value ranges and finite numbers checked on load | Done |

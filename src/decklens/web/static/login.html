@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Log in · DeckLens</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <script src="/static/login.js" defer></script>
+</head>
+<body>
+  <header>
+    <h1>DeckLens</h1>
+    <p class="tagline">Matchup scouting for Clash Royale</p>
+  </header>
+
+  <main>
+    <section aria-labelledby="login-heading" class="login">
+      <h2 id="login-heading">Log in</h2>
+      <form id="login-form" autocomplete="on">
+        <label for="username">Username</label>
+        <input id="username" name="username" autocomplete="username" autocapitalize="none"
+               spellcheck="false" maxlength="32" required>
+        <label for="password">Password</label>
+        <input id="password" name="password" type="password" autocomplete="current-password"
+               maxlength="128" required>
+        <button type="submit">Log in</button>
+      </form>
+      <p id="login-message" class="result" aria-live="polite"></p>
+    </section>
+  </main>
+
+  <footer>
+    <p>This content is not affiliated with, endorsed, sponsored, or specifically approved by
+      Supercell and Supercell is not responsible for it. For more information see
+      <a href="https://supercell.com/en/fan-content-policy/" rel="noopener noreferrer">Supercell's Fan Content Policy</a>.</p>
+  </footer>
+</body>
+</html>

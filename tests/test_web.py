@@ -84,7 +84,10 @@ def predictor():
     return Predictor(ArchetypeModel.fit(vocab, train, 6, 20.0), LinearMatchupModel.fit(vocab, train))
 
 
-def make(predictor=None, client=None, rows=None, limits=None, search=True):
+ORIGIN = {"origin": "http://testserver"}  # what a browser sends from our own page
+
+
+def make(predictor=None, client=None, rows=None, limits=None, search=True, auth=None):
     conn = FakeConn(rows or [])
 
     @contextmanager
@@ -92,10 +95,11 @@ def make(predictor=None, client=None, rows=None, limits=None, search=True):
         yield conn
 
     services = Services(client=client or FakeClient(), predictor=predictor,
-                        search_db=search_db if search else None)
+                        search_db=search_db if search else None, auth=auth)
     if limits:
         services.limiter = RateLimiter(limits)
-    return TestClient(create_app(services), raise_server_exceptions=False), services, conn
+    return (TestClient(create_app(services), raise_server_exceptions=False, headers=ORIGIN),
+            services, conn)
 
 
 # --- security headers and surface --------------------------------------------------
@@ -314,6 +318,7 @@ def test_placeholder_database_url_turns_search_off(monkeypatch, tmp_path):
     monkeypatch.setenv("CR_API_TOKEN", "test-token")
     monkeypatch.setenv("WEB_DATABASE_URL", "postgresql://decklens_web:replace-me@127.0.0.1/x")
     monkeypatch.setenv("DECKLENS_MODEL_DIR", str(tmp_path))
+    monkeypatch.setenv("DECKLENS_LOGIN", "off")
     health = TestClient(create_app_from_env()).get("/api/health").json()
     assert health == {"status": "ok", "model": False, "search": False}
 

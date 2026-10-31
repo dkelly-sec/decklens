@@ -3,6 +3,7 @@
 - SecurityHeadersMiddleware: strict Content Security Policy and friends on
   every response, so even if a hostile player name slipped into the page, the
   browser would refuse to run injected script.
+- SameOriginMiddleware: refuses state-changing requests from other sites (CSRF).
 - BodySizeLimitMiddleware: rejects oversized request bodies before they are read.
 - RateLimiter: per-client sliding-window limits, answered with 429 + Retry-After.
 - TTLCache: small, size-bounded cache so repeated lookups don't spend the
@@ -15,6 +16,7 @@ import threading
 import time
 from collections import OrderedDict, defaultdict, deque
 from typing import Any, Callable
+from urllib.parse import urlsplit
 
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
@@ -61,6 +63,33 @@ class SecurityHeadersMiddleware:
             await send(message)
 
         await self.app(scope, receive, send_with_headers)
+
+
+class SameOriginMiddleware:
+    """Cross-site request forgery guard: any request that can change something
+    (POST, PUT, PATCH, DELETE) must come from a page on this same site.
+
+    Browsers always send an Origin header on such requests, and another site
+    can't fake it, so a mismatch (or no Origin or Referer at all) is refused.
+    SameSite=Lax cookies are a second layer on top of this.
+    """
+
+    SAFE_METHODS = {"GET", "HEAD", "OPTIONS"}
+
+    def __init__(self, app: ASGIApp):
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http" or scope["method"] in self.SAFE_METHODS:
+            await self.app(scope, receive, send)
+            return
+        headers = {k.lower(): v.decode("latin-1") for k, v in scope.get("headers", [])}
+        host = headers.get(b"host", "")
+        source = headers.get(b"origin") or headers.get(b"referer") or ""
+        if not host or source == "null" or urlsplit(source).netloc != host:
+            await _send_json(send, 403, b'{"detail":"Cross-site request refused"}')
+            return
+        await self.app(scope, receive, send)
 
 
 class BodySizeLimitMiddleware:

@@ -50,3 +50,12 @@ CREATE TABLE IF NOT EXISTS battle_players (
     PRIMARY KEY (battle_id, side)
 );
 CREATE INDEX IF NOT EXISTS battle_players_tag_idx ON battle_players (player_tag);
+
+-- Website logins (see db/migrations/004_web_users.sql and python -m decklens.users).
+CREATE TABLE IF NOT EXISTS web_users (
+    username        TEXT PRIMARY KEY CHECK (username ~ '^[a-z0-9_.-]{3,32}$'),
+    password_hash   TEXT NOT NULL CHECK (password_hash LIKE 'scrypt$%'),
+    session_version INTEGER NOT NULL DEFAULT 1,  -- bump to log out everywhere
+    disabled        BOOLEAN NOT NULL DEFAULT false,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);

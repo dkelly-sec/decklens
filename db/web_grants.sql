@@ -3,4 +3,4 @@
 --
 --   Get-Content db\web_grants.sql | docker compose exec -T db psql -U decklens -d decklens -v ON_ERROR_STOP=1 -f -
 
-GRANT SELECT ON players, player_rank_snapshots, battles, battle_players TO decklens_web;
+GRANT SELECT ON players, player_rank_snapshots, battles, battle_players, web_users TO decklens_web;
