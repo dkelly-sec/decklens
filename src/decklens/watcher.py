@@ -6,7 +6,8 @@ screen and sends them to the DeckLens page, which searches their decks.
     python -m decklens.watcher               # run it (Ctrl+C to stop)
 
 It finds Phone Link's mirror window by itself (it's titled after your phone,
-e.g. "David's A53") and reads that window's own picture, so DeckLens or anything else can sit on top of it; just
+e.g. "David's A53"), or an iPad/iPhone mirrored with 5KPlayer's AirPlay
+receiver (window "iPad (2)" etc.), and reads that window's own picture, so DeckLens or anything else can sit on top of it; just
 don't minimise it. Inside the window it finds the game picture by itself
 (cutting away the title bar and grey borders). If that ever goes wrong:
     python -m decklens.watcher --list-windows          # what windows it can see
@@ -53,8 +54,8 @@ from .names import fuzzy_score, search_key
 log = logging.getLogger("decklens.watcher")
 
 CONFIG_FILE = Path.home() / ".decklens" / "watcher.json"
-# By default the mirror window is found through Phone Link's program (its title
-# is your phone's name). A title given with --window is remembered here.
+# By default the mirror window is found through Phone Link's or 5KPlayer's
+# program (its title is your device's name). A title given with --window is remembered here.
 # Regions as fractions of the phone screen: (left, top, right, bottom).
 TOP_LEFT = (0.0, 0.0, 0.62, 0.10)     # opponent name and clan
 TOP_RIGHT = (0.78, 0.02, 1.0, 0.10)   # "Time left: 2:54" / overtime
@@ -68,6 +69,10 @@ MAX_RATING = 20_000
 # (about 3.4). Line heights are used so it works at any window size.
 CLAN_SLOT_GAP = 2.5
 NAME_SLOT_GAP = 5.0
+# Game picture height / width: phones are about 2.2 (20:9); an iPad mirrored
+# with 5KPlayer is 1.33 (4:3). The same reading areas work for both (checked
+# on real screenshots): the game keeps its corner text at the same proportions.
+MIN_SHAPE, MAX_SHAPE = 1.2, 2.6
 DEFAULT_LINE_HEIGHT = 0.07  # region fraction, when a line's height is unknown
 
 
@@ -128,7 +133,18 @@ def read_opponent(top_left: Sequence[TextLine]) -> Sighting | None:
                     and len(search_key(ln.text)) >= 1), key=lambda ln: ln.y)
     name: TextLine | None
     clan: TextLine | None
-    rating = ratings[-1] if ratings else None
+    def is_rating(number: TextLine) -> bool:
+        """The rating sits right under the clan, or two lines under the name if
+        the clan wasn't read. Other numbers, like tower health just below the
+        corner on an iPad, are further down than that: skip them."""
+        above = [ln for ln in words if ln.y < number.y]
+        if not above:
+            return False
+        gap = (number.y - above[-1].y) / (number.height or DEFAULT_LINE_HEIGHT)
+        return gap <= (CLAN_SLOT_GAP if len(above) > 1 else NAME_SLOT_GAP)
+
+    rating = next((r for r in ratings if is_rating(r)), None)
+    words = [ln for ln in words if rating is None or ln.y < rating.y]
     if rating is not None:
         # Ranked layout: name / clan / rating. Measure from the rating line.
         unit = rating.height or DEFAULT_LINE_HEIGHT
@@ -228,7 +244,7 @@ def phone_area(image: Any) -> Any:
     left, right = longest_run(content[top:bottom].mean(axis=0) > 0.5, gap=max(1, w // 200))
     found = image[top:bottom, left:right]
     ratio = found.shape[0] / max(found.shape[1], 1)
-    return found if 1.6 <= ratio <= 2.6 else image
+    return found if MIN_SHAPE <= ratio <= MAX_SHAPE else image
 
 
 def enlarge(part: Any, min_width: int = 300) -> Any:
@@ -445,20 +461,21 @@ def window_grabber(titles: list[str], on_status: Status | None = None) -> Callab
         window = state["window"] or wincapture.find_window(titles)
         if window is None:
             wanted = (" or ".join(repr(t) for t in titles) if titles
-                      else "Phone Link's phone screen")
+                      else "a mirrored phone (Phone Link) or iPad (5KPlayer)")
             report("no_window", None, f"waiting for {wanted}: open the phone screen in "
-                   "Phone Link (python -m decklens.watcher --list-windows shows what it can see)")
+                   "Phone Link, or mirror your iPad to 5KPlayer "
+                   "(python -m decklens.watcher --list-windows shows what it can see)")
             return None
         image = wincapture.capture(window)
         if image is None:
             box = wincapture.client_box(window)
             if box is None:
                 state["window"] = wincapture.find_window(titles)  # closed or minimised
-                report("minimised", window.title, "the Phone Link window is minimised or "
+                report("minimised", window.title, "the mirror window is minimised or "
                        "closed: restore it (it can sit behind other windows)")
                 return None
             # Windows wouldn't draw it for us: read that part of the screen instead.
-            report("screen_only", window.title, "reading the Phone Link window from the "
+            report("screen_only", window.title, "reading the mirror window from the "
                    "screen: keep it visible (not covered) while you play")
             image = read_screen(box)
         else:
@@ -529,14 +546,14 @@ def check(grab: Callable[[], Any]) -> None:
     """One read of the screen, to confirm everything lines up."""
     image = grab()
     if image is None:
-        print("Couldn't see the game: is Phone Link open (not minimised)?")
+        print("Couldn't see the game: is Phone Link (or 5KPlayer) open, not minimised?")
         return
     height, width = image.shape[:2]
     print(f"Game picture: {width}x{height} pixels"
-          + ("" if 1.6 <= height / max(width, 1) <= 2.6 else
-             "  (not phone-shaped: try --list-windows / --window, or --calibrate)"))
+          + ("" if MIN_SHAPE <= height / max(width, 1) <= MAX_SHAPE else
+             "  (not phone- or tablet-shaped: try --list-windows / --window, or --calibrate)"))
     if width < 300:
-        print("That's small: make the Phone Link window bigger for reliable reading.")
+        print("That's small: make the mirror window bigger for reliable reading.")
     ocr = text_reader()
     top_right = lines_from_ocr(ocr(enlarge(crop(image, TOP_RIGHT))),
                                *enlarge(crop(image, TOP_RIGHT)).shape[1::-1])

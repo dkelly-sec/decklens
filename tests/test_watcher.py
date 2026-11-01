@@ -56,6 +56,18 @@ def test_unreadable_name_is_never_replaced_by_the_clan():
     assert describe(found) == "(name unreadable) (STS), rated 2216"
 
 
+def test_ipad_battle_corner_from_a_real_screenshot():
+    """Positions RapidOCR gave on a real iPad battle (5KPlayer, 20-win challenge):
+    the king's health is mid-screen and tower health sits just below the corner."""
+    tl = [TextLine("MONO", 0.11, 0.08, 0.79, 0.25), TextLine("4725", 0.78, 0.08, 0.72, 0.18),
+          TextLine("taller telo", 0.11, 0.40, 0.87, 0.16),
+          TextLine("1733", 0.45, 0.95, 0.75, 0.05)]       # tower health, clipped at the edge
+    assert read_opponent(tl) == Sighting("MONO", "taller telo")     # not "rated 1733"
+    # In Ranked the rating line comes next, directly under the clan.
+    ranked_tl = tl[:3] + [TextLine("2216", 0.11, 0.70, 0.8, 0.16)] + tl[3:]
+    assert read_opponent(ranked_tl) == Sighting("MONO", "taller telo", 2216)
+
+
 def ranked(*rows):
     """Lines laid out like the Ranked battle screen: text height 0.08, pitch 0.13."""
     return [TextLine(text, 0.25, y, 0.9, 0.08) for text, y in rows]
@@ -231,6 +243,13 @@ def test_finds_the_game_inside_the_window(layout):
     assert np.array_equal(found, game)
 
 
+def test_finds_an_ipad_game_inside_an_airplay_window():
+    # 5KPlayer on a real PC: 4:3 game picture centred in a wide black window.
+    game = game_picture(1020, 1347)
+    win, _ = window(game, bg=(0, 0, 0), pad=(770, 770, 0, 0))
+    assert np.array_equal(phone_area(win), game)
+
+
 def test_game_filling_the_window_is_used_whole():
     game = game_picture(540, 1200)
     assert phone_area(game).shape == game.shape
@@ -295,6 +314,19 @@ def test_real_window_list_from_a_pc():
             Window(5, "Settings", "applicationframehost.exe"), Window(6, "XBOX", "xboxpcapp.exe"),
             Window(7, "Program Manager", "explorer.exe")]
     assert choose_window(real, []).title == "David's A53"
+
+
+def test_airplay_mirror_window_found_by_program_for_an_ipad():
+    """--list-windows with 5KPlayer mirroring an iPad: the title has a counter that changes."""
+    real = [Window(1, "Windows PowerShell", "windowsterminal.exe"), Window(2, "Arc", "arc.exe"),
+            Window(3, "iPad (2)", "airplay.exe"), Window(4, "Overwolf", "overwolf.exe"),
+            Window(5, "Program Manager", "explorer.exe")]
+    assert choose_window(real, []).title == "iPad (2)"
+    renamed = [w if w.handle != 3 else Window(3, "iPad", "airplay.exe") for w in real]
+    assert choose_window(renamed, ["iPad (2)"]).handle == 3       # old remembered title: still found
+    # Phone Link's mirror is preferred when both are open.
+    both = real + [Window(6, "David's A53", "yourphoneappproxyhost.exe")]
+    assert choose_window(both, []).title == "David's A53"
 
 
 

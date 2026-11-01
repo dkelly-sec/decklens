@@ -496,10 +496,10 @@ const auto = { lastId: null, timer: null };
 const WATCHER_STATES = {
   connected: ["on", (d) => "Connected to " + (d || "your phone screen")],
   screen_only: ["warn", (d) => "Connected to " + (d || "your phone screen") +
-    ", but keep Phone Link visible: it can't be read behind other windows"],
+    ", but keep that window visible: it can't be read behind other windows"],
   starting: ["idle", () => "Starting the screen reader…"],
-  no_window: ["off", () => "Not connected: open your phone screen in Phone Link"],
-  minimised: ["off", () => "Not connected: Phone Link is minimised (it can sit behind other windows)"],
+  no_window: ["off", () => "Not connected: open your phone screen in Phone Link (or mirror your iPad to 5KPlayer)"],
+  minimised: ["off", (d) => "Not connected: " + (d || "the mirror window") + " is minimised (it can sit behind other windows)"],
   unavailable: ["off", (d) => "Not connected: " + (d || "the screen watcher can't run")],
 };
 

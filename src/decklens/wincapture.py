@@ -40,6 +40,10 @@ PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
 # belongs to YourPhoneAppProxyHost.exe, so the program is what identifies it.
 PHONE_LINK_PROCESSES = ("yourphoneappproxyhost.exe", "phoneexperiencehost.exe", "yourphone.exe")
 PHONE_LINK_MAIN_TITLES = ("phone link", "link to windows")
+# AirPlay receivers, for mirroring an iPad or iPhone. 5KPlayer's mirror window
+# (titled after the device, e.g. "iPad (2)") belongs to airplay.exe, as seen
+# on a real PC. Phone Link is preferred if both are open.
+AIRPLAY_PROCESSES = ("airplay.exe",)
 
 
 @dataclass(frozen=True)
@@ -131,13 +135,15 @@ def list_windows() -> list[Window]:
 def choose_window(windows: list[Window], titles: list[str]) -> Window | None:
     """The mirror window. Titles you named win (exact, case-insensitive, so a
     browser tab mentioning them is never picked); otherwise a Phone Link window
-    that isn't Phone Link's main window: the mirror, titled after your phone."""
+    that isn't Phone Link's main window (the mirror, titled after your phone);
+    otherwise an AirPlay receiver's mirror window (an iPad or iPhone)."""
     for wanted in titles:
         for w in windows:
             if w.title.strip().lower() == wanted.strip().lower():
                 return w
     phone_link = [w for w in windows if w.process in PHONE_LINK_PROCESSES]
     mirrors = [w for w in phone_link if w.title.strip().lower() not in PHONE_LINK_MAIN_TITLES]
+    mirrors += [w for w in windows if w.process in AIRPLAY_PROCESSES]
     return (mirrors or [None])[0]
 
 
