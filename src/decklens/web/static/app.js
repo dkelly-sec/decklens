@@ -399,9 +399,9 @@ const NOT_KNOWN_NO_CLAN = "They're probably not in DeckLens yet, and without a c
 // Auto-scout picks the player for you: the first confident match (in the clan
 // that was read, or online right now), else the top result as a best guess.
 // Results are already sorted best-first. You can still tap someone else.
-function autoOpen(out) {
+function autoOpen(out, allowGuess = true) {
   const buttons = [...out.querySelectorAll(".result-button")];
-  const pick = buttons.find((b) => b.dataset.confident === "true") || buttons[0];
+  const pick = buttons.find((b) => b.dataset.confident === "true") || (allowGuess ? buttons[0] : null);
   if (!pick) return;
   const sure = pick.dataset.confident === "true";
   for (const b of buttons) b.classList.remove("auto-picked");
@@ -428,8 +428,10 @@ async function findOpponent(event, options = {}) {
   if (clan) params.set("clan", clan);
   if (noClan) params.set("no_clan", "1");
   let path = "/api/search?" + params.toString();
-  // Ranked matches players of similar rating, so players nearest yours come first.
-  if (state.me && state.me.rating) path += "&near_rating=" + encodeURIComponent(state.me.rating);
+  // Players nearest their rating (read off the screen) come first, else nearest
+  // yours, as Ranked pairs similar ratings.
+  const near = options.rating || (state.me && state.me.rating);
+  if (near) path += "&near_rating=" + encodeURIComponent(near);
   show(out, el("p", "Searching…", "muted"));
   let results = [];
   try {
@@ -444,7 +446,7 @@ async function findOpponent(event, options = {}) {
   if (!results.length) {
     if (canGoLive) {
       await liveClanLookup(clan, name, out);  // not in our index: ask the game
-      if (options.auto) autoOpen(out);
+      if (options.auto) autoOpen(out, !options.nameUnread);
     } else if (noClan) {
       show(out, el("p", "No players found. " + NOT_KNOWN_NO_CLAN, "muted"));
     } else {
@@ -457,7 +459,7 @@ async function findOpponent(event, options = {}) {
     if (results.some((r) => r.clan_match)) {
       show(out, el("p", "They have no clan, so players without one come first. Tap the right player:", "hint"),
         resultList(results));
-      if (options.auto) autoOpen(out);
+      if (options.auto) autoOpen(out, !options.nameUnread);
     } else {
       // Everyone here has a clan, so none of them is likely to be the
       // opponent: list them, but don't open one as if it were.
@@ -472,7 +474,7 @@ async function findOpponent(event, options = {}) {
     show(out, el("p", "Nobody DeckLens knows is in that clan. Checking the game…", "muted"));
     const live = await liveClanParts(clan, name);
     show(out, ...live, el("p", "Players with similar names in other clans:", "hint"), resultList(results));
-    if (options.auto) autoOpen(out);
+    if (options.auto) autoOpen(out, !options.nameUnread);
     return;
   }
   const parts = [el("p", "Tap the right player:", "hint"), resultList(results)];
@@ -483,7 +485,7 @@ async function findOpponent(event, options = {}) {
     parts.push(live);
   }
   show(out, ...parts);
-  if (options.auto) autoOpen(out);
+  if (options.auto) autoOpen(out, !options.nameUnread);
 }
 
 // --- auto-scout (screen watcher) -------------------------------------------
@@ -508,7 +510,8 @@ function showWatcherStatus(watcher, latest) {
     : ["off", "Not connected: the screen watcher isn't running"];
   let line = text;
   if (kind === "on" || kind === "warn") {
-    line += latest ? " · last opponent: " + latest.name + (latest.clan ? " (" + latest.clan + ")" : "")
+    line += latest ? " · last opponent: " + (latest.name || "name unreadable") +
+      (latest.clan ? " (" + latest.clan + ")" : "") + (latest.rating ? ", rated " + latest.rating : "")
       : " · waiting for a battle";
   }
   show(status, el("span", null, "status-dot " + kind), el("span", line));
@@ -527,11 +530,21 @@ async function pollWatcher() {
   const fresh = auto.lastId === null ? latest.age_seconds < 60 : latest.id !== auto.lastId;
   auto.lastId = latest.id;
   if (!fresh) return;
-  document.getElementById("find-name").value = latest.name;
+  document.getElementById("find-name").value = latest.name || "";
   document.getElementById("find-clan").value = latest.clan || "";
   const results = document.getElementById("find-result");
   if (results.scrollIntoView) results.scrollIntoView({ behavior: "smooth", block: "start" });
-  await findOpponent(null, { auto: true, noClan: !latest.clan });
+  const rated = latest.rating ? " They're rated " + latest.rating + "." : "";
+  if (!latest.name) {
+    // Fancy letters or symbols OCR can't read. Search the clan, but only open
+    // someone we're sure of: a guess from the clan alone is usually wrong.
+    await findOpponent(null, { auto: true, nameUnread: true, rating: latest.rating });
+    results.prepend(el("p", "Couldn't read their name (fancy letters or symbols), so this searched " +
+      "their clan instead." + rated + " If nobody's marked, \u201cScout my last opponent\u201d " +
+      "shows their deck after the battle.", "hint"));
+    return;
+  }
+  await findOpponent(null, { auto: true, noClan: !latest.clan, rating: latest.rating });
 }
 
 function setAutoScout(on) {

@@ -2,8 +2,8 @@ import numpy as np
 import pytest
 
 from decklens.watcher import (
-    TOP_LEFT, TOP_RIGHT, DeckLensClient, NeedLogin, TextLine, Watcher, crop, in_battle,
-    lines_from_ocr, read_opponent,
+    TOP_LEFT, TOP_RIGHT, DeckLensClient, NeedLogin, Sighting, TextLine, Watcher, crop, describe,
+    in_battle, lines_from_ocr, read_opponent,
 )
 
 # What RapidOCR returned for a real battle screenshot (1080x2400), per region.
@@ -25,22 +25,52 @@ def test_battle_timer_means_in_battle():
 
 
 def test_reads_name_and_clan_from_the_real_screenshot():
-    assert read_opponent(lines(REAL_TOP_LEFT, w=669, h=240)) == ("FIOReNt", "Sunny")
+    assert read_opponent(lines(REAL_TOP_LEFT, w=669, h=240)) == Sighting("FIOReNt", "Sunny")
 
 
 def test_no_clan_crown_digits_and_low_confidence_are_handled():
     name_only = [TextLine("Florent", 0.14, 0.42, 0.9)]
-    assert read_opponent(name_only) == ("Florent", None)
+    assert read_opponent(name_only) == Sighting("Florent", None)
     noisy = [TextLine("11", 0.70, 0.60, 0.95),          # tower crown level: right of the name
              TextLine("xx", 0.10, 0.10, 0.2),           # unsure read: ignored
              TextLine("Florent", 0.14, 0.42, 0.9), TextLine("Sunny", 0.15, 0.67, 0.9)]
-    assert read_opponent(noisy) == ("Florent", "Sunny")
+    assert read_opponent(noisy) == Sighting("Florent", "Sunny")
     assert read_opponent([TextLine("2580", 0.1, 0.4, 0.9)]) is None  # just a number
     # The game's own "no clan" label isn't a clan called that.
     for label in ("No Clan", "NO CLAN", "Not in a clan"):
         assert read_opponent([TextLine("Florent", 0.14, 0.42, 0.9),
-                              TextLine(label, 0.15, 0.67, 0.9)]) == ("Florent", None)
+                              TextLine(label, 0.15, 0.67, 0.9)]) == Sighting("Florent", None)
     assert read_opponent([]) is None
+
+
+# What RapidOCR returned for a real Ranked battle (303x230 crop): the name
+# "亗•ⓜⓐⓘ•亗" wasn't detected at all; the clan "§i§" came back as "STS" and
+# the rating 2216 was read cleanly.
+REAL_RANKED_UNREADABLE_NAME = [[[[76, 73], [120, 73], [120, 93], [76, 93]], "STS", 0.6],
+                               [[[76, 102], [130, 102], [130, 119], [76, 119]], "2216", 0.79]]
+
+
+def test_unreadable_name_is_never_replaced_by_the_clan():
+    found = read_opponent(lines(REAL_RANKED_UNREADABLE_NAME, w=303, h=230))
+    assert found == Sighting(None, "STS", 2216)       # the clan line stays the clan
+    assert describe(found) == "(name unreadable) (STS), rated 2216"
+
+
+def ranked(*rows):
+    """Lines laid out like the Ranked battle screen: text height 0.08, pitch 0.13."""
+    return [TextLine(text, 0.25, y, 0.9, 0.08) for text, y in rows]
+
+
+def test_ranked_layout_name_clan_rating():
+    assert read_opponent(ranked(("Dipo", 0.19), ("Persian Warrior", 0.32), ("2216", 0.45))) == \
+        Sighting("Dipo", "Persian Warrior", 2216)
+    # Clan unreadable, name readable: the name keeps its place (two lines up).
+    assert read_opponent(ranked(("Dipo", 0.19), ("2216", 0.45))) == Sighting("Dipo", None, 2216)
+    # Only a rating: nothing to search by, so nothing is reported yet.
+    assert read_opponent(ranked(("2216", 0.45))) is None
+    # Spaces OCR puts in numbers are fine; crown levels and junk numbers aren't ratings.
+    assert read_opponent(ranked(("Dipo", 0.19), ("Clan", 0.32), ("2 216", 0.45))).rating == 2216
+    assert read_opponent(ranked(("Dipo", 0.19), ("Clan", 0.32), ("16", 0.45))).rating is None
 
 
 def test_ocr_junk_is_skipped():
@@ -77,7 +107,7 @@ def fake_ocr(part):
 def run(kinds, **kw):
     frames = iter(frame(k) for k in kinds)
     sent = []
-    watcher = Watcher(lambda: next(frames), fake_ocr, lambda n, c: sent.append((n, c)), **kw)
+    watcher = Watcher(lambda: next(frames), fake_ocr, sent.append, **kw)
     for _ in kinds:
         watcher.step()
     return sent
@@ -85,22 +115,22 @@ def run(kinds, **kw):
 
 def test_reports_once_per_battle_after_two_matching_reads():
     assert run([LOADING, BATTLE]) == []                               # one read isn't enough
-    assert run([LOADING, BATTLE, BATTLE, BATTLE, BATTLE]) == [("FIOReNt", "Sunny")]
+    assert run([LOADING, BATTLE, BATTLE, BATTLE, BATTLE]) == [Sighting("FIOReNt", "Sunny")]
 
 
 def test_rearms_after_the_battle_ends():
     kinds = [BATTLE, BATTLE, LOADING, LOADING, LOADING, OTHER_BATTLE, OTHER_BATTLE]
-    assert run(kinds) == [("FIOReNt", "Sunny"), ("Kaua", "Sunny")]
+    assert run(kinds) == [Sighting("FIOReNt", "Sunny"), Sighting("Kaua", "Sunny")]
     # A brief glitch (one missed timer read) doesn't count as a new battle.
-    assert run([BATTLE, BATTLE, LOADING, BATTLE, BATTLE]) == [("FIOReNt", "Sunny")]
+    assert run([BATTLE, BATTLE, LOADING, BATTLE, BATTLE]) == [Sighting("FIOReNt", "Sunny")]
 
 
 def test_failed_send_is_retried_next_look():
     frames = iter(frame(BATTLE) for _ in range(4))
     attempts = []
 
-    def flaky(name, clan):
-        attempts.append(name)
+    def flaky(found):
+        attempts.append(found)
         if len(attempts) == 1:
             raise OSError("network blip")
 
@@ -108,7 +138,7 @@ def test_failed_send_is_retried_next_look():
     watcher.step()
     with pytest.raises(OSError):
         watcher.step()
-    assert watcher.step() == ("FIOReNt", "Sunny") and len(attempts) == 2
+    assert watcher.step() == Sighting("FIOReNt", "Sunny") and len(attempts) == 2
 
 
 # --- talking to DeckLens --------------------------------------------------------------
@@ -141,9 +171,9 @@ def test_client_logs_in_and_reports_text_only_from_its_own_origin():
     client = DeckLensClient("http://127.0.0.1:8000/anything", session=session)
     assert session.headers["Origin"] == "http://127.0.0.1:8000"
     client.login("david", "correct horse battery staple")
-    client.report("FIOReNt", "Sunny")
+    client.report(Sighting("FIOReNt", "Sunny", 2216))
     assert session.posts[1] == ("http://127.0.0.1:8000/api/watch",
-                                {"name": "FIOReNt", "clan": "Sunny"})
+                                {"name": "FIOReNt", "clan": "Sunny", "rating": 2216})
 
 
 def test_client_login_failures_and_expiry():
@@ -152,7 +182,7 @@ def test_client_login_failures_and_expiry():
     with pytest.raises(NeedLogin, match="Wrong username"):
         client.login("david", "nope")
     with pytest.raises(NeedLogin):
-        client.report("x", None)
+        client.report(Sighting("x"))
 
 
 @pytest.mark.parametrize("url", ["http://decklens.example", "ftp://127.0.0.1", "javascript:x"])
@@ -221,10 +251,10 @@ def test_enlarge_leaves_big_regions_alone():
 def test_window_missing_counts_as_not_in_battle():
     frames = iter([None, None, None, frame(BATTLE), frame(BATTLE)])
     sent = []
-    watcher = Watcher(lambda: next(frames), fake_ocr, lambda n, c: sent.append((n, c)))
+    watcher = Watcher(lambda: next(frames), fake_ocr, sent.append)
     for _ in range(5):
         watcher.step()
-    assert sent == [("FIOReNt", "Sunny")]
+    assert sent == [Sighting("FIOReNt", "Sunny")]
 
 
 # --- choosing the mirror window -----------------------------------------------------

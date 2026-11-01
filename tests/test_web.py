@@ -886,13 +886,23 @@ def test_watcher_reports_reach_the_page_as_text():
         app.get("/api/watch").json()["latest"]["name"] == "Kaua"
 
 
-@pytest.mark.parametrize("body", [
-    {}, {"name": ""}, {"name": "x" * 41}, {"name": "a", "clan": "x" * 51},
-    {"name": "a", "image": "data:..."},          # text only: nothing else accepted
+@pytest.mark.parametrize("body, status", [
+    ({}, 400), ({"name": ""}, 400), ({"name": " ", "clan": ""}, 400),   # nothing to search by
+    ({"rating": 2216}, 400),                     # a rating alone says too little
+    ({"name": "x" * 41}, 422), ({"name": "a", "clan": "x" * 51}, 422),
+    ({"name": "a", "rating": -1}, 422), ({"name": "a", "rating": 99999}, 422),
+    ({"name": "a", "image": "data:..."}, 422),   # text only: nothing else accepted
 ])
-def test_watcher_reports_are_validated(body):
+def test_watcher_reports_are_validated(body, status):
     app, _, _ = make()
-    assert app.post("/api/watch", json=body).status_code == 422
+    assert app.post("/api/watch", json=body).status_code == status
+
+
+def test_watcher_report_with_unreadable_name_keeps_clan_and_rating():
+    app, _, _ = make()
+    assert app.post("/api/watch", json={"name": None, "clan": "STS", "rating": 2216}).status_code == 200
+    latest = app.get("/api/watch").json()["latest"]
+    assert (latest["name"], latest["clan"], latest["rating"]) == (None, "STS", 2216)
 
 
 def test_watcher_reports_expire():

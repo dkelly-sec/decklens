@@ -217,7 +217,7 @@ def run_watcher(board: Any, stop: threading.Event) -> None:
 
     status("starting")
     try:
-        from .watcher import Watcher, read_config, text_reader, window_grabber
+        from .watcher import Watcher, describe, read_config, text_reader, window_grabber
     except ImportError:
         log.warning("screen watcher not installed (pip install -e \".[watcher]\"): Auto-scout is off")
         return keep_saying("unavailable", "screen reader not installed")
@@ -226,7 +226,7 @@ def run_watcher(board: Any, stop: threading.Event) -> None:
         titles = [remembered] if isinstance(remembered, str) and remembered else []
         grab = window_grabber(titles, on_status=status)
         watcher = Watcher(grab, text_reader(),
-                          lambda name, clan: board.report(SCREEN_KEY, name, clan))
+                          lambda found: board.report(SCREEN_KEY, *found))
     except ImportError as exc:  # screen capture / text recognition packages missing
         log.warning("screen watcher not installed (%s): pip install -e \".[watcher]\"", exc.name)
         return keep_saying("unavailable", "screen reader not installed")
@@ -238,7 +238,7 @@ def run_watcher(board: Any, stop: threading.Event) -> None:
         try:
             found = watcher.step()
             if found:
-                log.info("opponent: %s (%s)", found[0], found[1] or "no clan")
+                log.info("opponent: %s", describe(found))
         except Exception:  # noqa: BLE001 - one bad look shouldn't end the watcher
             log.exception("screen watcher hiccup")
 

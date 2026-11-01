@@ -25,7 +25,12 @@ images live in memory for one read and only the recognised text is sent.
 What it looks for (checked against real battle screenshots):
 - top-right corner: the battle timer ("Time left: 2:54"), so menus and the
   loading screen are ignored;
-- top-left corner: the opponent's name, with their clan on the line below.
+- top-left corner: the opponent's name, their clan on the line below and,
+  in Ranked, their rating on the line below that. The rating (plain digits)
+  is the easiest thing to read, so it anchors the layout: the line just above
+  it is the clan, the one above that the name. A name OCR can't read (circled
+  letters, decorative symbols) is reported as unreadable, never swapped for
+  the clan.
 """
 
 from __future__ import annotations
@@ -40,7 +45,7 @@ import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Sequence
+from typing import Any, Callable, NamedTuple, Sequence
 from urllib.parse import urlsplit
 
 from .names import fuzzy_score, search_key
@@ -56,6 +61,14 @@ TOP_RIGHT = (0.78, 0.02, 1.0, 0.10)   # "Time left: 2:54" / overtime
 BATTLE_TEXT = re.compile(r"\d\s*:\s*\d\d|left|overtime", re.IGNORECASE)
 MIN_CONFIDENCE = 0.5
 SAME_READ = 0.8  # fuzzy score at which two reads count as the same player
+RATING_TEXT = re.compile(r"\d{3,5}")
+MAX_RATING = 20_000
+# Gap from a line's top to the rating line's top, in rating-line heights: up
+# to this, the line sits in the clan slot (seen: 1.7); beyond, the name slot
+# (about 3.4). Line heights are used so it works at any window size.
+CLAN_SLOT_GAP = 2.5
+NAME_SLOT_GAP = 5.0
+DEFAULT_LINE_HEIGHT = 0.07  # region fraction, when a line's height is unknown
 
 
 @dataclass(frozen=True)
@@ -64,6 +77,15 @@ class TextLine:
     x: float  # left edge, as a fraction of the region's width
     y: float  # top edge, as a fraction of the region's height
     confidence: float
+    height: float = 0.0  # as a fraction of the region's height (0: unknown)
+
+
+class Sighting(NamedTuple):
+    """What was read about the opponent. Any part may be missing: a name
+    full of symbols can be unreadable even when the clan and rating aren't."""
+    name: str | None
+    clan: str | None = None
+    rating: int | None = None
 
 
 def lines_from_ocr(result: Any, width: int, height: int) -> list[TextLine]:
@@ -74,10 +96,11 @@ def lines_from_ocr(result: Any, width: int, height: int) -> list[TextLine]:
             box, text, confidence = item[0], str(item[1]), float(item[2])
             x = min(float(p[0]) for p in box) / max(width, 1)
             y = min(float(p[1]) for p in box) / max(height, 1)
+            tall = (max(float(p[1]) for p in box) - min(float(p[1]) for p in box)) / max(height, 1)
         except (TypeError, ValueError, IndexError):
             continue
         if text.strip():
-            lines.append(TextLine(text.strip(), x, y, confidence))
+            lines.append(TextLine(text.strip(), x, y, confidence, tall))
     return lines
 
 
@@ -89,28 +112,57 @@ def in_battle(top_right: Sequence[TextLine]) -> bool:
 NO_CLAN_TEXT = frozenset({"noclan", "notinaclan", "notinclan"})
 
 
-def read_opponent(top_left: Sequence[TextLine]) -> tuple[str, str | None] | None:
-    """(name, clan or None) from the top-left corner of the battle screen."""
-    lines = sorted((ln for ln in top_left
-                    if ln.x < 0.35 and ln.confidence >= MIN_CONFIDENCE
-                    and len(search_key(ln.text)) >= 1 and not ln.text.strip().isdigit()),
-                   key=lambda ln: ln.y)
-    if not lines:
+def _rating(line: TextLine) -> int | None:
+    text = line.text.replace(" ", "")
+    if not RATING_TEXT.fullmatch(text):
         return None
-    name = lines[0]
-    clan = next((ln for ln in lines[1:] if 0.1 < ln.y - name.y < 0.5), None)
+    value = int(text)
+    return value if 100 <= value <= MAX_RATING else None
+
+
+def read_opponent(top_left: Sequence[TextLine]) -> Sighting | None:
+    """Name, clan and rating from the top-left corner of the battle screen."""
+    usable = [ln for ln in top_left if ln.x < 0.35 and ln.confidence >= MIN_CONFIDENCE]
+    ratings = sorted((ln for ln in usable if _rating(ln) is not None), key=lambda ln: ln.y)
+    words = sorted((ln for ln in usable if not ln.text.replace(" ", "").isdigit()
+                    and len(search_key(ln.text)) >= 1), key=lambda ln: ln.y)
+    name: TextLine | None
+    clan: TextLine | None
+    rating = ratings[-1] if ratings else None
+    if rating is not None:
+        # Ranked layout: name / clan / rating. Measure from the rating line.
+        unit = rating.height or DEFAULT_LINE_HEIGHT
+        above = [ln for ln in words if ln.y < rating.y]
+        clan = next((ln for ln in reversed(above) if (rating.y - ln.y) / unit <= CLAN_SLOT_GAP),
+                    None)
+        name = next((ln for ln in reversed(above)
+                     if CLAN_SLOT_GAP < (rating.y - ln.y) / unit <= NAME_SLOT_GAP), None)
+    elif words:
+        name = words[0]
+        clan = next((ln for ln in words[1:] if 0.1 < ln.y - name.y < 0.5), None)
+    else:
+        return None
     if clan is not None and search_key(clan.text) in NO_CLAN_TEXT:
         clan = None  # the game's "no clan" label, not a clan called that
-    return name.text[:40], (clan.text[:50] if clan else None)
+    found = Sighting(name.text[:40] if name else None, clan.text[:50] if clan else None,
+                     _rating(rating) if rating else None)
+    return found if found.name or found.clan else None  # a rating alone says too little
 
 
-def _same(a: tuple[str, str | None], b: tuple[str, str | None]) -> bool:
+def describe(found: Sighting) -> str:
+    """For logs and --check: Name (Clan) rated 2216."""
+    text = found.name or "(name unreadable)"
+    text += f" ({found.clan})" if found.clan else " (no clan read)"
+    return text + (f", rated {found.rating}" if found.rating else "")
+
+
+def _same(a: Sighting, b: Sighting) -> bool:
     def close(x: str | None, y: str | None) -> bool:
         if not x or not y:
             return x == y
         kx, ky = search_key(x), search_key(y)
         return fuzzy_score(kx, ky) >= SAME_READ and fuzzy_score(ky, kx) >= SAME_READ
-    return close(a[0], b[0]) and close(a[1], b[1])
+    return close(a.name, b.name) and close(a.clan, b.clan)
 
 
 def phone_area(image: Any) -> Any:
@@ -203,12 +255,12 @@ class Watcher:
     """Reports each opponent once per battle, after two reads agree."""
 
     def __init__(self, grab: Callable[[], Any], ocr: Callable[[Any], Any],
-                 send: Callable[[str, str | None], None], *,
+                 send: Callable[[Sighting], None], *,
                  confirm: int = 2, rearm_after: int = 3):
         self.grab, self.ocr, self.send = grab, ocr, send
         self.confirm, self.rearm_after = confirm, rearm_after
         self.reported = False
-        self.pending: tuple[str, str | None] | None = None
+        self.pending: Sighting | None = None
         self.agree = 0
         self.misses = 0
 
@@ -217,7 +269,7 @@ class Watcher:
         h, w = part.shape[:2]
         return lines_from_ocr(self.ocr(part), w, h)
 
-    def step(self) -> tuple[str, str | None] | None:
+    def step(self) -> Sighting | None:
         """One look at the screen. Returns the opponent if they were just reported."""
         image = self.grab()  # None: the window isn't available right now
         if image is None or not in_battle(self._read(image, TOP_RIGHT)):
@@ -236,7 +288,7 @@ class Watcher:
         else:
             self.pending, self.agree = found, 1
         if self.agree >= self.confirm:
-            self.send(*found)
+            self.send(found)
             self.reported = True
             return found
         return None
@@ -302,9 +354,10 @@ class DeckLensClient:
             raise NeedLogin("session expired")
         r.raise_for_status()
 
-    def report(self, name: str, clan: str | None) -> None:
+    def report(self, found: Sighting) -> None:
         r = self.session.post(self.base + "/api/watch", timeout=10,
-                              json={"name": name, "clan": clan})
+                              json={"name": found.name, "clan": found.clan,
+                                    "rating": found.rating})
         if r.status_code == 401:
             raise NeedLogin("session expired")
         r.raise_for_status()
@@ -494,7 +547,7 @@ def check(grab: Callable[[], Any]) -> None:
     print("In a battle:", "yes" if in_battle(top_right) else "no (start a match and check again)")
     found = read_opponent(top_left)
     if found:
-        print(f"Opponent: {found[0]}" + (f"  clan: {found[1]}" if found[1] else "  (no clan)"))
+        print(f"Opponent: {describe(found)}")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -555,14 +608,14 @@ def main(argv: list[str] | None = None) -> int:
 
     log_in()
 
-    def send(name: str, clan: str | None) -> None:
+    def send(found: Sighting) -> None:
         try:
-            client.report(name, clan)
+            client.report(found)
         except NeedLogin:
             print("DeckLens logged you out; log in again.")
             log_in()
-            client.report(name, clan)
-        log.info("opponent: %s%s -> sent to DeckLens", name, f" ({clan})" if clan else "")
+            client.report(found)
+        log.info("opponent: %s -> sent to DeckLens", describe(found))
 
     heartbeat = Heartbeat(client.status)
     heartbeat("starting")

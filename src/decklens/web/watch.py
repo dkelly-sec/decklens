@@ -37,8 +37,11 @@ class WatchBoard:
         self._ids = itertools.count(1)
         self._lock = threading.Lock()
 
-    def report(self, user: str, name: str, clan: str | None) -> dict[str, Any]:
-        entry = {"id": next(self._ids), "name": name, "clan": clan, "at": self.clock()}
+    def report(self, user: str, name: str | None, clan: str | None,
+               rating: int | None = None) -> dict[str, Any]:
+        """name may be None: read but unreadable (symbols), clan or rating still help."""
+        entry = {"id": next(self._ids), "name": name, "clan": clan, "rating": rating,
+                 "at": self.clock()}
         with self._lock:
             if len(self._latest) >= MAX_USERS and user not in self._latest:
                 self._latest.clear()  # bounded memory: forget everyone rather than grow
