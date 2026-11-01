@@ -362,7 +362,9 @@ function resultList(players) {
     const item = el("li");
     const button = el("button", null, "result-button" + (r.active ? " active" : ""));
     button.type = "button";
-    button.dataset.confident = String(Boolean(r.active || r.clan_match));
+    // Sure it's them: online right now, or in the clan read off the screen with
+    // a name like the one read (name_match is null when no name was given).
+    button.dataset.confident = String(Boolean(r.active || (r.clan_match && r.name_match !== false)));
     button.append(playerLine(r, { showNoClan: "clan" in r }));
     button.addEventListener("click", () => showOpponentDecks(r, item));
     item.append(button);
@@ -477,12 +479,14 @@ async function findOpponent(event, options = {}) {
     }
     return;
   }
-  if (canGoLive && !results.some((r) => r.clan_match)) {
-    // Nobody we know is in that clan: check the game first, keep the name
-    // matches from other clans underneath in case the clan was misread.
-    show(out, el("p", "Nobody DeckLens knows is in that clan. Checking the game…", "muted"));
+  const inClan = (r) => r.clan_match && r.name_match !== false;
+  if (canGoLive && !results.some(inClan)) {
+    // Nobody we know is in that clan (with that name): check the game first,
+    // keep what we found underneath in case the clan or name was misread.
+    show(out, el("p", "Nobody DeckLens knows " + (name ? "with that name " : "") +
+      "is in that clan. Checking the game…", "muted"));
     const live = await liveClanParts(clan, name);
-    show(out, ...live, el("p", "Players with similar names in other clans:", "hint"), resultList(results));
+    show(out, ...live, el("p", "Other players DeckLens knows with a similar name or clan:", "hint"), resultList(results));
     if (options.auto) autoOpen(out, !options.nameUnread);
     return;
   }

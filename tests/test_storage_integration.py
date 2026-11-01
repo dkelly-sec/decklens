@@ -250,7 +250,7 @@ def test_country_players_are_searchable_but_get_no_rank(conn):
                                   clan_tag=None, clan_name="Clan")], NOW)
     assert search_players(conn, "country") == [
         {"tag": "#2PP", "name": "Ｃｏｕｎｔｒｙ ⚔ Star", "clan": "Clan", "rank": None, "rating": None,
-         "clan_match": False}]
+         "clan_match": False, "name_match": True}]
     assert conn.execute("SELECT count(*) FROM player_rank_snapshots").fetchone()[0] == 0
 
 
@@ -491,6 +491,21 @@ def test_no_clan_on_screen_prefers_clanless_players(conn):
     # A typed clan wins over the no-clan clue (it's ignored).
     with_clan = search_players(conn, "dipo", clan="persian warrior", no_clan=True)
     assert with_clan[0]["tag"] == "#2PP" and with_clan[0]["clan_match"] is True
+
+
+def test_clan_members_with_other_names_are_not_name_matches(conn):
+    """The real case: DaHveed of YEET isn't in DeckLens, but Matt and rydawg of #yeet are."""
+    from decklens.storage import save_players
+    from decklens.web.search import search_players
+
+    save_players(conn, [RankEntry("#2PP", "Matt", 1897, None, "#C1", "#yeet"),
+                        RankEntry("#9QJ", "rydawg", 1839, None, "#C1", "#yeet"),
+                        RankEntry("#8YY", "DaHveedd", 2000, None, "#C2", "Other")], NOW)
+    found = {r["tag"]: r for r in search_players(conn, "DaHveed", clan="YEET")}
+    assert found["#2PP"]["clan_match"] and not found["#2PP"]["name_match"]   # clan only
+    assert found["#8YY"]["name_match"] and not found["#8YY"]["clan_match"]   # name only
+    assert not any(r["clan_match"] and r["name_match"] for r in found.values())  # -> ask the game
+    assert all(r["name_match"] is None for r in search_players(conn, None, clan="YEET"))
 
 
 def test_reindex_applies_new_name_rules_to_stored_players(conn):

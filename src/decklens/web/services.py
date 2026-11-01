@@ -316,6 +316,11 @@ class Predictor:
 # first. Someone in a match with you right now was seen minutes ago.
 
 CLANS_TO_CHECK = 5
+# With a name to look for, more same-named clans are worth checking: common
+# names ("YEET") are shared by many clans. Stops early once it finds them.
+CLANS_TO_CHECK_WITH_NAME = 12
+CLAN_SEARCH_LIMIT = 25
+STRONG_NAME_MATCH = 0.8
 ACTIVE_MINUTES = 15
 MAX_LIVE_RESULTS = 10
 NAME_MATCH_MIN = 0.6  # how close typed name letters must be (see names.fuzzy_score)
@@ -334,7 +339,9 @@ def live_clan_lookup(clans: list[dict[str, Any]], members_of: Callable[[str], li
     """Recently active members of the clans that best match clan_name.
 
     clans is the API's clan search result; members_of(tag) fetches one clan's
-    members. Exact name matches are checked first, at most CLANS_TO_CHECK clans.
+    members. Exact name matches are checked first, at most CLANS_TO_CHECK clans
+    (CLANS_TO_CHECK_WITH_NAME when a name was given, stopping at the first clan
+    with an online member whose name matches well).
     """
     want = search_key(clan_name)
     valid = []
@@ -350,7 +357,10 @@ def live_clan_lookup(clans: list[dict[str, Any]], members_of: Callable[[str], li
     valid.sort(key=lambda t: -round(t[2], 1))
     name_key = search_key(name) if name else ""
     players, checked = [], []
-    for tag, cname, _ in valid[:CLANS_TO_CHECK]:
+    limit = CLANS_TO_CHECK_WITH_NAME if name_key else CLANS_TO_CHECK
+    for tag, cname, _ in valid[:limit]:
+        if name_key and any(p["active"] and p["_match"] >= STRONG_NAME_MATCH for p in players):
+            break  # found them: no need to ask about more clans
         checked.append(cname)
         for m in members_of(tag):
             try:

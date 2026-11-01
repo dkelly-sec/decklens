@@ -36,7 +36,8 @@ NO_CLAN_BONUS = 0.5
 _SEARCH = r"""
     SELECT p.tag, p.name, p.clan_name, r.rank, p.rating,
            CASE WHEN %(no_clan)s THEN p.clan_name IS NULL AND s.name_score >= %(clan_match)s
-                ELSE m.clan_score >= %(clan_match)s END
+                ELSE m.clan_score >= %(clan_match)s END,
+           s.name_score >= %(name_match)s
     FROM players p
     LEFT JOIN LATERAL (
         SELECT s.rank FROM player_rank_snapshots s
@@ -98,6 +99,7 @@ def search_players(conn: Connection, query: str | None = None, *, clan: str | No
         "clan_pattern": _like_prefix(clan_key) if use_clan else None,
         "clan_key": clan_key if use_clan else None, "near": near_rating, "limit": MAX_RESULTS,
         "clan_match": CLAN_MATCH, "no_clan": no_clan, "no_clan_bonus": NO_CLAN_BONUS,
+        "name_match": FUZZY_THRESHOLD,
     }
     with conn.cursor() as cur:
         # How close a fuzzy match must be (pg_trgm's default 0.6 drops common
@@ -108,6 +110,10 @@ def search_players(conn: Connection, query: str | None = None, *, clan: str | No
         # clan_match: is this player in a clan like the one typed (or clanless,
         # with a close name, when no_clan)? If nobody is, the page asks the game
         # directly instead (live clan lookup), or says they aren't known yet.
+        # name_match: does their name resemble what was typed (None if no name
+        # was typed)? A clan match alone isn't "found them" when you gave a name:
+        # five YEET members called Matt, rydawg... aren't DaHveed of YEET.
         return [{"tag": tag, "name": name, "clan": clan, "rank": rank, "rating": rating,
-                 "clan_match": bool((use_clan or no_clan) and in_clan)}
-                for tag, name, clan, rank, rating, in_clan in cur.fetchall()]
+                 "clan_match": bool((use_clan or no_clan) and in_clan),
+                 "name_match": bool(name_ok) if use_name else None}
+                for tag, name, clan, rank, rating, in_clan, name_ok in cur.fetchall()]

@@ -33,8 +33,8 @@ from .security import (
     TTLCache,
 )
 from .services import (
-    Predictor, battle_mix, card_ids, last_opponent, live_clan_lookup, recent_decks, safe_tag,
-    summarise_player, validate_deck,
+    CLAN_SEARCH_LIMIT, Predictor, battle_mix, card_ids, last_opponent, live_clan_lookup,
+    recent_decks, safe_tag, summarise_player, validate_deck,
 )
 
 log = logging.getLogger("decklens.web")
@@ -218,7 +218,8 @@ def create_app(services: Services, *, hsts: bool = False) -> FastAPI:
             raise HTTPException(400, "Type at least 3 characters of the clan name")
         try:
             clans = cached_call(("clans", clan.lower()),
-                                lambda: services.client.search_clans(clan), "No clans found")
+                                lambda: services.client.search_clans(clan, limit=CLAN_SEARCH_LIMIT),
+                                "No clans found")
         except ValueError as exc:
             raise HTTPException(400, str(exc)) from None
 

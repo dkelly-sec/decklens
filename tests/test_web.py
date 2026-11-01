@@ -228,7 +228,7 @@ def test_last_opponent_without_ranked_battles():
 
 
 def test_search_normalises_and_escapes(predictor):
-    rows = [("#9QJ", HOSTILE, "Clan", 812, 2400, False)]
+    rows = [("#9QJ", HOSTILE, "Clan", 812, 2400, False, True)]
     app, _, conn = make(rows=rows)
     response = app.get("/api/search", params={"name": "🔥Dípo%_", "near_rating": 2136})
     assert response.status_code == 200
@@ -237,12 +237,13 @@ def test_search_normalises_and_escapes(predictor):
     params = conn.executed[1]
     assert params == {"pattern": "dipo%", "key": "dipo", "clan_pattern": None, "clan_key": None,
                       "near": 2136, "limit": 10, "clan_match": 0.7,
-                      "no_clan": False, "no_clan_bonus": 0.5}  # no user wildcards survive
+                      "no_clan": False, "no_clan_bonus": 0.5,
+                      "name_match": 0.45}  # no user wildcards survive
     assert response.json()["results"][0]["rating"] == 2400
 
 
 def test_search_by_clan_when_the_name_is_all_emoji():
-    app, _, conn = make(rows=[("#9QJ", "🔥🔥🔥", "Persian Warrior", None, 2079, True)])
+    app, _, conn = make(rows=[("#9QJ", "🔥🔥🔥", "Persian Warrior", None, 2079, True, False)])
     response = app.get("/api/search", params={"name": "🔥🔥", "clan": "Persian War%_"})
     assert response.status_code == 200 and response.json()["results"][0]["name"] == "🔥🔥🔥"
     assert response.json()["results"][0]["clan_match"] is True
@@ -255,11 +256,12 @@ def test_search_by_clan_when_the_name_is_all_emoji():
 
 
 def test_search_no_clan_clue_only_applies_to_a_name_search():
-    app, _, conn = make(rows=[("#9QJ", "Dipo", None, None, 2079, True)])
+    app, _, conn = make(rows=[("#9QJ", "Dipo", None, None, 2079, True, True)])
     response = app.get("/api/search", params={"name": "dipo", "no_clan": "1"})
     assert response.status_code == 200
     assert response.json()["results"][0] == {"tag": "#9QJ", "name": "Dipo", "clan": None,
-                                             "rank": None, "rating": 2079, "clan_match": True}
+                                             "rank": None, "rating": 2079, "clan_match": True,
+                                             "name_match": True}
     assert conn.executed[1]["no_clan"] is True
     app.get("/api/search", params={"name": "dipo", "clan": "persian", "no_clan": "1"})
     assert conn.executed[3]["no_clan"] is False          # a typed clan wins
@@ -797,6 +799,29 @@ class ClanClient(FakeClient):
                 {"tag": "bad tag", "name": "x", "lastSeen": _seen(0)},
             ]
         return [{"tag": "#LLL", "name": "Someone", "lastSeen": _seen(40)}]
+
+
+def test_live_clan_lookup_with_a_name_checks_more_clans_and_stops_when_found():
+    class ManyClans(ClanClient):
+        def search_clans(self, name, limit=10):
+            self.calls.append(("clans", name, limit))
+            return [{"tag": f"#{a}{b}{a}{b}", "name": "YEET"} for a in "289" for b in "PQRUV"]
+
+        def get_clan_members(self, tag):
+            self.calls.append(("members", tag))
+            if tag == "#9P9P":   # the 11th YEET clan: past the old limit of 5
+                return [{"tag": "#V8Q9LV8GC", "name": "DaHveed", "lastSeen": _seen(1)}]
+            return [{"tag": "#LLL", "name": "Matt", "lastSeen": _seen(2)}]
+
+    client = ManyClans()
+    app, _, _ = make(client=client)
+    data = app.get("/api/clan-lookup", params={"clan": "YEET", "name": "DaHveed"}).json()
+    assert [p["name"] for p in data["players"]] == ["DaHveed"] and data["players"][0]["active"]
+    assert len(data["clans_checked"]) == 11                         # stopped once found
+    assert ("clans", "YEET", 25) in client.calls                     # asked for more clans
+    # Without a name, still only the first 5 clans.
+    client.calls.clear()
+    assert len(app.get("/api/clan-lookup", params={"clan": "YEET"}).json()["clans_checked"]) == 5
 
 
 def test_live_clan_lookup_puts_whoever_is_online_first():
