@@ -169,7 +169,7 @@ def create_app(services: Services, *, hsts: bool = False) -> FastAPI:
     def decks(tag: str) -> dict[str, Any]:
         tag = tag_or_400(tag)
         log_entries = upstream("battlelog", tag)
-        # Decks per mode (Ranked, 20-win challenge), plus what they've been
+        # Decks per mode (Ranked, Trophy Road, 20-win challenge), plus what they've been
         # playing overall so an empty tab can say why.
         return {"tag": tag, "modes": recent_decks(tag, log_entries),
                 "recent_modes": battle_mix(log_entries)}
@@ -179,7 +179,7 @@ def create_app(services: Services, *, hsts: bool = False) -> FastAPI:
         tag = tag_or_400(tag)
         found = last_opponent(tag, upstream("battlelog", tag))
         if found is None:
-            raise HTTPException(404, "No recent Ranked or 20-win challenge battles")
+            raise HTTPException(404, "No recent Ranked, Trophy Road or 20-win challenge battles")
         your = card_ids(found["your_deck"]["cards"])
         theirs = card_ids(found["deck"]["cards"])
         if services.predictor is not None and min(len(your), len(theirs)) >= 7:

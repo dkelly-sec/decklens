@@ -15,7 +15,7 @@ from typing import Any, Callable, Sequence
 
 from ..archetypes import ArchetypeModel
 from ..battles import (
-    CHALLENGE_GAME_MODE, Battle, opt_int, parse_battle_log, parse_battle_time,
+    CHALLENGE_GAME_MODE, Battle, is_trophy_road, opt_int, parse_battle_log, parse_battle_time,
 )
 from ..names import fuzzy_score, search_key
 from ..model import LinearMatchupModel, wilson_interval
@@ -24,19 +24,23 @@ from ..validation import InvalidTagError, normalize_tag
 # Game modes DeckLens scouts. Checked against a real battle log (Oct 2026):
 #   Ranked:            type "pathOfLegend", game mode "Ranked1v1_NewArena"
 #   20-win challenge:  type "trail", game mode "Challenge_AllCards_EventDeck_NoSet"
-# "trail" is also used for Trophy Road ("Ladder") and friendlies, so challenge
-# games are picked out by their game mode name, not their type.
+#   Trophy Road:       game mode "Ladder", seen as type "trail" (and "PvP")
+# "trail" is shared by Trophy Road, the challenge and friendlies, so modes are
+# picked out by their game mode name, not their type.
 RANKED = "pathOfLegend"
-MODES = ("ranked", "challenge")
-SCOUTED_TYPES = frozenset({RANKED, "trail"})
+MODES = ("ranked", "trophy", "challenge")
+SCOUTED_TYPES = frozenset({RANKED, "trail", "PvP"})
 
 
 def mode_of(battle: Battle) -> str | None:
-    """"ranked", "challenge" (the 20-win challenge) or None for anything else."""
+    """"ranked", "trophy" (Trophy Road), "challenge" (the 20-win challenge) or
+    None for anything else (friendlies, other events)."""
     if battle.battle_type == RANKED:
         return "ranked"
     if battle.battle_type == "trail" and battle.game_mode == CHALLENGE_GAME_MODE:
         return "challenge"
+    if is_trophy_road(battle.battle_type, battle.game_mode):
+        return "trophy"
     return None
 
 
@@ -168,8 +172,8 @@ def _side(battle: Battle, tag: str) -> tuple[int, int] | None:
 
 
 def last_opponent(tag: str, battle_log: list[dict[str, Any]]) -> dict[str, Any] | None:
-    """The opponent from this player's most recent Ranked or 20-win challenge
-    battle (logs are newest first)."""
+    """The opponent from this player's most recent Ranked, Trophy Road or
+    20-win challenge battle (logs are newest first)."""
     tag = normalize_tag(tag)
     for b in _scouted(battle_log):
         sides = _side(b, tag)

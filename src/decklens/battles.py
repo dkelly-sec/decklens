@@ -28,6 +28,15 @@ DECK_SIZE = 8
 # The 20-win challenge: type "trail" (shared with Trophy Road and friendlies),
 # told apart by this game mode name (checked against a real battle log, Oct 2026).
 CHALLENGE_GAME_MODE = "Challenge_AllCards_EventDeck_NoSet"
+# Trophy Road: game mode "Ladder" (variants "Ladder_..."), seen as type "trail"
+# and, in older logs, "PvP" (which may carry no game mode at all).
+TROPHY_ROAD_MODE = "Ladder"
+
+
+def is_trophy_road(battle_type: str, game_mode: str | None) -> bool:
+    mode = game_mode or ""
+    return (mode == TROPHY_ROAD_MODE or mode.startswith(TROPHY_ROAD_MODE + "_")
+            or (battle_type == "PvP" and not mode))
 
 
 @dataclass(frozen=True)

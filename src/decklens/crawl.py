@@ -30,7 +30,13 @@ from datetime import datetime, timedelta, timezone
 from typing import Callable, Iterable, Protocol
 
 from .api_client import ApiError, ClashRoyaleClient, NotFoundError
-from .battles import CHALLENGE_GAME_MODE, Battle, BattlePlayer, parse_battle_log
+from .battles import (
+    CHALLENGE_GAME_MODE,
+    Battle,
+    BattlePlayer,
+    is_trophy_road,
+    parse_battle_log,
+)
 from .config import ConfigError, load_settings
 from .rankings import RankEntry, parse_leaderboard
 from .validation import InvalidTagError, normalize_tag
@@ -57,7 +63,7 @@ class CrawlStats:
     battles_seen: int = 0
     battles_new: int = 0
     discovered: int = 0
-    challenge_players: int = 0  # 20-win challenge players added to the name index
+    indexed_players: int = 0  # 20-win challenge / Trophy Road players added to the name index
     invalid_seeds: int = 0
     skipped_types: dict[str, int] = field(default_factory=dict)
 
@@ -122,7 +128,7 @@ def crawl(
             stats.skipped_types[kind] = stats.skipped_types.get(kind, 0) + n
         stats.battles_seen += len(battles)
         stats.battles_new += store.save_battles(battles)
-        stats.challenge_players += _index_challenge_players(store, entries)
+        stats.indexed_players += _index_side_mode_players(store, entries)
         store.mark_crawled(tag)
 
         for battle in battles:
@@ -176,14 +182,15 @@ def fetch_leaderboard(
 _TRAIL = frozenset({"trail"})
 
 
-def _index_challenge_players(store: Store, entries: list) -> int:
-    """Add both sides of 20-win challenge games to the name index (names and
-    clans only; the games themselves aren't stored). Alt accounts that never
-    reach a leaderboard become searchable once they've met a crawled player."""
+def _index_side_mode_players(store: Store, entries: list) -> int:
+    """Add both sides of 20-win challenge and Trophy Road games to the name
+    index (names and clans only; the games themselves aren't stored). Alt
+    accounts that never reach a leaderboard become searchable once they've met
+    a crawled player."""
     battles, _ = parse_battle_log(entries, types=_TRAIL, allow_hidden_card=True)
     seen: dict[str, tuple[BattlePlayer, datetime]] = {}
     for b in battles:
-        if b.game_mode == CHALLENGE_GAME_MODE:
+        if b.game_mode == CHALLENGE_GAME_MODE or is_trophy_road(b.battle_type, b.game_mode):
             for p in b.players:
                 if p.tag not in seen or seen[p.tag][1] < b.battle_time:
                     seen[p.tag] = (p, b.battle_time)
@@ -355,7 +362,10 @@ def main(argv: list[str] | None = None) -> int:
         import psycopg
 
         from .storage import (
-            backfill_clan_keys, players_due_for_crawl, prune_stale_players, save_players,
+            backfill_clan_keys,
+            players_due_for_crawl,
+            prune_stale_players,
+            save_players,
             save_rank_entries,
         )
 
@@ -398,10 +408,10 @@ def main(argv: list[str] | None = None) -> int:
                               max_players=args.max_players, pause=args.pause)
                 log.info(
                     "done: %d players crawled, %d battles seen, %d new, "
-                    "%d new players discovered, %d challenge players indexed, "
+                    "%d new players discovered, %d challenge / Trophy Road players indexed, "
                     "%d not found, %d failures",
                     stats.players_crawled, stats.battles_seen, stats.battles_new,
-                    stats.discovered, stats.challenge_players, stats.not_found, stats.failures,
+                    stats.discovered, stats.indexed_players, stats.not_found, stats.failures,
                 )
                 if stats.skipped_types:
                     log.info("skipped battle types: %s", stats.skipped_types)

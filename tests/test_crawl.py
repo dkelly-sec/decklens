@@ -250,7 +250,7 @@ def test_invalid_seeds_are_counted_and_reported(caplog):
     assert "ignored 2 seeds" in caplog.text
 
 
-def test_challenge_opponents_go_into_the_name_index_but_their_games_are_not_stored():
+def test_challenge_and_trophy_road_opponents_go_into_the_name_index_only():
     challenge = ranked_battle("#2PP", "#UUU", kind="trail", minute=5) | {
         "gameMode": {"id": 72000474, "name": "Challenge_AllCards_EventDeck_NoSet"}}
     challenge["opponent"][0]["clan"] = {"tag": "#CLAN", "name": "Eatropa Theotôn"}
@@ -258,7 +258,7 @@ def test_challenge_opponents_go_into_the_name_index_but_their_games_are_not_stor
         "gameMode": {"id": 72000006, "name": "Ladder"}}
     client = FakeClient({"#2PP": [challenge, trophy_road, ranked_battle("#2PP", "#9QJ", 50)]})
     stats, store, _ = run(client, [(1, "#2PP")], max_players=1)
-    assert stats.challenge_players == 2 and stats.battles_new == 1      # only the ranked game stored
-    assert {t for t, _, _ in store.seen_players} == {"#2PP", "#UUU"}     # Trophy Road ignored
+    assert stats.indexed_players == 3 and stats.battles_new == 1        # only the ranked game stored
+    assert {t for t, _, _ in store.seen_players} == {"#2PP", "#UUU", "#LLL"}  # Trophy Road too
     assert ("#UUU", "Eatropa Theotôn") in {(t, c) for t, c, _ in store.seen_players}
     assert "#UUU" not in client.calls                                    # not crawled, just indexed

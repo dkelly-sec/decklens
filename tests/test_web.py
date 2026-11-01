@@ -213,7 +213,8 @@ def test_opponent_recent_decks():
     data = app.get("/api/players/%239QJ/decks").json()
     ranked = data["modes"]["ranked"]
     assert ranked[0]["games"] == 2 and ranked[0]["wins"] == 0
-    assert data["modes"]["challenge"] == [] and data["recent_modes"] == {"Ranked": 2}
+    assert data["modes"]["challenge"] == [] and data["modes"]["trophy"] == []
+    assert data["recent_modes"] == {"Ranked": 2}
 
 
 def test_last_opponent_without_ranked_battles():
@@ -445,14 +446,15 @@ def test_no_ranked_decks_explains_what_they_played_instead():
                                          battle(3, kind="trail"), {"type": "<b>new</b>"}]
     app, _, _ = make(client=client)
     data = app.get("/api/players/%239QJ/decks").json()
-    assert data["modes"] == {"ranked": [], "challenge": []}
+    assert data["modes"]["ranked"] == [] and data["modes"]["challenge"] == []
+    assert [d["games"] for d in data["modes"]["trophy"]] == [2]       # "PvP" is Trophy Road
     assert data["recent_modes"] == {"Trophy Road": 2, "Other challenges": 1, "Other modes": 1}
 
 
 CHALLENGE = {"id": 72000474, "name": "Challenge_AllCards_EventDeck_NoSet"}
 
 
-def test_challenge_decks_get_their_own_tab_and_other_trail_modes_are_ignored():
+def test_challenge_and_trophy_road_decks_get_their_own_tabs():
     def challenge(minute, me_won=True):
         return battle(minute, me_won=me_won, kind="trail") | {"gameMode": CHALLENGE}
 
@@ -471,10 +473,26 @@ def test_challenge_decks_get_their_own_tab_and_other_trail_modes_are_ignored():
     assert data["modes"]["ranked"][0]["deck"]["summary"]["maxed"] == 8     # ranked keeps levels
     assert data["modes"]["challenge"][0]["wins"] == 2
     assert [d["games"] for d in data["modes"]["ranked"]] == [1]
+    trophy = data["modes"]["trophy"]
+    assert [d["games"] for d in trophy] == [1] and trophy[0]["wins"] == 1
+    assert trophy[0]["deck"]["summary"]["maxed"] == 8                      # real card levels
+    assert "fixed_levels" not in trophy[0]["deck"]["summary"]
     assert data["recent_modes"] == {"20-win challenge": 3, "Trophy Road": 1, "Ranked": 1}
 
     last = app.get("/api/players/%232PP/last-opponent").json()
-    assert last["mode"] == "challenge" and last["your_result"] == "won"  # Trophy Road skipped
+    assert last["mode"] == "trophy" and last["your_result"] == "won"     # newest: Trophy Road
+
+
+def test_friendlies_and_other_events_stay_out_of_the_tabs():
+    friendly = battle(4, kind="trail") | {"gameMode": {"name": "Friendly"}}
+    other_event = battle(3, kind="trail") | {"gameMode": {"name": "Challenge_Touchdown"}}
+    ladder_event = battle(2, kind="PvP") | {"gameMode": {"name": "Ladder_GoldRush"}}
+    client = FakeClient()
+    client.get_battle_log = lambda tag: [friendly, other_event, ladder_event]
+    app, _, _ = make(client=client)
+    modes = app.get("/api/players/%232PP/decks").json()["modes"]
+    assert modes["challenge"] == [] and modes["ranked"] == []
+    assert [d["games"] for d in modes["trophy"]] == [1]                  # Ladder variants count
 
 
 def test_last_opponent_reports_ranked_mode(predictor):
@@ -489,7 +507,7 @@ def test_odd_game_mode_values_are_ignored_safely():
                                          battle(3, kind="trail") | {"gameMode": None}]
     app, _, _ = make(client=client)
     r = app.get("/api/players/%232PP/decks")
-    assert r.status_code == 200 and r.json()["modes"] == {"ranked": [], "challenge": []}
+    assert r.status_code == 200 and r.json()["modes"] == {"ranked": [], "trophy": [], "challenge": []}
 
 
 def test_predict_accepts_a_deck_with_a_hidden_hero(predictor):

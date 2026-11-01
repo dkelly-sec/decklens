@@ -239,6 +239,9 @@ function matchupBox(m, label, mode) {
   if (mode === "challenge") {
     box.append(el("p", "These numbers come from Ranked games (challenge games aren't collected), " +
       "so treat them as a rough guide for the challenge.", "note"));
+  } else if (mode === "trophy") {
+    box.append(el("p", "These numbers come from Ranked games (Trophy Road games aren't collected), " +
+      "so treat them as a rough guide. Card levels matter more on Trophy Road.", "note"));
   }
   if (m.key_cards && m.key_cards.length) {
     const cards = el("ul", null, "key-cards");
@@ -269,12 +272,14 @@ async function showMe(tag) {
   try {
     const me = await api("/api/players/" + tagPath(tag));
     state.me = me;
+    state.myDecks = undefined;  // your Trophy Road / challenge decks: fetched again for this player
     storageSet("decklens.myTag", me.tag);
     const parts = [playerLine(me)];
     if (me.deck.cards.length) parts.push(el("p", "Current deck", "label"), deckView(me.deck));
     show(out, ...parts);
   } catch (error) {
     state.me = null;
+    state.myDecks = undefined;
     show(out, errorBox(error));
   }
 }
@@ -561,8 +566,8 @@ function setAutoScout(on) {
   }
 }
 
-const MODE_NAMES = { ranked: "Ranked", challenge: "20-win challenge" };
-const MODES = ["ranked", "challenge"];
+const MODE_NAMES = { ranked: "Ranked", trophy: "Trophy Road", challenge: "20-win challenge" };
+const MODES = ["ranked", "trophy", "challenge"];
 let tabCounter = 0;
 
 function emptyMessage(mode, recent) {
@@ -575,23 +580,24 @@ function emptyMessage(mode, recent) {
   return "No " + name + " games in their last " + total + " battles. Recently they've played: " + list + ".";
 }
 
-// Which of your decks to compare against: your current deck for Ranked, your
-// latest 20-win challenge deck (an event deck) for the challenge.
+// Which of your decks to compare against: your current deck for Ranked; for
+// Trophy Road and the 20-win challenge, your latest deck in that mode (you may
+// play a different deck there), falling back to your current deck.
+const MY_MODE_LABELS = { trophy: "Trophy Road", challenge: "challenge" };
+
 async function myDeckFor(mode) {
   if (mode === "ranked" || !state.me) {
     return state.me ? { deck: state.me.deck, label: "Your current deck vs this one" } : null;
   }
-  if (state.myChallenge === undefined) {
-    state.myChallenge = null;
-    try {
-      const mine = await api("/api/players/" + tagPath(state.me.tag) + "/decks");
-      const decks = (mine.modes && mine.modes.challenge) || [];
-      decks.sort((a, b) => String(b.last_played).localeCompare(String(a.last_played)));
-      if (decks.length) state.myChallenge = decks[0].deck;
-    } catch { /* fall back to the current deck below */ }
+  if (state.myDecks === undefined) {  // your own log, fetched once
+    state.myDecks = api("/api/players/" + tagPath(state.me.tag) + "/decks")
+      .then((mine) => mine.modes || {}).catch(() => ({}));
   }
-  if (state.myChallenge) return { deck: state.myChallenge, label: "Your latest challenge deck vs this one" };
-  return { deck: state.me.deck, label: "Your current deck vs this one (no recent challenge deck of yours found)" };
+  const decks = ((await state.myDecks)[mode] || []).slice();
+  decks.sort((a, b) => String(b.last_played).localeCompare(String(a.last_played)));
+  const name = MY_MODE_LABELS[mode] || "matching";
+  if (decks.length) return { deck: decks[0].deck, label: "Your latest " + name + " deck vs this one" };
+  return { deck: state.me.deck, label: "Your current deck vs this one (no recent " + name + " deck of yours found)" };
 }
 
 async function deckList(decks, mode) {
