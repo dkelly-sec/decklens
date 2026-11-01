@@ -9,6 +9,7 @@ browser, never as HTML.
 from __future__ import annotations
 
 from collections import Counter
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from dataclasses import dataclass
 from typing import Any, Callable, Sequence
@@ -318,8 +319,9 @@ class Predictor:
 CLANS_TO_CHECK = 5
 # With a name to look for, more same-named clans are worth checking: common
 # names ("YEET") are shared by many clans. Stops early once it finds them.
-CLANS_TO_CHECK_WITH_NAME = 12
-CLAN_SEARCH_LIMIT = 25
+CLANS_TO_CHECK_WITH_NAME = 40
+CLAN_SEARCH_LIMIT = 50
+CLANS_AT_ONCE = 8  # member lists fetched in parallel, a batch at a time
 STRONG_NAME_MATCH = 0.8
 ACTIVE_MINUTES = 15
 MAX_LIVE_RESULTS = 10
@@ -334,14 +336,39 @@ def _minutes_ago(raw: Any, now: datetime) -> int | None:
     return max(0, int((now - seen).total_seconds() // 60))
 
 
+def _live_members(members: list[dict[str, Any]], cname: str, name_key: str,
+                  now: datetime) -> list[dict[str, Any]]:
+    """One clan's members whose names resemble name_key (all of them if no name)."""
+    found = []
+    for m in members:
+        try:
+            mtag = normalize_tag(m.get("tag"))
+        except InvalidTagError:
+            continue
+        mname = _text(m.get("name"))
+        match = fuzzy_score(name_key, search_key(mname)) if name_key else 1.0
+        if match < NAME_MATCH_MIN:
+            continue  # typed name letters don't resemble this player's name
+        minutes = _minutes_ago(m.get("lastSeen"), now)
+        found.append({
+            "tag": mtag, "name": mname, "clan": cname, "rank": None, "rating": None,
+            "trophies": opt_int(m.get("trophies")),
+            "last_seen_minutes": minutes,
+            "active": minutes is not None and minutes <= ACTIVE_MINUTES,
+            "_match": match,
+        })
+    return found
+
+
 def live_clan_lookup(clans: list[dict[str, Any]], members_of: Callable[[str], list[dict[str, Any]]],
                      clan_name: str, name: str | None, now: datetime) -> dict[str, Any]:
     """Recently active members of the clans that best match clan_name.
 
     clans is the API's clan search result; members_of(tag) fetches one clan's
     members. Exact name matches are checked first, at most CLANS_TO_CHECK clans
-    (CLANS_TO_CHECK_WITH_NAME when a name was given, stopping at the first clan
-    with an online member whose name matches well).
+    (CLANS_TO_CHECK_WITH_NAME when a name was given, fetched CLANS_AT_ONCE at
+    a time and stopping after the batch that finds an online member whose name
+    matches well).
     """
     want = search_key(clan_name)
     valid = []
@@ -358,27 +385,15 @@ def live_clan_lookup(clans: list[dict[str, Any]], members_of: Callable[[str], li
     name_key = search_key(name) if name else ""
     players, checked = [], []
     limit = CLANS_TO_CHECK_WITH_NAME if name_key else CLANS_TO_CHECK
-    for tag, cname, _ in valid[:limit]:
-        if name_key and any(p["active"] and p["_match"] >= STRONG_NAME_MATCH for p in players):
-            break  # found them: no need to ask about more clans
-        checked.append(cname)
-        for m in members_of(tag):
-            try:
-                mtag = normalize_tag(m.get("tag"))
-            except InvalidTagError:
-                continue
-            mname = _text(m.get("name"))
-            match = fuzzy_score(name_key, search_key(mname)) if name_key else 1.0
-            if match < NAME_MATCH_MIN:
-                continue  # typed name letters don't resemble this player's name
-            minutes = _minutes_ago(m.get("lastSeen"), now)
-            players.append({
-                "tag": mtag, "name": mname, "clan": cname, "rank": None, "rating": None,
-                "trophies": opt_int(m.get("trophies")),
-                "last_seen_minutes": minutes,
-                "active": minutes is not None and minutes <= ACTIVE_MINUTES,
-                "_match": match,
-            })
+    todo = valid[:limit]
+    with ThreadPoolExecutor(max_workers=CLANS_AT_ONCE) as pool:
+        for start in range(0, len(todo), CLANS_AT_ONCE):
+            if name_key and any(p["active"] and p["_match"] >= STRONG_NAME_MATCH for p in players):
+                break  # found them: no need to ask about more clans
+            batch = todo[start:start + CLANS_AT_ONCE]
+            for (tag, cname, _), members in zip(batch, pool.map(lambda c: members_of(c[0]), batch)):
+                checked.append(cname)
+                players.extend(_live_members(members, cname, name_key, now))
     # Best name match first (when a name was typed), then most recently online.
     players.sort(key=lambda p: (-round(p["_match"], 1), p["last_seen_minutes"] is None,
                                 p["last_seen_minutes"] or 0))

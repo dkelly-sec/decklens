@@ -365,6 +365,7 @@ function resultList(players) {
     // Sure it's them: online right now, or in the clan read off the screen with
     // a name like the one read (name_match is null when no name was given).
     button.dataset.confident = String(Boolean(r.active || (r.clan_match && r.name_match !== false)));
+    button.dataset.nameMatch = String(r.name_match !== false);
     button.append(playerLine(r, { showNoClan: "clan" in r }));
     button.addEventListener("click", () => showOpponentDecks(r, item));
     item.append(button);
@@ -408,11 +409,15 @@ const NOT_KNOWN_NO_CLAN = "They're probably not in DeckLens yet, and without a c
   "can't be asked (it only searches by clan). After the battle, \u201cScout my last opponent\u201d shows their deck.";
 
 // Auto-scout picks the player for you: the first confident match (in the clan
-// that was read, or online right now), else the top result as a best guess.
+// that was read, or online right now), else the top result with a similar name
+// as a best guess, else nobody.
 // Results are already sorted best-first. You can still tap someone else.
 function autoOpen(out, allowGuess = true) {
   const buttons = [...out.querySelectorAll(".result-button")];
-  const pick = buttons.find((b) => b.dataset.confident === "true") || (allowGuess ? buttons[0] : null);
+  // A best guess must at least have a name like the one read: a clanmate
+  // with a different name is never them.
+  const pick = buttons.find((b) => b.dataset.confident === "true") ||
+    (allowGuess ? buttons.find((b) => b.dataset.nameMatch !== "false") : null);
   if (!pick) return;
   const sure = pick.dataset.confident === "true";
   for (const b of buttons) b.classList.remove("auto-picked");

@@ -805,11 +805,11 @@ def test_live_clan_lookup_with_a_name_checks_more_clans_and_stops_when_found():
     class ManyClans(ClanClient):
         def search_clans(self, name, limit=10):
             self.calls.append(("clans", name, limit))
-            return [{"tag": f"#{a}{b}{a}{b}", "name": "YEET"} for a in "289" for b in "PQRUV"]
+            return [{"tag": f"#{a}{b}{a}{b}", "name": "YEET"} for a in "289PQ" for b in "PQRUVY"]
 
         def get_clan_members(self, tag):
             self.calls.append(("members", tag))
-            if tag == "#9P9P":   # the 11th YEET clan: past the old limit of 5
+            if tag == "#9P9P":   # the 13th YEET clan: past the old limits of 5 and 12
                 return [{"tag": "#V8Q9LV8GC", "name": "DaHveed", "lastSeen": _seen(1)}]
             return [{"tag": "#LLL", "name": "Matt", "lastSeen": _seen(2)}]
 
@@ -817,8 +817,8 @@ def test_live_clan_lookup_with_a_name_checks_more_clans_and_stops_when_found():
     app, _, _ = make(client=client)
     data = app.get("/api/clan-lookup", params={"clan": "YEET", "name": "DaHveed"}).json()
     assert [p["name"] for p in data["players"]] == ["DaHveed"] and data["players"][0]["active"]
-    assert len(data["clans_checked"]) == 11                         # stopped once found
-    assert ("clans", "YEET", 25) in client.calls                     # asked for more clans
+    assert len(data["clans_checked"]) == 16                     # stopped after the batch that found them
+    assert ("clans", "YEET", 50) in client.calls                     # asked for more clans
     # Without a name, still only the first 5 clans.
     client.calls.clear()
     assert len(app.get("/api/clan-lookup", params={"clan": "YEET"}).json()["clans_checked"]) == 5
