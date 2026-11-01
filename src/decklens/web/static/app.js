@@ -328,6 +328,17 @@ async function lookUpMe(event) {
 
 // --- last opponent -----------------------------------------------------------
 
+function lastOpponentParts(opp) {
+  const parts = [
+    playerLine(opp),
+    el("p", (MODE_NAMES[opp.mode] || "Battle") + " · You " + opp.your_result + " this one.", "detail"),
+    el("p", "Their deck", "label"),
+    deckView(opp.deck),
+  ];
+  if (opp.matchup) parts.push(matchupBox(opp.matchup, "Your deck vs theirs", opp.mode));
+  return parts;
+}
+
 async function scoutLast() {
   const out = document.getElementById("last-result");
   if (!state.me) {
@@ -337,14 +348,7 @@ async function scoutLast() {
   show(out, el("p", "Checking your battle log…", "muted"));
   try {
     const opp = await api("/api/players/" + tagPath(state.me.tag) + "/last-opponent");
-    const parts = [
-      playerLine(opp),
-      el("p", (MODE_NAMES[opp.mode] || "Battle") + " · You " + opp.your_result + " this one.", "detail"),
-      el("p", "Their deck", "label"),
-      deckView(opp.deck),
-    ];
-    if (opp.matchup) parts.push(matchupBox(opp.matchup, "Your deck vs theirs", opp.mode));
-    show(out, ...parts);
+    show(out, ...lastOpponentParts(opp));
   } catch (error) {
     show(out, errorBox(error));
   }
@@ -495,7 +499,56 @@ async function findOpponent(event, options = {}) {
 
 // --- auto-scout (screen watcher) -------------------------------------------
 
-const auto = { lastId: null, timer: null };
+const auto = { lastId: null, timer: null, afterBattle: null, afterToken: 0 };
+const AFTER_BATTLE_TRIES = 12;      // your battle log can take a minute or two to update
+const AFTER_BATTLE_WAIT_MS = 10000;
+
+function lastOpponentNow() {
+  return api("/api/players/" + tagPath(state.me.tag) + "/last-opponent");
+}
+
+// The watcher saw a battle but couldn't read anything in the opponent's corner
+// (a script the text reader doesn't know, like Arabic). Remember who your last
+// opponent was before this battle, so the new one can be spotted afterwards.
+function battleUnreadable(out) {
+  if (!state.me) {
+    auto.afterBattle = null;
+    show(out, el("p", "In a battle, but their name can't be read (letters the screen reader doesn't " +
+      "know, like Arabic, or emoji). Look yourself up under You, and DeckLens will show their deck " +
+      "after the battle.", "hint"));
+    return;
+  }
+  auto.afterBattle = { before: lastOpponentNow().then((o) => o.time, () => null) };
+  show(out, el("p", "In a battle, but their name can't be read (letters the screen reader doesn't " +
+    "know, like Arabic, or emoji). Their deck will show here when the battle ends.", "hint"));
+}
+
+async function showAfterBattle(out) {
+  const token = ++auto.afterToken;
+  const before = await auto.afterBattle.before;
+  auto.afterBattle = null;
+  show(out, el("p", "Battle over. Getting your opponent from your battle log…", "muted"));
+  for (let attempt = 0; attempt < AFTER_BATTLE_TRIES; attempt++) {
+    if (attempt) await new Promise((r) => setTimeout(r, AFTER_BATTLE_WAIT_MS));
+    if (token !== auto.afterToken) return;  // a newer battle took over
+    let opp = null;
+    try {
+      opp = await lastOpponentNow();
+    } catch { /* not in the log yet, or offline for a moment */ }
+    if (opp && opp.time !== before) {
+      const more = el("button", "See their recent decks", "link-button");
+      more.type = "button";
+      const holder = el("div");
+      more.addEventListener("click", () => showOpponentDecks(opp, holder));
+      show(out, el("p", "Your opponent (their name couldn't be read during the battle):", "hint"),
+        ...lastOpponentParts(opp), more, holder);
+      return;
+    }
+  }
+  if (token === auto.afterToken) {
+    show(out, el("p", "Your battle log hasn't updated yet. Try \u201cScout my last opponent\u201d in a minute.", "muted"));
+  }
+}
 
 // One line saying whether the screen watcher can see your phone, and why not.
 const WATCHER_STATES = {
@@ -515,9 +568,11 @@ function showWatcherStatus(watcher, latest) {
     : ["off", "Not connected: the screen watcher isn't running"];
   let line = text;
   if (kind === "on" || kind === "warn") {
-    line += latest ? " · last opponent: " + (latest.name || "name unreadable") +
-      (latest.clan ? " (" + latest.clan + ")" : "") + (latest.rating ? ", rated " + latest.rating : "")
-      : " · waiting for a battle";
+    if (latest && latest.kind === "unreadable") line += " · in a battle: their name can't be read";
+    else if (latest && latest.kind !== "ended") {
+      line += " · last opponent: " + (latest.name || "name unreadable") +
+        (latest.clan ? " (" + latest.clan + ")" : "") + (latest.rating ? ", rated " + latest.rating : "");
+    } else line += " · waiting for a battle";
   }
   show(status, el("span", null, "status-dot " + kind), el("span", line));
 }
@@ -535,6 +590,17 @@ async function pollWatcher() {
   const fresh = auto.lastId === null ? latest.age_seconds < 60 : latest.id !== auto.lastId;
   auto.lastId = latest.id;
   if (!fresh) return;
+  const out = document.getElementById("find-result");
+  if (latest.kind === "unreadable") {
+    if (out.scrollIntoView) out.scrollIntoView({ behavior: "smooth", block: "start" });
+    battleUnreadable(out);
+    return;
+  }
+  if (latest.kind === "ended") {
+    if (auto.afterBattle) await showAfterBattle(out);
+    return;
+  }
+  auto.afterBattle = null;  // this battle's opponent was read
   document.getElementById("find-name").value = latest.name || "";
   document.getElementById("find-clan").value = latest.clan || "";
   const results = document.getElementById("find-result");

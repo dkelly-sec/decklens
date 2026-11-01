@@ -226,7 +226,8 @@ def run_watcher(board: Any, stop: threading.Event) -> None:
         titles = [remembered] if isinstance(remembered, str) and remembered else []
         grab = window_grabber(titles, on_status=status)
         watcher = Watcher(grab, text_reader(),
-                          lambda found: board.report(SCREEN_KEY, *found))
+                          lambda found: board.report(SCREEN_KEY, *found),
+                          event=lambda kind: board.report(SCREEN_KEY, None, None, kind=kind))
     except ImportError as exc:  # screen capture / text recognition packages missing
         log.warning("screen watcher not installed (%s): pip install -e \".[watcher]\"", exc.name)
         return keep_saying("unavailable", "screen reader not installed")

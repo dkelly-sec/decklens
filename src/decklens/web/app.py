@@ -75,6 +75,7 @@ class LoginRequest(BaseModel):
 class WatchReport(BaseModel):
     """What the screen watcher read off the battle screen: text only."""
     model_config = ConfigDict(extra="forbid")
+    kind: Literal["opponent", "unreadable", "ended"] = "opponent"
     name: str | None = Field(default=None, max_length=40)  # None: couldn't be read
     clan: str | None = Field(default=None, max_length=50)
     rating: int | None = Field(default=None, ge=0, le=20_000)
@@ -240,6 +241,9 @@ def create_app(services: Services, *, hsts: bool = False) -> FastAPI:
 
     @app.post("/api/watch", dependencies=[*signed_in, Depends(limit("watch"))])
     def watch_report(body: WatchReport, request: Request) -> dict[str, Any]:
+        if body.kind != "opponent":  # a battle we couldn't read, or its end: no text
+            entry = services.watch.report(watch_key(request), None, None, kind=body.kind)
+            return {"id": entry["id"]}
         name, clan = (body.name or "").strip() or None, (body.clan or "").strip() or None
         if not (name or clan):
             raise HTTPException(400, "No name or clan in the report")

@@ -38,10 +38,12 @@ class WatchBoard:
         self._lock = threading.Lock()
 
     def report(self, user: str, name: str | None, clan: str | None,
-               rating: int | None = None) -> dict[str, Any]:
-        """name may be None: read but unreadable (symbols), clan or rating still help."""
-        entry = {"id": next(self._ids), "name": name, "clan": clan, "rating": rating,
-                 "at": self.clock()}
+               rating: int | None = None, *, kind: str = "opponent") -> dict[str, Any]:
+        """kind "opponent": what was read (name may be None if only the clan
+        could be read). "unreadable": in a battle, nothing in the opponent's
+        corner could be read. "ended": that unreadable battle is over."""
+        entry = {"id": next(self._ids), "kind": kind, "name": name, "clan": clan,
+                 "rating": rating, "at": self.clock()}
         with self._lock:
             if len(self._latest) >= MAX_USERS and user not in self._latest:
                 self._latest.clear()  # bounded memory: forget everyone rather than grow

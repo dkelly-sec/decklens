@@ -98,7 +98,7 @@ def test_crop_uses_fractions_of_the_phone_screen():
 
 # --- the watch loop, with a fake screen ---------------------------------------------
 
-BATTLE, LOADING, OTHER_BATTLE = 1, 2, 3
+BATTLE, LOADING, OTHER_BATTLE, ARABIC = 1, 2, 3, 4
 
 
 def frame(kind):
@@ -111,6 +111,9 @@ def fake_ocr(part):
         return []
     if top_right:
         return REAL_TOP_RIGHT
+    if kind == ARABIC:  # what RapidOCR made of an Arabic name and clan on a real iPad
+        return [[[[93, 30], [130, 30], [130, 60], [93, 60]], "92", 0.52],
+                [[[93, 160], [130, 160], [130, 190], [93, 190]], "30", 0.65]]
     name = "FIOReNt" if kind == BATTLE else "Kaua"
     return [[[[93, 102], [330, 102], [330, 150], [93, 150]], name, 0.8],
             [[[99, 161], [190, 161], [190, 195], [99, 195]], "Sunny", 0.8]]
@@ -135,6 +138,47 @@ def test_rearms_after_the_battle_ends():
     assert run(kinds) == [Sighting("FIOReNt", "Sunny"), Sighting("Kaua", "Sunny")]
     # A brief glitch (one missed timer read) doesn't count as a new battle.
     assert run([BATTLE, BATTLE, LOADING, BATTLE, BATTLE]) == [Sighting("FIOReNt", "Sunny")]
+
+
+def run_events(kinds, **kw):
+    frames = iter(frame(k) for k in kinds)
+    sent, events = [], []
+    watcher = Watcher(lambda: next(frames), fake_ocr, sent.append, event=events.append, **kw)
+    for _ in kinds:
+        watcher.step()
+    return sent, events
+
+
+def test_unreadable_battle_is_flagged_once_and_its_end_reported():
+    kinds = [ARABIC] * 8 + [LOADING] * 3
+    sent, events = run_events(kinds)
+    assert sent == [] and events == ["unreadable", "ended"]
+    # Readable battles don't trigger either note.
+    sent, events = run_events([BATTLE] * 8 + [LOADING] * 3)
+    assert sent == [Sighting("FIOReNt", "Sunny")] and events == []
+    # A few unreadable looks (loading in) followed by a readable name: no note.
+    sent, events = run_events([ARABIC] * 3 + [BATTLE] * 3 + [LOADING] * 3)
+    assert len(sent) == 1 and events == []
+
+
+def test_a_failed_note_never_stops_the_watcher():
+    frames = iter(frame(k) for k in [ARABIC] * 6 + [LOADING] * 3 + [BATTLE] * 2)
+
+    def broken(kind):
+        raise OSError("network blip")
+
+    sent = []
+    watcher = Watcher(lambda: next(frames), fake_ocr, sent.append, event=broken)
+    for _ in range(11):
+        watcher.step()
+    assert sent == [Sighting("FIOReNt", "Sunny")]      # the next battle still works
+
+
+def test_client_sends_battle_notes_as_text_only():
+    session = FakeSession(FakeResponse(200, {"id": 3}))
+    client = DeckLensClient("http://127.0.0.1:8000", session=session)
+    client.event("unreadable")
+    assert session.posts == [("http://127.0.0.1:8000/api/watch", {"kind": "unreadable"})]
 
 
 def test_failed_send_is_retried_next_look():

@@ -923,6 +923,18 @@ def test_watcher_report_with_unreadable_name_keeps_clan_and_rating():
     assert (latest["name"], latest["clan"], latest["rating"]) == (None, "STS", 2216)
 
 
+def test_watcher_battle_notes_carry_no_text():
+    app, _, _ = make()
+    assert app.post("/api/watch", json={"kind": "unreadable", "name": "ignored"}).status_code == 200
+    latest = app.get("/api/watch").json()["latest"]
+    assert latest["kind"] == "unreadable" and latest["name"] is None and latest["clan"] is None
+    assert app.post("/api/watch", json={"kind": "ended"}).status_code == 200
+    assert app.get("/api/watch").json()["latest"]["kind"] == "ended"
+    assert app.post("/api/watch", json={"kind": "screenshot"}).status_code == 422
+    app.post("/api/watch", json={"name": "Kaua"})
+    assert app.get("/api/watch").json()["latest"]["kind"] == "opponent"
+
+
 def test_watcher_reports_expire():
     from decklens.web.watch import WatchBoard
 

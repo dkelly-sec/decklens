@@ -272,18 +272,38 @@ def crop(image: Any, region: tuple[float, float, float, float]) -> Any:
     return image[int(top * h):int(bottom * h), int(left * w):int(right * w)]
 
 
+UNREADABLE_AFTER = 5  # looks in a battle without a readable name or clan
+
+
 class Watcher:
-    """Reports each opponent once per battle, after two reads agree."""
+    """Reports each opponent once per battle, after two reads agree.
+
+    If a battle goes on but nothing in the opponent's corner can be read
+    (names in scripts the text reader doesn't know, like Arabic), it says so
+    once ("unreadable") and again when that battle ends ("ended"), so the page
+    can show the opponent from your battle log instead."""
 
     def __init__(self, grab: Callable[[], Any], ocr: Callable[[Any], Any],
                  send: Callable[[Sighting], None], *,
-                 confirm: int = 2, rearm_after: int = 3):
-        self.grab, self.ocr, self.send = grab, ocr, send
+                 event: Callable[[str], None] | None = None,
+                 confirm: int = 2, rearm_after: int = 3, unreadable_after: int = UNREADABLE_AFTER):
+        self.grab, self.ocr, self.send, self.event = grab, ocr, send, event
         self.confirm, self.rearm_after = confirm, rearm_after
+        self.unreadable_after = unreadable_after
         self.reported = False
         self.pending: Sighting | None = None
         self.agree = 0
         self.misses = 0
+        self.unread = 0          # looks in this battle with nothing readable
+        self.flagged = False     # said "unreadable" for this battle
+
+    def _tell(self, kind: str) -> None:
+        if self.event is None:
+            return
+        try:
+            self.event(kind)
+        except OSError as exc:  # only a hint for the page: never stop watching over it
+            log.warning("couldn't tell DeckLens the battle %s: %s", kind, type(exc).__name__)
 
     def _read(self, image: Any, region: tuple[float, float, float, float]) -> list[TextLine]:
         part = enlarge(crop(image, region))
@@ -296,14 +316,22 @@ class Watcher:
         if image is None or not in_battle(self._read(image, TOP_RIGHT)):
             self.misses += 1
             if self.misses >= self.rearm_after:  # battle over: ready for the next one
+                if self.flagged:
+                    self._tell("ended")
                 self.reported, self.pending, self.agree = False, None, 0
+                self.unread, self.flagged = 0, False
             return None
         self.misses = 0
-        if self.reported:
+        if self.reported or self.flagged:
             return None
         found = read_opponent(self._read(image, TOP_LEFT))
         if found is None:
+            self.unread += 1
+            if self.unread >= self.unreadable_after:
+                self._tell("unreadable")
+                self.flagged = True
             return None
+        self.unread = 0
         if self.pending is not None and _same(found, self.pending):
             self.agree += 1
         else:
@@ -367,6 +395,13 @@ class DeckLensClient:
             detail = r.json().get("detail") if r.headers.get("content-type", "").startswith(
                 "application/json") else None
             raise NeedLogin(detail or f"login failed (HTTP {r.status_code})")
+
+    def event(self, kind: str) -> None:
+        """A battle whose opponent can't be read ("unreadable"), or its end ("ended")."""
+        r = self.session.post(self.base + "/api/watch", timeout=10, json={"kind": kind})
+        if r.status_code == 401:
+            raise NeedLogin("session expired")
+        r.raise_for_status()
 
     def status(self, state: str, detail: str | None) -> None:
         r = self.session.post(self.base + "/api/watch/status", timeout=5,
@@ -649,7 +684,16 @@ def main(argv: list[str] | None = None) -> int:
             return box_grab()
     else:
         grab = window_grabber(titles, on_status=heartbeat)
-    watcher = Watcher(grab, text_reader(), send)
+    def event(kind: str) -> None:
+        try:
+            client.event(kind)
+        except NeedLogin:
+            print("DeckLens logged you out; log in again.")
+            log_in()
+            client.event(kind)
+        log.info("battle %s -> told DeckLens", kind)
+
+    watcher = Watcher(grab, text_reader(), send, event=event)
     log.info("watching your phone screen (Ctrl+C to stop). Tick Auto-scout on the DeckLens page.")
     try:
         while True:
