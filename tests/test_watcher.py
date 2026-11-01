@@ -324,6 +324,15 @@ def test_airplay_mirror_window_found_by_program_for_an_ipad():
     assert choose_window(real, []).title == "iPad (2)"
     renamed = [w if w.handle != 3 else Window(3, "iPad", "airplay.exe") for w in real]
     assert choose_window(renamed, ["iPad (2)"]).handle == 3       # old remembered title: still found
+    # 5KPlayer's own title bar and control bar are windows too: never picked.
+    with_helpers = [Window(1, "TitleForm", "airplay.exe", 812 * 22),
+                    Window(2, "ControlForm", "airplay.exe", 300 * 70),
+                    Window(3, "iPad (2)", "airplay.exe", 1080 * 1439),
+                    Window(4, "Arc", "arc.exe", 2000 * 1100)]
+    assert choose_window(with_helpers, []).title == "iPad (2)"
+    # Other unknown helper windows lose to the biggest one (the picture).
+    other = [Window(1, "Overlay", "airplay.exe", 400 * 30), Window(3, "iPad", "airplay.exe", 900 * 1200)]
+    assert choose_window(other, []).title == "iPad"
     # Phone Link's mirror is preferred when both are open.
     both = real + [Window(6, "David's A53", "yourphoneappproxyhost.exe")]
     assert choose_window(both, []).title == "David's A53"

@@ -247,6 +247,11 @@ def phone_area(image: Any) -> Any:
     return found if MIN_SHAPE <= ratio <= MAX_SHAPE else image
 
 
+def _screen_reader(mss: Any) -> Any:
+    """mss's screen grabber (mss.MSS in newer versions; mss.mss is deprecated)."""
+    return (getattr(mss, "MSS", None) or mss.mss)()
+
+
 def enlarge(part: Any, min_width: int = 300) -> Any:
     """Small mirror windows give tiny text; scale it up smoothly before reading.
     (OpenCV comes with the text recognition package; without it, leave as is.)"""
@@ -418,7 +423,7 @@ def screen_grabber(region: dict[str, int]) -> Callable[[], Any]:
     import mss
     import numpy as np
 
-    sct = mss.mss()
+    sct = _screen_reader(mss)
 
     def grab() -> Any:
         shot = np.asarray(sct.grab(region))     # BGRA, in memory only
@@ -451,7 +456,7 @@ def window_grabber(titles: list[str], on_status: Status | None = None) -> Callab
     def read_screen(box: tuple[int, int, int, int]) -> Any:
         if state["screen"] is None:
             import mss
-            state["screen"] = mss.mss()
+            state["screen"] = _screen_reader(mss)
         left, top, width, height = box
         shot = np.asarray(state["screen"].grab({"left": left, "top": top,
                                                 "width": width, "height": height}))

@@ -44,6 +44,9 @@ PHONE_LINK_MAIN_TITLES = ("phone link", "link to windows")
 # (titled after the device, e.g. "iPad (2)") belongs to airplay.exe, as seen
 # on a real PC. Phone Link is preferred if both are open.
 AIRPLAY_PROCESSES = ("airplay.exe",)
+# 5KPlayer's helper windows: its title bar (22 pixels tall) and its volume /
+# record bar. Seen on a real PC alongside the picture window "iPad (2)".
+AIRPLAY_HELPER_TITLES = ("titleform", "controlform")
 
 
 @dataclass(frozen=True)
@@ -51,6 +54,7 @@ class Window:
     handle: int
     title: str
     process: str = ""  # program file name, lower case, e.g. "phoneexperiencehost.exe"
+    area: int = 0      # client area in pixels (0: unknown)
 
 
 def _api() -> tuple[Any, Any]:
@@ -124,7 +128,11 @@ def list_windows() -> list[Window]:
             if length:
                 buf = ctypes.create_unicode_buffer(length + 1)
                 user32.GetWindowTextW(hwnd, buf, length + 1)
-                found.append(Window(int(hwnd), buf.value, _process_name(user32, hwnd)))
+                rect = wintypes.RECT()
+                area = 0
+                if user32.GetClientRect(hwnd, ctypes.byref(rect)):
+                    area = max(0, rect.right - rect.left) * max(0, rect.bottom - rect.top)
+                found.append(Window(int(hwnd), buf.value, _process_name(user32, hwnd), area))
         return True
 
     callback = proc_type(each)  # keep a reference while Windows calls it
@@ -143,7 +151,9 @@ def choose_window(windows: list[Window], titles: list[str]) -> Window | None:
                 return w
     phone_link = [w for w in windows if w.process in PHONE_LINK_PROCESSES]
     mirrors = [w for w in phone_link if w.title.strip().lower() not in PHONE_LINK_MAIN_TITLES]
-    mirrors += [w for w in windows if w.process in AIRPLAY_PROCESSES]
+    airplay = [w for w in windows if w.process in AIRPLAY_PROCESSES
+               and w.title.strip().lower() not in AIRPLAY_HELPER_TITLES]
+    mirrors += sorted(airplay, key=lambda w: -w.area)   # the picture is the biggest
     return (mirrors or [None])[0]
 
 
