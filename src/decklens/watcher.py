@@ -85,6 +85,10 @@ def in_battle(top_right: Sequence[TextLine]) -> bool:
     return any(BATTLE_TEXT.search(line.text) for line in top_right)
 
 
+# What the game may print where a clanless player's clan would go.
+NO_CLAN_TEXT = frozenset({"noclan", "notinaclan", "notinclan"})
+
+
 def read_opponent(top_left: Sequence[TextLine]) -> tuple[str, str | None] | None:
     """(name, clan or None) from the top-left corner of the battle screen."""
     lines = sorted((ln for ln in top_left
@@ -95,6 +99,8 @@ def read_opponent(top_left: Sequence[TextLine]) -> tuple[str, str | None] | None
         return None
     name = lines[0]
     clan = next((ln for ln in lines[1:] if 0.1 < ln.y - name.y < 0.5), None)
+    if clan is not None and search_key(clan.text) in NO_CLAN_TEXT:
+        clan = None  # the game's "no clan" label, not a clan called that
     return name.text[:40], (clan.text[:50] if clan else None)
 
 

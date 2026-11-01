@@ -235,7 +235,8 @@ def test_search_normalises_and_escapes(predictor):
     assert conn.executed[0] == ("0.45",)                                  # fuzzy threshold
     params = conn.executed[1]
     assert params == {"pattern": "dipo%", "key": "dipo", "clan_pattern": None, "clan_key": None,
-                      "near": 2136, "limit": 10, "clan_match": 0.7}  # no user wildcards survive
+                      "near": 2136, "limit": 10, "clan_match": 0.7,
+                      "no_clan": False, "no_clan_bonus": 0.5}  # no user wildcards survive
     assert response.json()["results"][0]["rating"] == 2400
 
 
@@ -250,6 +251,18 @@ def test_search_by_clan_when_the_name_is_all_emoji():
 
     app.get("/api/search", params={"name": "aj", "clan": "persian"})     # both narrow it down
     assert conn.executed[3]["pattern"] == "aj%" and conn.executed[3]["clan_pattern"] == "persian%"
+
+
+def test_search_no_clan_clue_only_applies_to_a_name_search():
+    app, _, conn = make(rows=[("#9QJ", "Dipo", None, None, 2079, True)])
+    response = app.get("/api/search", params={"name": "dipo", "no_clan": "1"})
+    assert response.status_code == 200
+    assert response.json()["results"][0] == {"tag": "#9QJ", "name": "Dipo", "clan": None,
+                                             "rank": None, "rating": 2079, "clan_match": True}
+    assert conn.executed[1]["no_clan"] is True
+    app.get("/api/search", params={"name": "dipo", "clan": "persian", "no_clan": "1"})
+    assert conn.executed[3]["no_clan"] is False          # a typed clan wins
+    assert app.get("/api/search", params={"name": "dipo", "no_clan": "maybe"}).status_code == 422
 
 
 @pytest.mark.parametrize("params, status", [

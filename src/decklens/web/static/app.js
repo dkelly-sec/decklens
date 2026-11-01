@@ -137,10 +137,11 @@ function seenText(minutes) {
 
 // Names and clans go in <bdi> so right-to-left text (Arabic, Hebrew) stays
 // inside its own part and can't reorder the tag and numbers around it.
-function playerLine(player) {
+function playerLine(player, options = {}) {
   const line = el("p", null, "player");
   const parts = [el("bdi", player.name || "Unknown"), player.tag];
   if (player.clan) parts.push(el("bdi", player.clan));
+  else if (options.showNoClan) parts.push("no clan");
   if (player.rank) parts.push("rank #" + player.rank);
   if (player.rating) parts.push("rating " + player.rating);
   if (player.trophies) parts.push(player.trophies.toLocaleString() + " trophies");
@@ -353,7 +354,7 @@ function resultList(players) {
     const button = el("button", null, "result-button" + (r.active ? " active" : ""));
     button.type = "button";
     button.dataset.confident = String(Boolean(r.active || r.clan_match));
-    button.append(playerLine(r));
+    button.append(playerLine(r, { showNoClan: "clan" in r }));
     button.addEventListener("click", () => showOpponentDecks(r, item));
     item.append(button);
     list.append(item);
@@ -392,6 +393,9 @@ async function liveClanLookup(clan, name, out) {
   show(out, ...(await liveClanParts(clan, name)));
 }
 
+const NOT_KNOWN_NO_CLAN = "They're probably not in DeckLens yet, and without a clan the game " +
+  "can't be asked (it only searches by clan). After the battle, \u201cScout my last opponent\u201d shows their deck.";
+
 // Auto-scout picks the player for you: the first confident match (in the clan
 // that was read, or online right now), else the top result as a best guess.
 // Results are already sorted best-first. You can still tap someone else.
@@ -416,9 +420,13 @@ async function findOpponent(event, options = {}) {
     show(out, el("p", "Type some of their name, their clan, or both.", "error"));
     return;
   }
+  // The screen watcher saw no clan under their name: that's a clue, so
+  // players without a clan come first. (An empty box you left blank isn't.)
+  const noClan = Boolean(options.noClan && name && !clan);
   const params = new URLSearchParams();
   if (name) params.set("name", name);
   if (clan) params.set("clan", clan);
+  if (noClan) params.set("no_clan", "1");
   let path = "/api/search?" + params.toString();
   // Ranked matches players of similar rating, so players nearest yours come first.
   if (state.me && state.me.rating) path += "&near_rating=" + encodeURIComponent(state.me.rating);
@@ -437,9 +445,24 @@ async function findOpponent(event, options = {}) {
     if (canGoLive) {
       await liveClanLookup(clan, name, out);  // not in our index: ask the game
       if (options.auto) autoOpen(out);
+    } else if (noClan) {
+      show(out, el("p", "No players found. " + NOT_KNOWN_NO_CLAN, "muted"));
     } else {
       show(out, el("p", "No players found. If their name is emoji or a language you can't type, " +
         "search by their clan instead.", "muted"));
+    }
+    return;
+  }
+  if (noClan) {
+    if (results.some((r) => r.clan_match)) {
+      show(out, el("p", "They have no clan, so players without one come first. Tap the right player:", "hint"),
+        resultList(results));
+      if (options.auto) autoOpen(out);
+    } else {
+      // Everyone here has a clan, so none of them is likely to be the
+      // opponent: list them, but don't open one as if it were.
+      show(out, el("p", "Nobody DeckLens knows without a clan has a name like that. " + NOT_KNOWN_NO_CLAN, "hint"),
+        el("p", "Closest names (all in clans, so probably not them):", "hint"), resultList(results));
     }
     return;
   }
@@ -508,7 +531,7 @@ async function pollWatcher() {
   document.getElementById("find-clan").value = latest.clan || "";
   const results = document.getElementById("find-result");
   if (results.scrollIntoView) results.scrollIntoView({ behavior: "smooth", block: "start" });
-  await findOpponent(null, { auto: true });
+  await findOpponent(null, { auto: true, noClan: !latest.clan });
 }
 
 function setAutoScout(on) {

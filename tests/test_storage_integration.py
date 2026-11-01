@@ -461,6 +461,38 @@ def test_fancy_letters_and_clan_match_flag(conn):
     assert not any(r["clan_match"] for r in search_players(conn, "frank"))
 
 
+def test_no_clan_on_screen_prefers_clanless_players(conn):
+    """The opponent had no clan: of several "Dipo"s, the clanless one is the pick."""
+    from decklens.storage import save_players
+    from decklens.web.search import search_players
+
+    save_players(conn, [
+        RankEntry("#2PP", "Dipo", 2136, None, "#C1", "Persian Warrior"),   # nearer your rating
+        RankEntry("#9QJ", "Dipo", 2600, None, None, None),                 # no clan
+        RankEntry("#8YY", "Dipoo", 2140, None, None, None),                # no clan, close name
+        RankEntry("#LLL", "Dpx", 2136, None, None, None),                  # no clan, weak name
+    ], NOW)
+
+    # Without the clue, rating decides between the two exact names.
+    plain = search_players(conn, "dipo", near_rating=2136)
+    assert plain[0]["tag"] == "#2PP" and not any(r["clan_match"] for r in plain)
+
+    found = search_players(conn, "dipo", near_rating=2136, no_clan=True)
+    assert found[0]["tag"] == "#9QJ" and found[0]["clan_match"] is True   # exact and clanless
+    assert next(r for r in found if r["tag"] == "#8YY")["clan_match"] is True
+    assert next(r for r in found if r["tag"] == "#2PP")["clan_match"] is False
+    # A weak name doesn't jump an exact one just for having no clan.
+    tags = [r["tag"] for r in found]
+    assert "#LLL" not in tags or tags.index("#LLL") > tags.index("#2PP")
+
+    # Only clanned players with that name: nobody counts as a match.
+    save_players(conn, [RankEntry("#QQQ", "Solo", 2000, None, "#C1", "Some Clan")], NOW)
+    assert not any(r["clan_match"] for r in search_players(conn, "solo", no_clan=True))
+    # A typed clan wins over the no-clan clue (it's ignored).
+    with_clan = search_players(conn, "dipo", clan="persian warrior", no_clan=True)
+    assert with_clan[0]["tag"] == "#2PP" and with_clan[0]["clan_match"] is True
+
+
 def test_reindex_applies_new_name_rules_to_stored_players(conn):
     from decklens.storage import reindex_names, save_players
     from decklens.web.search import search_players

@@ -20,6 +20,10 @@ MAX_RESULTS = 10
 MAX_RATING = 20_000
 FUZZY_THRESHOLD = 0.45
 CLAN_MATCH = 0.7  # clan score at which a result counts as "in that clan"
+# When the screen showed no clan under their name, clanless players get this
+# much extra. Less than an exact name (1.2) is worth, because DeckLens may have
+# stored someone's clan before they left it, or the clan line was missed.
+NO_CLAN_BONUS = 0.5
 
 # Fuzzy search on name and/or clan. A player is a candidate if what you typed
 # starts their name or clan, or closely resembles part of it (pg_trgm word
@@ -27,8 +31,12 @@ CLAN_MATCH = 0.7  # clan score at which a result counts as "in that clan"
 # about 1 (exact 1.2, prefix 1.0, otherwise the similarity); with both typed,
 # the best combined match wins. Ties (scores rounded to 0.1) go to the player
 # whose rating is closest to yours, as Ranked pairs similar ratings.
+# no_clan (name only): the opponent had no clan, so players without one score
+# NO_CLAN_BONUS more, and count as a match when their name fits well too.
 _SEARCH = r"""
-    SELECT p.tag, p.name, p.clan_name, r.rank, p.rating, m.clan_score >= %(clan_match)s
+    SELECT p.tag, p.name, p.clan_name, r.rank, p.rating,
+           CASE WHEN %(no_clan)s THEN p.clan_name IS NULL AND s.name_score >= %(clan_match)s
+                ELSE m.clan_score >= %(clan_match)s END
     FROM players p
     LEFT JOIN LATERAL (
         SELECT s.rank FROM player_rank_snapshots s
@@ -41,7 +49,9 @@ _SEARCH = r"""
                  WHEN p.search_key = %(key)s THEN 1.2
                  WHEN p.search_key LIKE %(pattern)s ESCAPE '\' THEN 1.0
                  ELSE word_similarity(%(key)s, p.search_key) END AS name_score,
-            CASE WHEN %(clan_key)s::text IS NULL OR p.clan_key IS NULL THEN 0
+            CASE WHEN %(no_clan)s THEN CASE WHEN p.clan_name IS NULL THEN %(no_clan_bonus)s
+                                            ELSE 0 END
+                 WHEN %(clan_key)s::text IS NULL OR p.clan_key IS NULL THEN 0
                  WHEN p.clan_key = %(clan_key)s THEN 1.2
                  WHEN p.clan_key LIKE %(clan_pattern)s ESCAPE '\' THEN 1.0
                  ELSE word_similarity(%(clan_key)s, p.clan_key) END AS clan_score
@@ -68,9 +78,12 @@ def _like_prefix(key: str) -> str:
 
 
 def search_players(conn: Connection, query: str | None = None, *, clan: str | None = None,
-                   near_rating: int | None = None) -> list[dict[str, Any]]:
+                   near_rating: int | None = None, no_clan: bool = False) -> list[dict[str, Any]]:
     """Players by name, by clan, or both. A name with nothing typeable in it
-    (all emoji, say) is ignored when a clan is given, so the clan alone works."""
+    (all emoji, say) is ignored when a clan is given, so the clan alone works.
+
+    no_clan: the opponent is known to have no clan (the screen watcher saw
+    none), so clanless players are preferred. Ignored if a clan is given."""
     key = search_key(query) if query else ""
     clan_key = search_key(clan) if clan else ""
     use_name, use_clan = len(key) >= MIN_QUERY, len(clan_key) >= MIN_QUERY
@@ -79,11 +92,12 @@ def search_players(conn: Connection, query: str | None = None, *, clan: str | No
                          "or of their clan")
     if near_rating is not None and not 0 <= near_rating <= MAX_RATING:
         raise ValueError("rating out of range")
+    no_clan = bool(no_clan and use_name and not use_clan)
     params = {
         "pattern": _like_prefix(key) if use_name else None, "key": key if use_name else None,
         "clan_pattern": _like_prefix(clan_key) if use_clan else None,
         "clan_key": clan_key if use_clan else None, "near": near_rating, "limit": MAX_RESULTS,
-        "clan_match": CLAN_MATCH,
+        "clan_match": CLAN_MATCH, "no_clan": no_clan, "no_clan_bonus": NO_CLAN_BONUS,
     }
     with conn.cursor() as cur:
         # How close a fuzzy match must be (pg_trgm's default 0.6 drops common
@@ -91,8 +105,9 @@ def search_players(conn: Connection, query: str | None = None, *, clan: str | No
         cur.execute("SELECT set_config('pg_trgm.word_similarity_threshold', %s, false)",
                     (str(FUZZY_THRESHOLD),))
         cur.execute(_SEARCH, params)
-        # clan_match: is this player in a clan like the one typed? If nobody is,
-        # the page asks the game directly instead (live clan lookup).
+        # clan_match: is this player in a clan like the one typed (or clanless,
+        # with a close name, when no_clan)? If nobody is, the page asks the game
+        # directly instead (live clan lookup), or says they aren't known yet.
         return [{"tag": tag, "name": name, "clan": clan, "rank": rank, "rating": rating,
-                 "clan_match": bool(use_clan and in_clan)}
+                 "clan_match": bool((use_clan or no_clan) and in_clan)}
                 for tag, name, clan, rank, rating, in_clan in cur.fetchall()]

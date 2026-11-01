@@ -36,6 +36,10 @@ def test_no_clan_crown_digits_and_low_confidence_are_handled():
              TextLine("Florent", 0.14, 0.42, 0.9), TextLine("Sunny", 0.15, 0.67, 0.9)]
     assert read_opponent(noisy) == ("Florent", "Sunny")
     assert read_opponent([TextLine("2580", 0.1, 0.4, 0.9)]) is None  # just a number
+    # The game's own "no clan" label isn't a clan called that.
+    for label in ("No Clan", "NO CLAN", "Not in a clan"):
+        assert read_opponent([TextLine("Florent", 0.14, 0.42, 0.9),
+                              TextLine(label, 0.15, 0.67, 0.9)]) == ("Florent", None)
     assert read_opponent([]) is None
 
 
