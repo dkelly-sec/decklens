@@ -208,6 +208,20 @@ def create_app(services: Services, *, hsts: bool = False) -> FastAPI:
             log.warning("player search database unavailable: %s", type(exc).__name__)
             raise HTTPException(503, "Search is unavailable right now") from None
 
+    def known_clans_for(clan: str) -> list[dict[str, Any]]:
+        """Clans with this name that DeckLens has seen (empty if search is off or down)."""
+        if services.search_db is None:
+            return []
+        import psycopg
+
+        from .search import known_clans
+        try:
+            with services.search_db() as conn:
+                return known_clans(conn, clan)
+        except psycopg.Error as exc:  # the live check still works without them
+            log.warning("known clans unavailable: %s", type(exc).__name__)
+            return []
+
     @app.get("/api/clan-lookup", dependencies=[*signed_in, Depends(limit("clan_lookup"))])
     def clan_lookup(clan: str = Query(min_length=3, max_length=50),
                     name: str | None = Query(default=None, max_length=40)) -> dict[str, Any]:
@@ -216,12 +230,19 @@ def create_app(services: Services, *, hsts: bool = False) -> FastAPI:
         clan = clan.strip()
         if len(clan) < 3:
             raise HTTPException(400, "Type at least 3 characters of the clan name")
+        known = known_clans_for(clan)
         try:
             clans = cached_call(("clans", clan.lower()),
                                 lambda: services.client.search_clans(clan, limit=CLAN_SEARCH_LIMIT),
                                 "No clans found")
         except ValueError as exc:
-            raise HTTPException(400, str(exc)) from None
+            if not known:
+                raise HTTPException(400, str(exc)) from None
+            clans = []
+        # Clans DeckLens already knows go first, by tag: they're found even when
+        # the name was read slightly wrong. The game's own search fills the rest.
+        seen = {c["tag"] for c in known}
+        clans = known + [c for c in clans if c.get("tag") not in seen]
 
         def members_of(tag: str) -> list[dict[str, Any]]:
             try:

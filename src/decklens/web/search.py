@@ -117,3 +117,34 @@ def search_players(conn: Connection, query: str | None = None, *, clan: str | No
                  "clan_match": bool((use_clan or no_clan) and in_clan),
                  "name_match": bool(name_ok) if use_name else None}
                 for tag, name, clan, rank, rating, in_clan, name_ok in cur.fetchall()]
+
+
+# Clans DeckLens already knows with this name, by tag, most members first. The
+# live clan check uses these directly: the game's own clan search wants the
+# name spelled exactly ("RICH ESPORTS"), and screen reading often drops spaces
+# or misreads a letter ("RICHESPORTS"), which the normalised key ignores.
+_KNOWN_CLANS = r"""
+    SELECT p.clan_tag, max(p.clan_name), count(*) AS members,
+           max(CASE WHEN p.clan_key = %(key)s THEN 1.0 ELSE similarity(%(key)s, p.clan_key) END) AS score
+    FROM players p
+    WHERE p.clan_tag IS NOT NULL AND p.clan_key IS NOT NULL
+      AND (p.clan_key = %(key)s OR %(key)s %% p.clan_key)
+    GROUP BY p.clan_tag
+    HAVING max(CASE WHEN p.clan_key = %(key)s THEN 1.0 ELSE similarity(%(key)s, p.clan_key) END)
+           >= %(min_score)s
+    ORDER BY score DESC, members DESC
+    LIMIT %(limit)s
+"""
+KNOWN_CLAN_MIN_SCORE = 0.6
+MAX_KNOWN_CLANS = 5
+
+
+def known_clans(conn: Connection, clan: str) -> list[dict[str, Any]]:
+    """[{"tag", "name"}] for clans in the index whose name is (close to) clan."""
+    key = search_key(clan) if clan else ""
+    if len(key) < MIN_QUERY:
+        return []
+    with conn.cursor() as cur:
+        cur.execute(_KNOWN_CLANS, {"key": key, "min_score": KNOWN_CLAN_MIN_SCORE,
+                                   "limit": MAX_KNOWN_CLANS})
+        return [{"tag": tag, "name": name} for tag, name, _, _ in cur.fetchall()]

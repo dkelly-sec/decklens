@@ -824,6 +824,31 @@ def test_live_clan_lookup_with_a_name_checks_more_clans_and_stops_when_found():
     assert len(app.get("/api/clan-lookup", params={"clan": "YEET"}).json()["clans_checked"]) == 5
 
 
+def test_live_clan_lookup_uses_clans_decklens_knows_when_the_name_was_misread():
+    """The real case: "RICH ESPORTS" read as "RICHESPORTS". The game finds no clan
+    by that name, but DeckLens knows RICH ESPORTS (and its tag) from its players."""
+    class NoSuchName(ClanClient):
+        def search_clans(self, name, limit=10):
+            self.calls.append(("clans", name))
+            return []
+
+        def get_clan_members(self, tag):
+            self.calls.append(("members", tag))
+            if tag == "#Q9JRV2YP":
+                return [{"tag": "#V8Q9LV8GC", "name": "卡罗·沃苏吉 I KARO", "lastSeen": _seen(0)},
+                        {"tag": "#8QL98Q2L", "name": "Rolex", "lastSeen": _seen(30)}]
+            return []
+
+    client = NoSuchName()
+    app, _, conn = make(client=client, rows=[("#Q9JRV2YP", "RICH ESPORTS", 9, 1.0)])
+    data = app.get("/api/clan-lookup", params={"clan": "RICHESPORTS", "name": "卡罗沃苏吉KARD"}).json()
+    assert data["clans_checked"] == ["RICH ESPORTS"] and data["clans_found"] == 1
+    assert [p["name"] for p in data["players"]] == ["卡罗·沃苏吉 I KARO"]
+    assert data["players"][0]["active"]
+    assert conn.executed[-1]["key"] == "richesports"                  # spaces don't matter
+    assert ("members", "#Q9JRV2YP") in client.calls
+
+
 def test_live_clan_lookup_puts_whoever_is_online_first():
     client = ClanClient()
     app, _, _ = make(client=client)

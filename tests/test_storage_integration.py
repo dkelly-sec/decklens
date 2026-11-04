@@ -508,6 +508,21 @@ def test_clan_members_with_other_names_are_not_name_matches(conn):
     assert all(r["name_match"] is None for r in search_players(conn, None, clan="YEET"))
 
 
+def test_known_clans_are_found_by_tag_despite_misread_names(conn):
+    from decklens.storage import save_players
+    from decklens.web.search import known_clans
+
+    save_players(conn, [RankEntry("#2PP", "Rolex", 3139, 136, "#Q9JRV2YP", "RICH ESPORTS"),
+                        RankEntry("#9QJ", "Stranger", 3107, 158, "#Q9JRV2YP", "RICH ESPORTS"),
+                        RankEntry("#8YY", "Solo", 2000, None, "#C2", "Rich Esport Academy"),
+                        RankEntry("#LLL", "Other", 2000, None, "#C3", "Nothing alike")], NOW)
+    found = known_clans(conn, "RICHESPORTS")                       # space lost by screen reading
+    assert found[0] == {"tag": "#Q9JRV2YP", "name": "RICH ESPORTS"}
+    assert "#C3" not in {c["tag"] for c in found}
+    assert known_clans(conn, "RICH ESP0RTS")[0]["tag"] == "#Q9JRV2YP"   # a misread letter too
+    assert known_clans(conn, "x") == []
+
+
 def test_reindex_applies_new_name_rules_to_stored_players(conn):
     from decklens.storage import reindex_names, save_players
     from decklens.web.search import search_players
