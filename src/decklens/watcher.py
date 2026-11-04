@@ -115,6 +115,10 @@ def in_battle(top_right: Sequence[TextLine]) -> bool:
 
 # What the game may print where a clanless player's clan would go.
 NO_CLAN_TEXT = frozenset({"noclan", "notinaclan", "notinclan"})
+# Before Ultimate Champion, Ranked shows the player's league ("League 4") where
+# the rating would be. It's never their name or clan. (Normalised text; a few
+# translations of "league" included.)
+LEAGUE_TEXT = re.compile(r"(league|liga|ligue|lega|lig)\d{1,2}")
 
 
 def _rating(line: TextLine) -> int | None:
@@ -130,7 +134,8 @@ def read_opponent(top_left: Sequence[TextLine]) -> Sighting | None:
     usable = [ln for ln in top_left if ln.x < 0.35 and ln.confidence >= MIN_CONFIDENCE]
     ratings = sorted((ln for ln in usable if _rating(ln) is not None), key=lambda ln: ln.y)
     words = sorted((ln for ln in usable if not ln.text.replace(" ", "").isdigit()
-                    and len(search_key(ln.text)) >= 1), key=lambda ln: ln.y)
+                    and len(search_key(ln.text)) >= 1
+                    and not LEAGUE_TEXT.fullmatch(search_key(ln.text))), key=lambda ln: ln.y)
     name: TextLine | None
     clan: TextLine | None
     def is_rating(number: TextLine) -> bool:

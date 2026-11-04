@@ -56,6 +56,16 @@ def test_unreadable_name_is_never_replaced_by_the_clan():
     assert describe(found) == "(name unreadable) (STS), rated 2216"
 
 
+def test_league_line_before_ultimate_champion_is_never_the_clan():
+    # Pre-UC Ranked: name / clan / league, or name / league with no clan.
+    assert read_opponent(ranked(("Dipo", 0.19), ("Persian Warrior", 0.32), ("League 4", 0.45))) == \
+        Sighting("Dipo", "Persian Warrior")
+    assert read_opponent(ranked(("Dipo", 0.19), ("League 4", 0.32))) == Sighting("Dipo", None)
+    assert read_opponent(ranked(("Dipo", 0.19), ("LEAGUE10", 0.45))) == Sighting("Dipo", None)
+    # A clan that merely starts with "League" is still a clan.
+    assert read_opponent(ranked(("Dipo", 0.19), ("League of Legends", 0.32))).clan == "League of Legends"
+
+
 def test_ipad_battle_corner_from_a_real_screenshot():
     """Positions RapidOCR gave on a real iPad battle (5KPlayer, 20-win challenge):
     the king's health is mid-screen and tower health sits just below the corner."""
