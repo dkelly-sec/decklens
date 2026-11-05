@@ -366,6 +366,8 @@ function resultList(players) {
     // a name like the one read (name_match is null when no name was given).
     button.dataset.confident = String(Boolean(r.active || (r.clan_match && r.name_match !== false)));
     button.dataset.nameMatch = String(r.name_match !== false);
+    button.dataset.active = String(Boolean(r.active));
+    button.dataset.clanMatch = String(Boolean(r.clan_match));
     button.append(playerLine(r, { showNoClan: "clan" in r }));
     button.addEventListener("click", () => showOpponentDecks(r, item));
     item.append(button);
@@ -414,10 +416,18 @@ const NOT_KNOWN_NO_CLAN = "They're probably not in DeckLens yet, and without a c
 // Results are already sorted best-first. You can still tap someone else.
 function autoOpen(out, allowGuess = true) {
   const buttons = [...out.querySelectorAll(".result-button")];
-  // A best guess must at least have a name like the one read: a clanmate
-  // with a different name is never them.
-  const pick = buttons.find((b) => b.dataset.confident === "true") ||
-    (allowGuess ? buttons.find((b) => b.dataset.nameMatch !== "false") : null);
+  let pick;
+  if (allowGuess) {
+    // A best guess must at least have a name like the one read: a clanmate
+    // with a different name is never them.
+    pick = buttons.find((b) => b.dataset.confident === "true") ||
+      buttons.find((b) => b.dataset.nameMatch !== "false");
+  } else {
+    // Only the clan is known (name unreadable): being in the clan isn't enough,
+    // it may have 50 members. Online right now, or the only member we know.
+    const inClan = buttons.filter((b) => b.dataset.clanMatch === "true");
+    pick = buttons.find((b) => b.dataset.active === "true") || (inClan.length === 1 ? inClan[0] : null);
+  }
   if (!pick) return;
   const sure = pick.dataset.confident === "true";
   for (const b of buttons) b.classList.remove("auto-picked");

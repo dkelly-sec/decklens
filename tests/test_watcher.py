@@ -60,8 +60,14 @@ def test_league_line_before_ultimate_champion_is_never_the_clan():
     # Pre-UC Ranked: name / clan / league, or name / league with no clan.
     assert read_opponent(ranked(("Dipo", 0.19), ("Persian Warrior", 0.32), ("League 4", 0.45))) == \
         Sighting("Dipo", "Persian Warrior")
-    assert read_opponent(ranked(("Dipo", 0.19), ("League 4", 0.32))) == Sighting("Dipo", None)
+    assert read_opponent(ranked(("Dipo", 0.19), ("No Clan", 0.32), ("League 4", 0.45))) == \
+        Sighting("Dipo", None)
+    # Clan line missed: the name is still two lines above the league.
     assert read_opponent(ranked(("Dipo", 0.19), ("LEAGUE10", 0.45))) == Sighting("Dipo", None)
+    # The real case: name "javitop" missed, clan "Nova Reborn" read. The league
+    # line shows it's the clan, so it's never searched as a name.
+    assert read_opponent(ranked(("Nova Reborn", 0.32), ("League 4", 0.45))) == \
+        Sighting(None, "Nova Reborn")
     # A clan that merely starts with "League" is still a clan.
     assert read_opponent(ranked(("Dipo", 0.19), ("League of Legends", 0.32))).clan == "League of Legends"
 

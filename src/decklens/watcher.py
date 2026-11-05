@@ -132,7 +132,10 @@ def _rating(line: TextLine) -> int | None:
 def read_opponent(top_left: Sequence[TextLine]) -> Sighting | None:
     """Name, clan and rating from the top-left corner of the battle screen."""
     usable = [ln for ln in top_left if ln.x < 0.35 and ln.confidence >= MIN_CONFIDENCE]
-    ratings = sorted((ln for ln in usable if _rating(ln) is not None), key=lambda ln: ln.y)
+    # The third line: the rating (Ultimate Champion) or the league ("League 4",
+    # before that). Either one pins down where the clan and name lines are.
+    ratings = sorted((ln for ln in usable if _rating(ln) is not None
+                      or LEAGUE_TEXT.fullmatch(search_key(ln.text))), key=lambda ln: ln.y)
     words = sorted((ln for ln in usable if not ln.text.replace(" ", "").isdigit()
                     and len(search_key(ln.text)) >= 1
                     and not LEAGUE_TEXT.fullmatch(search_key(ln.text))), key=lambda ln: ln.y)
@@ -151,7 +154,7 @@ def read_opponent(top_left: Sequence[TextLine]) -> Sighting | None:
     rating = next((r for r in ratings if is_rating(r)), None)
     words = [ln for ln in words if rating is None or ln.y < rating.y]
     if rating is not None:
-        # Ranked layout: name / clan / rating. Measure from the rating line.
+        # Ranked layout: name / clan / rating (or league). Measure from that line.
         unit = rating.height or DEFAULT_LINE_HEIGHT
         above = [ln for ln in words if ln.y < rating.y]
         clan = next((ln for ln in reversed(above) if (rating.y - ln.y) / unit <= CLAN_SLOT_GAP),
