@@ -144,3 +144,36 @@ def test_paired_gain_of_identical_models_includes_zero():
     p = rng.uniform(0.3, 0.7, 500)
     g = paired_log_loss_gain("same", p, p.copy(), y)
     assert g.mean == 0.0 and g.lo <= 0.0 <= g.hi
+
+
+@pytest.fixture(scope="module")
+def trees(data):
+    train, _, vocab, _ = data
+    return TreeMatchupModel.fit(vocab, train)
+
+
+def test_tree_json_answers_exactly_like_sklearn(data, trees):
+    from decklens.features import encode_pair
+
+    _, test, _, _ = data
+    X = encode_pair(trees.vocab, test[:300])
+    ours = 1 / (1 + np.exp(-trees._raw(X)))
+    assert np.allclose(ours, trees.clf.predict_proba(X)[:, 1], atol=1e-9)   # same trees as sklearn
+    again = TreeMatchupModel.from_json(trees.to_json())
+    assert np.allclose(again.predict_proba(test[:300]), trees.predict_proba(test[:300]), atol=1e-9)
+    assert not hasattr(again, "clf")                                       # nothing pickled
+
+
+@pytest.mark.parametrize("damage", [
+    lambda t: t["left"].__setitem__(0, 0),               # a loop back to itself
+    lambda t: t["right"].__setitem__(0, 10_000),          # child out of range
+    lambda t: t["feature"].__setitem__(0, 999_999),       # feature that doesn't exist
+    lambda t: t["threshold"].__setitem__(0, float("nan")),
+])
+def test_damaged_tree_files_are_refused(trees, damage):
+    import json
+
+    data = json.loads(trees.to_json())
+    damage(data["trees"][0])
+    with pytest.raises(ValueError):
+        TreeMatchupModel.from_json(json.dumps(data))

@@ -59,6 +59,7 @@ class TrainingResult:
     both_ranked: float  # share of battles where both players had a leaderboard rank
     one_ranked: float
     archetypes: ArchetypeModel | None = None
+    trees: TreeMatchupModel | None = None
     archetype_info: dict | None = None
     deck_vs_skill: PairedGain | None = None  # best deck model compared with skill only
 
@@ -90,8 +91,10 @@ def run_training(
     linear.trained_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
     probs[LINEAR] = linear.predict_proba(test)
 
+    trees = None
     if with_trees:
-        probs[TREES] = TreeMatchupModel.fit(vocab, train).predict_proba(test)
+        trees = TreeMatchupModel.fit(vocab, train)
+        probs[TREES] = trees.predict_proba(test)
 
     archetypes, archetype_info = None, None
     if with_archetypes:
@@ -113,6 +116,7 @@ def run_training(
         both_ranked=ranked_counts.count(2) / len(matchups),
         one_ranked=ranked_counts.count(1) / len(matchups),
         archetypes=archetypes, archetype_info=archetype_info, deck_vs_skill=deck_vs_skill,
+        trees=trees,
     )
 
 
@@ -330,6 +334,10 @@ def main(argv: list[str] | None = None) -> int:
     report_path.write_text(render_report(result), encoding="utf-8")
     model_path = Path(args.model_dir) / f"decklens-linear-{stamp}.json"
     result.model.save(model_path)
+    if result.trees is not None:
+        trees_path = Path(args.model_dir) / f"decklens-trees-{stamp}.json"
+        result.trees.save(trees_path)
+        log.info("trees: %d (saved to %s)", len(result.trees.trees), trees_path)
     if result.archetypes is not None:
         archetype_path = Path(args.model_dir) / f"decklens-archetypes-{stamp}.json"
         result.archetypes.save(archetype_path)

@@ -222,9 +222,16 @@ class LinearMatchupModel:
         path.write_text(self.to_json(), encoding="utf-8")
 
 
+TREES_FORMAT = "decklens-trees-v1"
+
+
 class TreeMatchupModel:
-    def __init__(self, vocab: CardVocab, clf: HistGradientBoostingClassifier):
-        self.vocab, self.clf = vocab, clf
+    """Gradient-boosted trees on both decks side by side, so it can learn counters
+    (Rocket against X-Bow). Saved as plain JSON trees and evaluated here with numpy,
+    never pickle: loading a model file can't run code."""
+
+    def __init__(self, vocab: CardVocab, trees: list[dict[str, np.ndarray]], baseline: float):
+        self.vocab, self.trees, self.baseline = vocab, trees, float(baseline)
 
     @classmethod
     def fit(cls, vocab: CardVocab, train: Sequence[Matchup]) -> "TreeMatchupModel":
@@ -236,13 +243,81 @@ class TreeMatchupModel:
             l2_regularization=1.0, early_stopping=False, random_state=0,
         )
         clf.fit(encode_pair(vocab, both), labels(both))
-        return cls(vocab, clf)
+        # sklearn internals, pinned by the version in pyproject and checked by a test
+        # that compares these trees' answers with clf.predict_proba.
+        trees = [{
+            "feature": nodes["feature_idx"].astype(int), "threshold": nodes["num_threshold"],
+            "left": nodes["left"].astype(int), "right": nodes["right"].astype(int),
+            "leaf": nodes["is_leaf"].astype(bool), "value": nodes["value"],
+        } for (tree,) in clf._predictors for nodes in [tree.nodes]]
+        model = cls(vocab, trees, float(np.ravel(clf._baseline_prediction)[0]))
+        model.clf = clf
+        return model
+
+    def _raw(self, X: np.ndarray) -> np.ndarray:
+        """Log-odds for each row: baseline plus each tree's leaf value."""
+        rows = np.arange(len(X))
+        total = np.full(len(X), self.baseline)
+        for t in self.trees:
+            node = np.zeros(len(X), dtype=int)
+            for _ in range(len(t["leaf"])):  # children always come later, so this ends
+                inner = ~t["leaf"][node]
+                if not inner.any():
+                    break
+                go_left = X[rows, t["feature"][node]] <= t["threshold"][node]
+                node = np.where(inner, np.where(go_left, t["left"][node], t["right"][node]), node)
+            total += t["value"][node]
+        return total
+
+    def _proba(self, matchups: Sequence[Matchup]) -> np.ndarray:
+        return 1.0 / (1.0 + np.exp(-self._raw(encode_pair(self.vocab, matchups))))
 
     def predict_proba(self, matchups: Sequence[Matchup]) -> np.ndarray:
-        forward = self.clf.predict_proba(encode_pair(self.vocab, matchups))[:, 1]
-        backward = self.clf.predict_proba(
-            encode_pair(self.vocab, [flipped(m) for m in matchups]))[:, 1]
+        forward = self._proba(matchups)
+        backward = self._proba([flipped(m) for m in matchups])
         return (forward + (1.0 - backward)) / 2.0
+
+    def to_json(self) -> str:
+        return json.dumps({
+            "format": TREES_FORMAT, "vocab": self.vocab.to_dict(), "baseline": self.baseline,
+            "trees": [{"feature": t["feature"].tolist(), "threshold": t["threshold"].tolist(),
+                       "left": t["left"].tolist(), "right": t["right"].tolist(),
+                       "leaf": t["leaf"].tolist(), "value": t["value"].tolist()}
+                      for t in self.trees],
+        })
+
+    @classmethod
+    def from_json(cls, text: str) -> "TreeMatchupModel":
+        data = json.loads(text)
+        if data.get("format") != TREES_FORMAT:
+            raise ValueError("not a DeckLens trees model file")
+        vocab = CardVocab.from_dict(data["vocab"])
+        n_features = 2 * len(vocab) + len(EXTRA_FEATURES)
+        trees = []
+        for raw in data["trees"]:
+            t = {"feature": np.asarray(raw["feature"], dtype=int),
+                 "threshold": np.asarray(raw["threshold"], dtype=np.float64),
+                 "left": np.asarray(raw["left"], dtype=int),
+                 "right": np.asarray(raw["right"], dtype=int),
+                 "leaf": np.asarray(raw["leaf"], dtype=bool),
+                 "value": np.asarray(raw["value"], dtype=np.float64)}
+            n = len(t["leaf"])
+            inner = np.flatnonzero(~t["leaf"])
+            if (n == 0 or any(len(v) != n for v in t.values())
+                    or not np.all(np.isfinite(t["threshold"])) or not np.all(np.isfinite(t["value"]))
+                    or ((t["feature"][inner] < 0) | (t["feature"][inner] >= n_features)).any()
+                    or ((t["left"][inner] <= inner) | (t["left"][inner] >= n)).any()
+                    or ((t["right"][inner] <= inner) | (t["right"][inner] >= n)).any()):
+                raise ValueError("trees model file is malformed")
+            trees.append(t)
+        baseline = float(data["baseline"])
+        if not np.isfinite(baseline):
+            raise ValueError("trees model file is malformed")
+        return cls(vocab, trees, baseline)
+
+    def save(self, path: Path) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(self.to_json(), encoding="utf-8")
 
 
 class ExtrasOnlyBaseline:

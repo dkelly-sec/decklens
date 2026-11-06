@@ -690,7 +690,7 @@ def test_headline_uses_the_most_specific_level_pulled_toward_the_archetype():
     ]}
     out = headline(breakdown, 0.53)
     assert out["win_chance"] == pytest.approx((2 + 5.3) / 17, abs=0.001)   # 43%
-    assert out["based_on"]["level"] == "exact" and out["archetype_chance"] == 0.53
+    assert out["based_on"]["level"] == "exact" and out["estimate_chance"] == 0.53
     breakdown["levels"][0]["cells"][0]["games"] = 4                        # too few: next level
     assert headline(breakdown, 0.53)["based_on"]["level"] == "7"
     assert headline({"levels": []}, 0.53) == {}
@@ -703,7 +703,7 @@ def test_predict_headline_reflects_the_spell_matchup(predictor):
     try:
         m = predictor.predict(MY_S, THEM_ROCKET)
         assert m["based_on"]["games"] == 7 and not m["mirror"]   # 2 wins in 7 games
-        assert m["win_chance"] < m["archetype_chance"]           # pulls the headline down
+        assert m["win_chance"] < m["estimate_chance"]            # pulls the headline down
     finally:
         predictor.tiers = None
 
@@ -1188,3 +1188,18 @@ def test_card_kind_comes_from_the_id_range(card_id, kind):
 
     assert card_kind(card_id) == kind
     assert _cards([{"id": card_id, "name": "X"}])[0]["kind"] == kind
+
+
+def test_trees_give_the_estimate_and_see_inside_one_archetype():
+    from decklens.model import TreeMatchupModel
+
+    matchups, names, _ = make_archetype_matchups(3000, seed=4)
+    vocab = CardVocab.build(matchups, names=names)
+    p = Predictor(ArchetypeModel.fit(vocab, matchups, 6, 20.0),
+                  trees=TreeMatchupModel.from_json(TreeMatchupModel.fit(vocab, matchups).to_json()))
+    same_style = MY_DECK[:7] + (card_id(49),)    # same archetype, one different card
+    m = p.predict(MY_DECK, same_style)
+    assert m["estimate"] == "model" and m["mirror"] is False
+    assert m["win_chance"] == pytest.approx(p.model_chance(MY_DECK, same_style), abs=1e-3)
+    assert "coin flip" not in m["note"]
+    assert p.predict(MY_DECK, MY_DECK)["win_chance"] == 0.5     # identical decks stay even

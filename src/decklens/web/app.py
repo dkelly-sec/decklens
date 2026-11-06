@@ -25,7 +25,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from ..api_client import ApiError, ClashRoyaleClient, NotFoundError
 from ..archetypes import ArchetypeModel
-from ..model import LinearMatchupModel
+from ..model import LinearMatchupModel, TreeMatchupModel
 from .auth import Auth, User
 from .watch import WatchBoard
 from .security import (
@@ -391,6 +391,13 @@ def load_predictor(model_dir: Path) -> Predictor | None:
     archetype_file = _latest(model_dir, "decklens-archetypes")
     if archetype_file is None:
         return None
+    trees = None
+    trees_file = _latest(model_dir, "decklens-trees")
+    if trees_file is not None:
+        try:
+            trees = TreeMatchupModel.from_json(trees_file.read_text(encoding="utf-8"))
+        except (ValueError, KeyError):
+            log.warning("ignoring %s: retrain to update it", trees_file.name)
     linear_file = _latest(model_dir, "decklens-linear")
     linear = None
     if linear_file is not None:
@@ -398,7 +405,8 @@ def load_predictor(model_dir: Path) -> Predictor | None:
             linear = LinearMatchupModel.from_json(linear_file.read_text(encoding="utf-8"))
         except (ValueError, KeyError):
             log.warning("ignoring %s: retrain to update it", linear_file.name)
-    return Predictor(ArchetypeModel.from_json(archetype_file.read_text(encoding="utf-8")), linear)
+    return Predictor(ArchetypeModel.from_json(archetype_file.read_text(encoding="utf-8")), linear,
+                     trees=trees)
 
 
 def _auth_from_env(search_db: Callable[[], Any] | None, https: bool) -> Auth | None:

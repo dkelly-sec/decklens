@@ -94,7 +94,7 @@ python -m decklens.train --days 0         # everything stored
 python -m decklens.train --min-league 7   # top league only
 ```
 
-This writes a report to `reports/model-YYYY-MM-DD.md`, plus `models/decklens-linear-YYYY-MM-DD.json` and `models/decklens-archetypes-YYYY-MM-DD.json`.
+This writes a report to `reports/model-YYYY-MM-DD.md`, plus `models/decklens-linear-YYYY-MM-DD.json`, `models/decklens-trees-YYYY-MM-DD.json` and `models/decklens-archetypes-YYYY-MM-DD.json`. The web app's win chance comes from the trees (the best predictor; they see every card on both sides, so Rocket against X-Bow counts), refined by your stored games as described below.
 
 - **Honest evaluation:** training uses older battles and testing uses strictly newer ones, the same way the model will be used for real. Results are compared against a coin flip and a card-levels-only baseline, with 95% confidence ranges.
 - **Evolutions and Heroes count:** an active Evolution or Hero (worked out from the card's slot and what the player owns) is fed to the models as its own card next to the plain one, so Evo Giant and Giant get separate strengths. Matchup rows also require the same Evolutions and Heroes on both decks.
@@ -104,7 +104,7 @@ This writes a report to `reports/model-YYYY-MM-DD.md`, plus `models/decklens-lin
 - **Two models:** logistic regression learns one strength per card (explainable, and swapping decks exactly flips the prediction). Gradient-boosted trees see both decks side by side, so they can learn counters.
 - **Deck archetypes:** decks are grouped by win condition first (Golem, X-Bow, Hog Rider…; a short hand-kept list in `archetypes.py`), so a rare Golem deck never lands in a Graveyard group. Within a win condition they're split automatically by the cards they share (no hand-kept deck list to go stale). Names follow how players say them: "Golem Pump", cycle decks by average elixir ("X-Bow 3.0", "Hog 2.6"), otherwise the most telling support card ("Graveyard Poison"). A win condition the training data has never seen is flagged on the matchup instead of being passed off as another archetype. Archetypes are compared in an archetype-versus-archetype table. Pairings with few games are pulled towards each archetype's overall record, so a 3-0 start isn't read as 100%. The report lists the most played archetypes and the matchups that are clearly lopsided.
 - **No overclaiming:** "do decks matter beyond skill?" is answered by comparing the best deck model with skill alone battle by battle, with a 95% range, and only says yes if the whole range is an improvement. The lopsided-matchup list is corrected for testing every pairing at once (Bonferroni), so it doesn't fill up with lucky streaks.
-- **Safe model files:** models are saved as plain JSON (weights, archetype centroids and win counts), not pickle, so loading a model file can never run code.
+- **Safe model files:** models are saved as plain JSON (weights, trees as node arrays, archetype centroids and win counts), not pickle, so loading a model file can never run code. The trees are evaluated by DeckLens's own numpy code (a test checks it answers exactly like scikit-learn), and a tree file is refused if any node points backwards or out of range, so a damaged file can't make it loop.
 
 ## Running the web app
 

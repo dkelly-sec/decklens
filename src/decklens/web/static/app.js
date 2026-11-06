@@ -295,8 +295,9 @@ function matchupBox(m, label, mode) {
   let why = "";
   if (m.based_on) {
     why = " From " + plural(m.based_on.games, "game", "games") + " between " + m.based_on.words +
-      " (same win conditions and spells), pulled toward the archetype estimate of " +
-      pct(m.archetype_chance) + " by how few games there are.";
+      " (same win conditions, spells, Evos and Heroes), pulled toward " +
+      (m.estimate === "model" ? "the model's" : "the archetype") + " estimate of " +
+      pct(m.estimate_chance) + " by how few games there are.";
   }
   box.append(el("p", m.mirror ? "Mirror match: a coin flip on decks."
     : "Your deck wins about " + pct(m.win_chance) + " of games like this." + why, "chance"));

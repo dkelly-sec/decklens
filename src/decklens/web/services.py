@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime
+from datetime import datetime, timezone
 from dataclasses import dataclass
 from typing import Any, Callable, Sequence
 
@@ -20,7 +20,8 @@ from ..battles import (
     is_form_token, is_trophy_road, opt_int, parse_battle_log, parse_battle_time,
 )
 from ..names import fuzzy_score, search_key
-from ..model import LinearMatchupModel, wilson_interval
+from ..features import Matchup
+from ..model import LinearMatchupModel, TreeMatchupModel, wilson_interval
 from ..validation import InvalidTagError, normalize_tag
 
 # Game modes DeckLens scouts. Checked against a real battle log (Oct 2026):
@@ -254,17 +255,16 @@ LEVEL_WORDS = {"exact": "these exact decks", "7": "decks 7+ of 8 cards the same"
                "6": "decks 6+ of 8 cards the same", "archetype": "the same archetypes"}
 
 
-def headline(breakdown: dict[str, Any], archetype_chance: float) -> dict[str, Any]:
+def headline(breakdown: dict[str, Any], estimate: float) -> dict[str, Any]:
     """Win chance from the most specific level with enough games (same spells and win
-    condition below exact), pulled toward the archetype estimate when games are few:
-    2 wins in 7 exact games with a 53% archetype estimate gives (2 + 5.3) / 17 = 43%."""
+    condition below exact), pulled toward the model's estimate when games are few:
+    2 wins in 7 exact games with a 53% estimate gives (2 + 5.3) / 17 = 43%."""
     for level in breakdown["levels"]:
         cell = next(c for c in level["cells"] if c["tier"] is None)
         if cell.get("mirror") or cell["games"] < HEADLINE_MIN_GAMES:
             continue
-        chance = ((cell["wins"] + HEADLINE_PULL * archetype_chance)
-                  / (cell["games"] + HEADLINE_PULL))
-        return {"win_chance": round(chance, 3), "archetype_chance": archetype_chance,
+        chance = (cell["wins"] + HEADLINE_PULL * estimate) / (cell["games"] + HEADLINE_PULL)
+        return {"win_chance": round(chance, 3), "estimate_chance": estimate,
                 "based_on": {"level": level["level"], "games": cell["games"],
                              "words": LEVEL_WORDS.get(level["level"], level["level"])}}
     return {}
@@ -275,6 +275,14 @@ class Predictor:
     archetypes: ArchetypeModel
     linear: LinearMatchupModel | None = None
     tiers: Any = None  # TierStats (records by tier and match level), with a database
+    trees: TreeMatchupModel | None = None  # the best predictor, when trained
+
+    def model_chance(self, deck_a: Sequence[int], deck_b: Sequence[int]) -> float | None:
+        """Trees' chance that deck_a wins between equally skilled players with equal levels."""
+        if self.trees is None:
+            return None
+        m = Matchup("query", datetime.now(timezone.utc), tuple(deck_a), tuple(deck_b), 0.0, 0.0, 0)
+        return float(self.trees.predict_proba([m])[0])
 
     def known_cards(self) -> set[int]:
         return set(self.archetypes.vocab.card_ids)
@@ -287,6 +295,10 @@ class Predictor:
             "archetype_a": model.names[i], "archetype_b": model.names[j],
             "win_chance": round(chance, 3), "games": games, "mirror": i == j,
         }
+        trees = self.model_chance(deck_a, deck_b)
+        if trees is not None and set(deck_a) != set(deck_b):
+            # The trees see every card on both sides (Rocket vs X-Bow), not just the styles.
+            result.update(win_chance=round(trees, 3), mirror=False, estimate="model")
         if i != j and games:
             lo, hi = wilson_interval(int(model.wins[i, j]), games)
             result["record"] = {"wins": int(model.wins[i, j]), "games": games,
@@ -307,13 +319,16 @@ class Predictor:
         if min(len(base_cards(deck_a)), len(base_cards(deck_b))) < 8:
             result["note"] += (" One deck has a Hero the Clash Royale API doesn't show, so "
                                "this is judged on the other seven cards.")
+        if result.get("estimate") == "model":
+            result["note"] = result["note"].replace(MIRROR_NOTE, (
+                "Same archetype on both sides, so this comes from the model, which sees every card."))
         if self.tiers is not None:
             breakdown = self.tiers.matchup(deck_a, deck_b, i, j)
             if breakdown is not None:
                 result["breakdown"] = breakdown
                 if set(deck_a) != set(deck_b):
                     result.update(headline(breakdown, result["win_chance"]))
-                    if "based_on" in result and result["mirror"]:  # same archetype, different decks
+                    if "based_on" in result and MIRROR_NOTE in result["note"]:  # same archetype
                         result["mirror"] = False
                         result["note"] = result["note"].replace(MIRROR_NOTE, (
                             "Same archetype on both sides, but the decks differ, so this uses "
