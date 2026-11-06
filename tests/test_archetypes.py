@@ -126,6 +126,7 @@ REAL_CARDS = {  # name: elixir
     "Electro Spirit": 1, "Hog Rider": 4, "Musketeer": 4, "Cannon": 3, "Ice Golem": 2,
     "Ice Spirit": 1, "Graveyard": 5, "Poison": 4, "Baby Dragon": 4, "Ice Wizard": 3,
     "Bowler": 5, "Barbarian Barrel": 2, "Valkyrie": 4, "Mortar": 4,
+    "Giant": 5, "Zappies": 4, "Arrows": 3, "Miner": 3,
 }
 REAL_IDS = {name: 26000000 + i for i, name in enumerate(REAL_CARDS)}
 REAL_DECKS = {  # archetype: (core cards, flex pool), 8 cards per deck
@@ -136,6 +137,9 @@ REAL_DECKS = {  # archetype: (core cards, flex pool), 8 cards per deck
     "Hog 2.6": (["Hog Rider", "Musketeer", "Cannon", "Ice Golem", "Ice Spirit", "Skeletons",
                  "Fireball", "The Log"], []),
     # Shares Tornado, Log and Skeleton Dragons-style support with the Golem deck.
+    # Two win conditions: named after both, not after its most unusual support card.
+    "Giant Graveyard": (["Giant", "Graveyard", "Zappies", "Arrows", "Night Witch", "Miner",
+                         "Barbarian Barrel", "Knight"], []),
     "Graveyard Poison": (["Graveyard", "Poison", "Tornado", "Knight"],
                          ["Baby Dragon", "Ice Wizard", "Bowler", "Barbarian Barrel", "Valkyrie",
                           "Skeleton Dragons", "The Log"]),
@@ -145,7 +149,7 @@ REAL_DECKS = {  # archetype: (core cards, flex pool), 8 cards per deck
 def _real_matchups(n=3000, seed=5, golem_share=0.04):
     rng = np.random.default_rng(seed)
     kinds = list(REAL_DECKS)
-    weights = np.array([golem_share] + [(1 - golem_share) / 3] * 3)
+    weights = np.array([golem_share] + [(1 - golem_share) / (len(kinds) - 1)] * (len(kinds) - 1))
     start = datetime(2026, 10, 1, tzinfo=timezone.utc)
 
     def deck(kind):
@@ -153,8 +157,9 @@ def _real_matchups(n=3000, seed=5, golem_share=0.04):
         extra = list(rng.choice(flex, 8 - len(core), replace=False)) if flex else []
         return tuple(sorted(REAL_IDS[c] for c in core + extra))
 
-    return [Matchup(f"m{k}", start + timedelta(minutes=k), deck(kinds[rng.choice(4, p=weights)]),
-                    deck(kinds[rng.choice(4, p=weights)]), 0.0, 0.0, int(rng.random() < 0.5))
+    return [Matchup(f"m{k}", start + timedelta(minutes=k),
+                    deck(kinds[rng.choice(len(kinds), p=weights)]),
+                    deck(kinds[rng.choice(len(kinds), p=weights)]), 0.0, 0.0, int(rng.random() < 0.5))
             for k in range(n)]
 
 
@@ -165,7 +170,8 @@ def real():
     return vocab, ArchetypeModel.fit(vocab, _real_matchups(), n_clusters=3, prior_strength=20)
 
 
-@pytest.mark.parametrize("kind", ["Golem Pump", "X-Bow 3.0", "Hog 2.6", "Graveyard Poison"])
+@pytest.mark.parametrize("kind", ["Golem Pump", "X-Bow 3.0", "Hog 2.6", "Giant Graveyard",
+                                  "Graveyard Poison"])
 def test_rare_decks_keep_their_own_win_condition_and_name(real, kind):
     _, model = real
     core, flex = REAL_DECKS[kind]

@@ -138,7 +138,8 @@ def _signature_name(vocab: CardVocab, share: np.ndarray, global_share: np.ndarra
 def _archetype_name(vocab: CardVocab, key: tuple[int, ...], share: np.ndarray,
                     global_share: np.ndarray, avg_elixir: float | None
                     ) -> tuple[str, tuple[int, ...]]:
-    """('Golem Pump' / 'X-Bow 3.0' / 'Graveyard Poison', the cards the name names);
+    """('Giant Graveyard' / 'Golem Pump' / 'X-Bow 3.0' / 'Graveyard Poison', the cards the
+    name names);
     signature cards (and no named cards to insist on) without a win condition."""
     if not key:
         return _signature_name(vocab, share, global_share), ()
@@ -146,6 +147,12 @@ def _archetype_name(vocab: CardVocab, key: tuple[int, ...], share: np.ndarray,
     core = [vocab.card_ids[i] for i in np.argsort(-share * (share / np.maximum(global_share, _EPS)))
             if share[i] >= NAME_SHARE and vocab.card_ids[i] < FORM_TOKEN["evo"]
             and vocab.card_ids[i] not in key]
+    # A second win condition nearly every deck runs names it: "Giant Graveyard",
+    # not "Giant Zappies".
+    second = sorted((c for c in core if vocab.name(c) in WIN_CONDITIONS),
+                    key=lambda c: WIN_CONDITIONS.index(vocab.name(c)))
+    if second:
+        return f"{head} {_key_name(vocab, second[:1])}", (*key, second[0])
     pump = next((c for c in core if vocab.name(c) == PUMP), None)
     if pump is not None:
         return f"{head} Pump", (*key, pump)
