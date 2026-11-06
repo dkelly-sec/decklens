@@ -1,24 +1,50 @@
+/* DeckLens: the arena's two sides. Blue is always you, red is always them,
+   magenta is elixir. Barlow Condensed (OFL, bundled) carries names and numbers. */
+
+@font-face {
+  font-family: "Barlow Condensed";
+  src: url("/static/barlow-condensed-700.woff2") format("woff2");
+  font-weight: 700;
+  font-display: swap;
+}
+
 :root {
-  --bg: #f6f7fb;
+  --bg: #e9eef6;
   --panel: #ffffff;
-  --text: #1b1e27;
-  --muted: #5d6475;
-  --accent: #3156d3;
-  --accent-text: #ffffff;
-  --border: #dde1ea;
+  --sunk: #f2f5fa;
+  --text: #16203a;
+  --muted: #4f5b76;
+  --line: #d3dbe8;
+  --blue: #1f5fd6;
+  --blue-soft: rgba(31, 95, 214, 0.12);
+  --red: #cc2f36;
+  --red-soft: rgba(204, 47, 54, 0.11);
+  --elixir: #9b2fc9;
+  --gold: #9a7208;
+  --on-accent: #ffffff;
   --error: #b42318;
+  --shadow: 0 1px 2px rgba(22, 32, 58, 0.06), 0 6px 18px rgba(22, 32, 58, 0.06);
+  --display: "Barlow Condensed", "Bahnschrift", "Arial Narrow", sans-serif;
+  color-scheme: light dark;
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg: #12141a;
-    --panel: #1b1e27;
-    --text: #e8eaf0;
-    --muted: #a3a9b8;
-    --accent: #7c9cff;
-    --accent-text: #0d1020;
-    --border: #2c303c;
+    --bg: #131a2b;
+    --panel: #1b2439;
+    --sunk: #161e31;
+    --text: #edf0f7;
+    --muted: #a3adc8;
+    --line: #2c3755;
+    --blue: #5b95ff;
+    --blue-soft: rgba(91, 149, 255, 0.16);
+    --red: #ff6168;
+    --red-soft: rgba(255, 97, 104, 0.14);
+    --elixir: #d968ff;
+    --gold: #f2c14e;
+    --on-accent: #0e1424;
     --error: #ff8a80;
+    --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 8px 24px rgba(0, 0, 0, 0.25);
   }
 }
 
@@ -29,7 +55,13 @@ body {
   background: var(--bg);
   color: var(--text);
   font: 16px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+  font-variant-numeric: tabular-nums;
+  caret-color: var(--blue);
+  accent-color: var(--blue);
+  scrollbar-color: var(--line) transparent;
 }
+
+::selection { background: var(--blue); color: var(--on-accent); }
 
 header, main, footer {
   max-width: 720px;
@@ -37,17 +69,31 @@ header, main, footer {
   padding: 0 16px;
 }
 
-header { padding-top: 32px; }
-h1 { margin: 0; font-size: 28px; }
-h2 { margin: 0 0 8px; font-size: 20px; }
+header { padding-top: 28px; }
+h1, h2 { font-family: var(--display); font-weight: 700; line-height: 1.1; }
+h1 { margin: 0; font-size: 34px; letter-spacing: 0.01em; }
+h2 { margin: 0 0 10px; font-size: 24px; display: flex; align-items: center; gap: 10px; }
 .tagline, .hint, .muted, footer { color: var(--muted); }
+.tagline { margin: 2px 0 0; }
+
+/* Which side a section is about: a short team bar beside its heading. */
+.side-you h2::before, .side-them h2::before {
+  content: "";
+  flex: none;
+  width: 6px;
+  height: 22px;
+  border-radius: 3px;
+  background: var(--blue);
+}
+.side-them h2::before { background: var(--red); }
 
 section {
   background: var(--panel);
-  border: 1px solid var(--border);
-  border-radius: 12px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  box-shadow: var(--shadow);
   padding: 20px;
-  margin: 20px 0;
+  margin: 18px 0;
 }
 
 label { display: block; margin-bottom: 6px; font-weight: 600; }
@@ -57,168 +103,303 @@ input {
   flex: 1;
   min-width: 0;
   padding: 10px 12px;
-  border: 1px solid var(--border);
+  border: 1px solid var(--line);
   border-radius: 8px;
-  background: var(--bg);
+  background: var(--sunk);
   color: var(--text);
   font: inherit;
 }
+input::placeholder { color: var(--muted); opacity: 0.8; }
 
 button {
   padding: 10px 16px;
   border: 0;
   border-radius: 8px;
-  background: var(--accent);
-  color: var(--accent-text);
+  background: var(--blue);
+  color: var(--on-accent);
   font: inherit;
   font-weight: 600;
   cursor: pointer;
+  transition: filter 120ms ease-out;
 }
+button:hover { filter: brightness(1.08); }
+button:disabled { opacity: 0.55; cursor: default; filter: none; }
+.side-them form button[type="submit"], #last-button { background: var(--red); }
 
-button:focus-visible, input:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+:focus-visible { outline: 3px solid var(--blue); outline-offset: 2px; }
+a { color: var(--blue); text-underline-offset: 3px; }
 
 .result { margin-top: 12px; }
 .error { color: var(--error); font-weight: 600; }
-.player { font-weight: 600; margin: 8px 0; }
-.label { font-weight: 600; margin: 12px 0 4px; }
-.detail, .note { color: var(--muted); margin: 4px 0; }
+.label { font-weight: 600; margin: 14px 0 6px; }
+.detail, .note { color: var(--muted); margin: 6px 0; font-size: 14px; }
+
+/* --- players ---------------------------------------------------------------- */
+
+.player { margin: 8px 0; display: flex; flex-wrap: wrap; align-items: baseline; column-gap: 12px; row-gap: 2px; }
+.player .name { font-family: var(--display); font-size: 22px; font-weight: 700; line-height: 1.2; }
+.player .facts { display: flex; flex-wrap: wrap; column-gap: 12px; color: var(--muted); font-size: 14px; }
+.player .online { color: #1f9d5c; font-weight: 600; }
+@media (prefers-color-scheme: dark) { .player .online { color: #4fd18b; } }
+
+/* --- decks ------------------------------------------------------------------- */
+
+.deck-box { margin: 4px 0; }
+.deck-facts { color: var(--muted); margin: 4px 0 8px; font-size: 14px; }
 
 .deck {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
   gap: 6px;
-  padding: 0;
+  margin: 0;
+  padding: 8px;
   list-style: none;
+  border-radius: 10px;
+  background: var(--sunk);
 }
+.yours .deck { background: var(--blue-soft); }
+.theirs .deck { background: var(--red-soft); }
 
 .deck li {
+  position: relative;
   display: flex;
   flex-direction: column;
   align-items: center;
   gap: 2px;
-  padding: 8px 6px;
-  border: 1px solid var(--border);
-  border-top: 3px solid var(--border);
-  border-radius: 6px;
-  font-size: 14px;
+  padding: 8px 4px 6px;
+  border-radius: 8px;
+  background: var(--panel);
+  box-shadow: inset 0 -3px 0 var(--line);
+  font-size: 13px;
+  line-height: 1.25;
   text-align: center;
 }
 
 .deck img { width: 64px; height: auto; }
 .card-name { font-weight: 600; }
 .card-facts { font-size: 12px; color: var(--muted); }
-.deck li.common { border-top-color: #9aa3b5; }
-.deck li.rare { border-top-color: #e0902b; }
-.deck li.epic { border-top-color: #a347e0; }
-.deck li.legendary { border-top-color: #3fc1c9; }
-.deck li.champion { border-top-color: #f2c94c; }
-.deck li.form-evo { background: rgba(163, 71, 224, 0.12); }
-.deck li.form-hero { background: rgba(242, 201, 76, 0.10); }
-.deck li.form-either { background: linear-gradient(135deg, rgba(163, 71, 224, 0.12), rgba(242, 201, 76, 0.10)); }
-.deck li.hidden-card { border-style: dashed; }
+/* Rarity shows as the strip along each card's bottom edge. */
+.deck li.common { box-shadow: inset 0 -3px 0 #9aa3b5; }
+.deck li.rare { box-shadow: inset 0 -3px 0 #e0902b; }
+.deck li.epic { box-shadow: inset 0 -3px 0 #a347e0; }
+.deck li.legendary { box-shadow: inset 0 -3px 0 #3fc1c9; }
+.deck li.champion { box-shadow: inset 0 -3px 0 #f2c94c; }
+.deck li.form-evo { outline: 2px solid rgba(163, 71, 224, 0.55); outline-offset: -2px; }
+.deck li.form-hero { outline: 2px solid rgba(242, 193, 78, 0.75); outline-offset: -2px; }
+.deck li.form-either { outline: 2px dashed rgba(163, 71, 224, 0.55); outline-offset: -2px; }
+.deck li.hidden-card { background: transparent; box-shadow: none; outline: 2px dashed var(--line); outline-offset: -2px; }
+
+/* Elixir cost: a drop in the card's corner, as in the game. */
+.drop {
+  display: inline-grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50% 50% 50% 0;
+  transform: rotate(-45deg);
+  background: var(--elixir);
+  color: #fff;
+  font-family: var(--display);
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1;
+}
+.drop span { transform: rotate(45deg); }
+.deck .drop { position: absolute; top: 4px; left: 4px; }
+
 .card-placeholder {
   display: flex;
   align-items: center;
   justify-content: center;
   width: 64px;
   height: 77px;
-  border: 2px dashed var(--border);
+  border: 2px dashed var(--line);
   border-radius: 6px;
-  font-size: 28px;
+  font-family: var(--display);
+  font-size: 30px;
   color: var(--muted);
 }
-.deck-facts { color: var(--muted); margin: 4px 0; }
 
-.tiers { width: 100%; border-collapse: collapse; margin: 8px 0; font-size: 14px; }
+/* What to play around in their deck. */
+.scout-read { margin: 10px 0 0; display: grid; gap: 6px; }
+.scout-read p { margin: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 14px; }
+.scout-read .what { color: var(--muted); min-width: 64px; }
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 10px 2px 4px;
+  border-radius: 999px;
+  background: var(--red-soft);
+  font-weight: 600;
+}
+.chip .drop { width: 18px; height: 18px; font-size: 12px; }
+
+/* --- matchup ------------------------------------------------------------------ */
+
+.matchup {
+  margin-top: 14px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--sunk);
+}
+.matchup .label { margin-top: 0; }
+.archetypes { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px 12px; margin: 0 0 8px; font-weight: 600; }
+.archetypes .a { color: var(--blue); }
+.archetypes .b { color: var(--red); text-align: right; margin-left: auto; }
+
+/* The tug of war: blue pushes from the left by your win chance. */
+.tug { margin: 4px 0 6px; }
+.tug-numbers { display: flex; justify-content: space-between; align-items: baseline; font-family: var(--display); font-weight: 700; }
+.tug-numbers .you { color: var(--blue); font-size: 40px; line-height: 1; }
+.tug-numbers .them { color: var(--red); font-size: 26px; line-height: 1; }
+.tug-numbers small { font-size: 16px; margin-left: 4px; color: var(--muted); }
+.tug-bar {
+  --p: 50%;
+  position: relative;
+  height: 14px;
+  margin-top: 6px;
+  border-radius: 7px;
+  overflow: hidden;
+  background: var(--red);
+}
+.tug-bar::before {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: var(--p);
+  background: var(--blue);
+  transition: width 700ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+.tug-bar::after {  /* the halfway line */
+  content: "";
+  position: absolute;
+  inset: -2px auto -2px calc(50% - 1px);
+  width: 2px;
+  background: var(--panel);
+}
+.tug.mirror .tug-bar, .tug.mirror .tug-bar::before { background: var(--muted); }
+.chance { margin: 6px 0 0; color: var(--muted); font-size: 14px; }
+
+/* Elixir duel: your cost curve above the line, theirs below. */
+.duel { margin: 14px 0 4px; }
+.duel svg { display: block; width: 100%; max-width: 420px; height: auto; }
+.duel .you-bar { fill: var(--blue); }
+.duel .them-bar { fill: var(--red); }
+.duel .cost { fill: var(--muted); font: 700 12px var(--display); }
+.duel-stats { display: grid; grid-template-columns: auto 1fr; gap: 2px 10px; margin: 6px 0 0; font-size: 14px; }
+.duel-stats dt { font-weight: 600; }
+.duel-stats .you { color: var(--blue); }
+.duel-stats .them { color: var(--red); }
+.duel-stats dd { margin: 0; color: var(--muted); }
+.duel-read { margin: 6px 0 0; font-weight: 600; font-size: 14px; }
+
+.tiers { width: 100%; border-collapse: collapse; margin: 10px 0 6px; font-size: 14px; }
 .table-wrap { overflow-x: auto; }
-.tiers th, .tiers td { padding: 6px 8px; border-bottom: 1px solid var(--border); text-align: left; vertical-align: top; }
+.tiers th, .tiers td { padding: 6px 8px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
 .tiers th { color: var(--muted); font-weight: 600; }
 .tiers tbody th { white-space: nowrap; }
 .tiers td.record span { display: block; }
-.tiers .rate { font-size: 16px; font-weight: 600; }
+.tiers .rate { font-family: var(--display); font-size: 20px; font-weight: 700; line-height: 1.1; }
+.tiers .rate.good { color: var(--blue); }
+.tiers .rate.bad { color: var(--red); }
 .tiers .games, .tiers .range { font-size: 12px; color: var(--muted); }
 .tiers .games .few { display: inline; }
 @media (max-width: 480px) {
   .tiers { font-size: 13px; }
   .tiers th, .tiers td { padding: 6px 3px; }
-  .tiers .rate { font-size: 15px; }
+  .tiers .rate { font-size: 18px; }
   .tiers .games .few { display: block; }
 }
 .few { color: var(--muted); }
 
-.matchup {
-  margin-top: 12px;
-  padding: 12px;
-  border-left: 4px solid var(--accent);
-  background: var(--bg);
-  border-radius: 6px;
-}
+.key-cards { margin: 4px 0 0; padding-left: 20px; font-size: 14px; }
+.key-cards .yours { color: var(--blue); font-weight: 600; }
+.key-cards .theirs { color: var(--red); font-weight: 600; }
 
-.archetypes { font-weight: 600; }
-.chance { font-size: 20px; font-weight: 700; margin: 4px 0; }
-.results { list-style: none; padding: 0; }
+/* --- search results ------------------------------------------------------------- */
+
+.results { list-style: none; padding: 0; margin: 6px 0; }
 .results li { margin: 6px 0; }
 
 .result-button {
   width: 100%;
+  padding: 8px 12px;
   text-align: left;
-  background: var(--bg);
+  background: var(--sunk);
   color: var(--text);
-  border: 1px solid var(--border);
+  border: 1px solid var(--line);
+  font-weight: 400;
 }
-
+.result-button:hover { filter: none; border-color: var(--red); }
 .result-button .player { margin: 0; }
-footer { font-size: 13px; padding-bottom: 32px; }
-
-@media (max-width: 480px) {
-  .deck { grid-template-columns: repeat(2, 1fr); }
-  .row { flex-direction: column; }
+.result-button.active { border-color: var(--red); }
+.result-button.auto-picked { border: 2px solid var(--red); background: var(--red-soft); }
+.pick-badge {
+  display: inline-block;
+  margin-bottom: 4px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: var(--red);
+  color: var(--on-accent);
+  font-size: 12px;
+  font-weight: 700;
 }
 
-.tabs { display: flex; gap: 6px; margin: 12px 0 8px; border-bottom: 1px solid var(--border); flex-wrap: wrap; }
+.tabs { display: flex; gap: 4px; margin: 14px 0 10px; padding: 4px; border-radius: 10px; background: var(--sunk); flex-wrap: wrap; }
 .tabs .tab {
+  flex: 1;
   background: transparent;
   color: var(--muted);
-  border: 1px solid transparent;
-  border-bottom: none;
-  border-radius: 6px 6px 0 0;
-  padding: 8px 12px;
+  padding: 6px 10px;
   font-weight: 600;
+  white-space: nowrap;
 }
-.tabs .tab[aria-selected="true"] { color: var(--text); border-color: var(--border); background: var(--bg); }
+.tabs .tab:hover { color: var(--text); filter: none; }
+.tabs .tab[aria-selected="true"] { color: var(--text); background: var(--panel); box-shadow: var(--shadow); }
+
+/* --- header, account, auto-scout ------------------------------------------------- */
 
 .title-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
 .account { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 14px; }
 .account[hidden] { display: none; }
 .link-button {
   background: transparent;
-  color: var(--accent);
-  border: 1px solid var(--border);
+  color: var(--blue);
+  border: 1px solid var(--line);
   padding: 4px 10px;
   font-weight: 600;
 }
+.link-button:hover { filter: none; border-color: var(--blue); }
 .login form { display: grid; gap: 8px; max-width: 360px; }
 #find-form { display: grid; gap: 8px; }
 #find-form .hint { font-weight: 400; }
 .login form button { justify-self: start; margin-top: 4px; }
-.result-button.active { border-color: var(--accent); }
-.toggle { display: flex; align-items: center; gap: 8px; font-weight: 600; margin: 4px 0 8px; }
-.toggle input { flex: none; width: auto; padding: 0; margin: 0; }  /* not stretched like text boxes */
+.toggle { display: flex; align-items: center; gap: 8px; font-weight: 600; margin: 4px 0 8px; flex-wrap: wrap; }
+.toggle input { flex: none; width: 18px; height: 18px; padding: 0; margin: 0; accent-color: var(--red); }
 .toggle .hint { font-weight: 400; }
-.result-button.auto-picked { border: 2px solid var(--accent); }
-.pick-badge {
-  display: inline-block;
-  margin-bottom: 4px;
-  padding: 1px 8px;
-  border-radius: 999px;
-  background: var(--accent);
-  color: var(--bg);
-  font-size: 12px;
-  font-weight: 700;
-}
 #auto-status { display: flex; align-items: center; gap: 8px; }
 .status-dot { flex: none; width: 10px; height: 10px; border-radius: 50%; background: var(--muted); }
 .status-dot.on { background: #2fbf71; }
 .status-dot.warn { background: #f2b33d; }
 .status-dot.off { background: #e5484d; }
 #auto-status[hidden] { display: none; }
+
+footer { font-size: 13px; padding-bottom: 32px; }
+
+@media (max-width: 480px) {
+  /* Keep the game's 4 x 2 deck shape on a phone: the whole deck in one glance. */
+  .deck { gap: 4px; padding: 6px; }
+  .deck li { padding: 6px 2px 5px; font-size: 11px; }
+  .deck img, .card-placeholder { width: 100%; max-width: 56px; }
+  .card-placeholder { height: 67px; }
+  .card-facts { font-size: 10px; }
+  .deck .drop { width: 18px; height: 18px; font-size: 12px; top: 2px; left: 2px; }
+  .row { flex-direction: column; }
+  .tug-numbers .you { font-size: 34px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tug-bar::before, button { transition: none; }
+}

@@ -138,6 +138,8 @@ What the page does:
 - **Live clan lookup:** if nobody in DeckLens's index is in the clan you typed (alts, Trophy Road players), the site asks the game directly, showing any name matches from other clans underneath: it checks clans with that name that DeckLens already knows, by clan tag (so a dropped space or misread letter doesn't matter), then the game's own clan search (exact matches first; up to 40 clans when you gave a name, 8 at a time), and lists their members, most recently online first. Your opponent is in a game with you, so they're usually at the top, marked "online now". Works for anyone in a clan, whatever their rank.
 - **Challenge and Trophy Road players in the index:** the nightly crawl also adds both sides of the 20-win challenge and Trophy Road games it reads to the name index (names and clans only; those games aren't stored), so alts that have met a crawled player are searchable by name too.
 - **Deck details:** card art, elixir, evolutions and levels for every card, plus average elixir, 4-card cycle cost and how many cards are maxed.
+- **Matchup at a glance:** your win chance as a blue-vs-red tug of war (you're always blue, they're always red), then an **elixir duel**: both decks' cost curves on one chart (yours above the line, theirs below), average elixir, 4-card cycle, and a one-line read of who out-cycles whom.
+- **What to play around:** under every opponent deck, their spells and buildings with costs. Card kinds come from the game's id ranges (26xxxxxx troops, 27xxxxxx buildings, 28xxxxxx spells), so no extra API calls.
 - **Matchup grid:** your win rate against their deck over the last 14 days, by how closely decks must match (exact, 7+ of 8 cards, 6+ of 8 cards on both sides, or same archetype) and by tier (top 200, top 1,000, all players). A game counts in a tier only if both players were inside it at the time: rank from the battle itself for the top 500, otherwise from the leaderboard snapshot within a day of it. Every cell shows its number of games and a 95% range; small samples are flagged.
 
 Already created the web role before tier stats existed? Give it read access to stored battles (still read-only):
@@ -149,6 +151,7 @@ Get-Content db\web_grants.sql | docker compose exec -T db psql -U decklens -d de
 How it's secured:
 - The API key never reaches the browser; all lookups go through the server.
 - Card art is fetched by the server from Supercell's official asset host only (never a URL from the browser), checked, cached and served from this site, so the page never loads anything from elsewhere.
+- The page's typeface (Barlow Condensed, SIL Open Font License) is bundled and served from this site (`font-src 'self'`), so no font CDN sees visitors.
 - Strict Content Security Policy (no inline script), and the front end never builds HTML from data, so hostile player names display as text.
 - Every route is rate-limited; upstream lookups are cached; request bodies are capped at 4 KB; inputs are validated (tags, names, decks).
 - Errors are generic; there are no API docs or schema endpoints and no server banner.

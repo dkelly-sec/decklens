@@ -25,6 +25,7 @@ CSP = "; ".join([
     "script-src 'self'",           # only our own script file: no inline or injected script
     "style-src 'self'",
     "img-src 'self'",
+    "font-src 'self'",             # our own bundled typeface (OFL), never a font CDN
     "connect-src 'self'",          # the page may only call our own API
     "base-uri 'none'",
     "form-action 'self'",

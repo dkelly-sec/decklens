@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>DeckLens</title>
   <link rel="icon" href="/favicon.ico">
+  <link rel="preload" href="/static/barlow-condensed-700.woff2" as="font" type="font/woff2" crossorigin>
   <link rel="stylesheet" href="/static/style.css">
   <script src="/static/app.js" defer></script>
 </head>
@@ -22,7 +23,7 @@
   </header>
 
   <main>
-    <section aria-labelledby="me-heading">
+    <section aria-labelledby="me-heading" class="side-you">
       <h2 id="me-heading">You</h2>
       <form id="me-form" autocomplete="off">
         <label for="me-tag">Your name or player tag</label>
@@ -34,14 +35,14 @@
       <div id="me-result" class="result" aria-live="polite"></div>
     </section>
 
-    <section aria-labelledby="last-heading">
+    <section aria-labelledby="last-heading" class="side-them">
       <h2 id="last-heading">Last opponent</h2>
       <p class="hint">Your most recent Ranked, Trophy Road or 20-win challenge opponent, their deck, and how the matchup tends to go.</p>
       <button id="last-button" type="button">Scout my last opponent</button>
       <div id="last-result" class="result" aria-live="polite"></div>
     </section>
 
-    <section aria-labelledby="find-heading">
+    <section aria-labelledby="find-heading" class="side-them">
       <h2 id="find-heading">Find an opponent</h2>
       <label class="toggle"><input type="checkbox" id="auto-scout"> Auto-scout
         <span class="hint">(finds whoever the screen watcher sees on your mirrored phone)</span></label>

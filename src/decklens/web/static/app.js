@@ -84,9 +84,9 @@ function cardTile(card) {
   img.loading = "lazy";
   img.addEventListener("error", () => img.remove());  // no image: the name below still shows
   tile.append(img, el("span", card.name, "card-name"));
+  if (card.elixir !== null && card.elixir !== undefined) tile.append(elixirDrop(card.elixir));
 
   const facts = [];
-  if (card.elixir !== null && card.elixir !== undefined) facts.push(card.elixir + " elixir");
   if (FORM_LABELS[card.form]) facts.push(FORM_LABELS[card.form]);
   if (card.below_max === 0) facts.push("Max level");
   else if (card.below_max) facts.push(card.below_max + " below max");
@@ -94,12 +94,25 @@ function cardTile(card) {
   return tile;
 }
 
+// The game's elixir drop, with the cost inside it. Screen readers get "N elixir".
+function elixirDrop(cost) {
+  const drop = el("span", null, "drop");
+  drop.setAttribute("role", "img");
+  drop.setAttribute("aria-label", cost + " elixir");
+  const n = el("span", cost);
+  n.setAttribute("aria-hidden", "true");
+  drop.append(n);
+  return drop;
+}
+
 function plural(n, one, many) {
   return n + " " + (n === 1 ? one : many);
 }
 
-function deckView(deck) {
-  const box = el("div", null, "deck-box");
+// side: "yours" or "theirs" (colours the deck blue or red). Their decks also
+// get a read of the spells and buildings to play around.
+function deckView(deck, side) {
+  const box = el("div", null, "deck-box" + (side ? " " + side : ""));
   const s = deck.summary || {};
   const facts = [];
   if (s.avg_elixir !== null && s.avg_elixir !== undefined) facts.push("Average elixir " + s.avg_elixir);
@@ -113,6 +126,10 @@ function deckView(deck) {
   const list = el("ul", null, "deck");
   for (const card of deck.cards) list.append(cardTile(card));
   box.append(list);
+  if (side === "theirs") {
+    const read = scoutRead(deck.cards);
+    if (read) box.append(read);
+  }
   if (s.hidden) {
     box.append(el("p", "One card is hidden: the Clash Royale API leaves out a Hero in the " +
       "Hero slot, so elixir figures use the other seven.", "detail"));
@@ -121,6 +138,29 @@ function deckView(deck) {
     box.append(el("p", "\"Evo or Hero\": the Wild slot card has both unlocked, and the API " +
       "doesn't say which one was active.", "detail"));
   }
+  return box;
+}
+
+const READ_KINDS = [["spell", "Spells"], ["building", "Buildings"]];
+
+function scoutRead(cards) {
+  const rows = [];
+  for (const [kind, title] of READ_KINDS) {
+    const these = cards.filter((c) => c.kind === kind);
+    if (!these.length) continue;
+    const row = el("p");
+    row.append(el("span", title, "what"));
+    for (const c of these) {
+      const chip = el("span", null, "chip");
+      if (c.elixir !== null && c.elixir !== undefined) chip.append(elixirDrop(c.elixir));
+      chip.append(el("span", c.name));
+      row.append(chip);
+    }
+    rows.push(row);
+  }
+  if (!rows.length) return null;
+  const box = el("div", null, "scout-read");
+  box.append(...rows);
   return box;
 }
 
@@ -139,19 +179,19 @@ function seenText(minutes) {
 // inside its own part and can't reorder the tag and numbers around it.
 function playerLine(player, options = {}) {
   const line = el("p", null, "player");
-  const parts = [el("bdi", player.name || "Unknown"), player.tag];
-  if (player.clan) parts.push(el("bdi", player.clan));
-  else if (options.showNoClan) parts.push("no clan");
-  if (player.rank) parts.push("rank #" + player.rank);
-  if (player.rating) parts.push("rating " + player.rating);
-  if (player.trophies) parts.push(player.trophies.toLocaleString() + " trophies");
+  line.append(el("bdi", player.name || "Unknown", "name"));
+  const facts = el("span", null, "facts");
+  const add = (node, className) => facts.append(typeof node === "string" ? el("span", node, className) : node);
+  add(player.tag);
+  if (player.clan) add(el("bdi", player.clan));
+  else if (options.showNoClan) add("no clan");
+  if (player.rank) add("rank #" + player.rank);
+  if (player.rating) add("rating " + player.rating);
+  if (player.trophies) add(player.trophies.toLocaleString() + " trophies");
   if (player.last_seen_minutes !== null && player.last_seen_minutes !== undefined) {
-    parts.push(seenText(player.last_seen_minutes));
+    add(seenText(player.last_seen_minutes), player.last_seen_minutes < 2 ? "online" : undefined);
   }
-  parts.forEach((part, i) => {
-    if (i) line.append(" · ");
-    line.append(part);  // strings become text nodes: still never HTML
-  });
+  line.append(facts);  // every part is a text node: still never HTML
   return line;
 }
 
@@ -172,7 +212,8 @@ function recordCell(cell) {
   if (cell.mirror) {
     td.append(el("span", "Mirror", "rate"), el("span", plural(cell.games, "game", "games"), "games"));
   } else if (cell.games) {
-    td.append(el("span", pct(cell.rate), "rate"));
+    const lean = cell.range[0] > 0.5 ? " good" : cell.range[1] < 0.5 ? " bad" : "";
+    td.append(el("span", pct(cell.rate), "rate" + lean));
     const games = el("span", plural(cell.games, "game", "games"), "games");
     if (cell.games < 30) games.append(el("span", " (few)", "few"));
     td.append(games, el("span", pct(cell.range[0]) + "–" + pct(cell.range[1]), "range"));
@@ -220,11 +261,97 @@ function recordOnly(m) {
   return table;
 }
 
-function matchupBox(m, label, mode) {
+// Your win chance as a tug of war: blue pushes from the left, red from the right.
+function tugBar(m) {
+  const you = m.mirror ? 0.5 : m.win_chance;
+  const tug = el("div", null, "tug" + (m.mirror ? " mirror" : ""));
+  const numbers = el("div", null, "tug-numbers");
+  numbers.setAttribute("aria-hidden", "true");  // the sentence below says the same
+  const a = el("span", pct(you), "you");
+  a.append(el("small", "you"));
+  const b = el("span", pct(1 - you), "them");
+  b.append(el("small", "them"));
+  numbers.append(a, b);
+  const bar = el("div", null, "tug-bar");
+  bar.setAttribute("aria-hidden", "true");
+  tug.append(numbers, bar);
+  // Start level and slide to the result, so the eye catches which way it leans.
+  requestAnimationFrame(() => requestAnimationFrame(() => bar.style.setProperty("--p", (you * 100).toFixed(1) + "%")));
+  return tug;
+}
+
+const DUEL_COSTS = [1, 2, 3, 4, 5, 6, 7, 8, 9];
+
+function costCounts(deck) {
+  const counts = new Map(DUEL_COSTS.map((c) => [c, 0]));
+  for (const card of deck.cards) {
+    if (card.elixir) counts.set(Math.min(card.elixir, 9), counts.get(Math.min(card.elixir, 9)) + 1);
+  }
+  return counts;
+}
+
+function svg(tag, attrs) {
+  const node = document.createElementNS("http://www.w3.org/2000/svg", tag);
+  for (const [k, v] of Object.entries(attrs)) node.setAttribute(k, String(v));
+  return node;
+}
+
+// Plain-words read of the two curves: who cycles back to their answers sooner.
+function duelRead(mine, theirs) {
+  const a = mine.summary || {}, b = theirs.summary || {};
+  if (a.cycle && b.cycle && Math.abs(a.cycle - b.cycle) >= 2) {
+    return a.cycle < b.cycle
+      ? "You out-cycle them: your 4 cheapest cost " + (b.cycle - a.cycle) + " less than theirs."
+      : "They out-cycle you: their 4 cheapest cost " + (a.cycle - b.cycle) + " less than yours.";
+  }
+  if (a.avg_elixir && b.avg_elixir && Math.abs(a.avg_elixir - b.avg_elixir) >= 0.4) {
+    return a.avg_elixir < b.avg_elixir
+      ? "Your deck is lighter: punish their big pushes with a quick one the other side."
+      : "Their deck is lighter: expect fast cycles, so don't overcommit on one lane.";
+  }
+  return "Similar weight: whoever spends elixir better wins this one.";
+}
+
+// Elixir duel: your cost curve rises above the line, theirs hangs below it.
+function elixirDuel(mine, theirs) {
+  const you = costCounts(mine), them = costCounts(theirs);
+  const W = 30, UNIT = 12, MID = 62;
+  const chart = svg("svg", { viewBox: "0 0 " + W * DUEL_COSTS.length + " 124", role: "img" });
+  const said = (counts) => DUEL_COSTS.filter((c) => counts.get(c)).map((c) => counts.get(c) + " at " + c).join(", ");
+  chart.setAttribute("aria-label", "Cards by elixir cost. Yours: " + said(you) + ". Theirs: " + said(them) + ".");
+  DUEL_COSTS.forEach((cost, i) => {
+    const x = i * W + 5;
+    const up = you.get(cost) * UNIT, down = them.get(cost) * UNIT;
+    if (up) chart.append(svg("rect", { x, y: MID - 9 - up, width: W - 10, height: up, rx: 3, class: "you-bar" }));
+    if (down) chart.append(svg("rect", { x, y: MID + 9, width: W - 10, height: down, rx: 3, class: "them-bar" }));
+    const label = svg("text", { x: x + (W - 10) / 2, y: MID + 4, "text-anchor": "middle", class: "cost" });
+    label.textContent = String(cost);
+    chart.append(label);
+  });
+  const stats = el("dl", null, "duel-stats");
+  for (const [who, deck, className] of [["You", mine, "you"], ["Them", theirs, "them"]]) {
+    const s = deck.summary || {};
+    const bits = [];
+    if (s.avg_elixir) bits.push(s.avg_elixir + " average");
+    if (s.cycle) bits.push(s.cycle + " to cycle 4");
+    stats.append(el("dt", who, className), el("dd", bits.join(", ") || "costs unknown"));
+  }
+  const box = el("div", null, "duel");
+  box.append(el("p", "Elixir duel", "label"), chart, stats, el("p", duelRead(mine, theirs), "duel-read"));
+  return box;
+}
+
+// decks: { mine, theirs } when both are known, for the elixir duel.
+function matchupBox(m, label, mode, decks) {
   const box = el("div", null, "matchup");
   box.append(el("p", label || "Matchup", "label"));
-  box.append(el("p", m.archetype_a + "  vs  " + m.archetype_b, "archetypes"));
-  box.append(el("p", "Your deck wins about " + pct(m.win_chance), "chance"));
+  const names = el("p", null, "archetypes");
+  names.append(el("span", m.archetype_a, "a"), el("span", m.archetype_b, "b"));
+  box.append(names, tugBar(m));
+  box.append(el("p", m.mirror ? "Mirror match: a coin flip on decks."
+    : "Your deck wins about " + pct(m.win_chance) + " of games like this.", "chance"));
+  // The duel sits right under the verdict: it's what you can act on mid-battle.
+  if (decks && decks.mine && decks.theirs) box.append(elixirDuel(decks.mine, decks.theirs));
   if (m.breakdown) {
     box.append(breakdownTable(m.breakdown));
     box.append(el("p", "Your win rate, from ranked games in the last " + m.breakdown.window_days +
@@ -248,7 +375,9 @@ function matchupBox(m, label, mode) {
     for (const k of m.key_cards) {
       const where = k.deck === "yours" ? "in your deck" : "in their deck";
       const effect = k.effect > 0 ? "helps you" : "helps them";
-      cards.append(el("li", k.card + " (" + where + ") " + effect));
+      const item = el("li");
+      item.append(el("span", k.card, k.effect > 0 ? "yours" : "theirs"), " (" + where + ") " + effect);
+      cards.append(item);
     }
     box.append(el("p", "Cards that matter most:", "detail"), cards);
   }
@@ -275,7 +404,7 @@ async function showMe(tag) {
     state.myDecks = undefined;  // your Trophy Road / challenge decks: fetched again for this player
     storageSet("decklens.myTag", me.tag);
     const parts = [playerLine(me)];
-    if (me.deck.cards.length) parts.push(el("p", "Current deck", "label"), deckView(me.deck));
+    if (me.deck.cards.length) parts.push(el("p", "Current deck", "label"), deckView(me.deck, "yours"));
     show(out, ...parts);
   } catch (error) {
     state.me = null;
@@ -333,9 +462,12 @@ function lastOpponentParts(opp) {
     playerLine(opp),
     el("p", (MODE_NAMES[opp.mode] || "Battle") + " · You " + opp.your_result + " this one.", "detail"),
     el("p", "Their deck", "label"),
-    deckView(opp.deck),
+    deckView(opp.deck, "theirs"),
   ];
-  if (opp.matchup) parts.push(matchupBox(opp.matchup, "Your deck vs theirs", opp.mode));
+  if (opp.matchup) {
+    parts.push(matchupBox(opp.matchup, "Your deck vs theirs", opp.mode,
+      { mine: opp.your_deck, theirs: opp.deck }));
+  }
   return parts;
 }
 
@@ -685,27 +817,29 @@ async function myDeckFor(mode) {
   return { deck: state.me.deck, label: "Your current deck vs this one (no recent " + name + " deck of yours found)" };
 }
 
-async function deckList(decks, mode) {
-  const parts = [];
-  for (const d of decks) {
-    const when = d.last_played ? ", last on " + new Date(d.last_played).toLocaleDateString() : "";
-    parts.push(el("p", "Played " + plural(d.games, "time", "times") + " (" + d.wins + " wins" + when + ")", "label"),
-      deckView(d.deck));
-    const mine = await myDeckFor(mode);
-    if (mine && knownIds(mine.deck).length >= 7 && knownIds(d.deck).length >= 7) {
-      try {
-        const m = await api("/api/predict", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ deck_a: knownIds(mine.deck), deck_b: knownIds(d.deck) }),
-        });
-        parts.push(matchupBox(m, mine.label, mode));
-      } catch (error) {
-        parts.push(errorBox(error));
-      }
-    }
+async function matchupFor(mine, deck, mode) {
+  if (!mine || knownIds(mine.deck).length < 7 || knownIds(deck).length < 7) return [];
+  try {
+    const m = await api("/api/predict", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ deck_a: knownIds(mine.deck), deck_b: knownIds(deck) }),
+    });
+    return [matchupBox(m, mine.label, mode, { mine: mine.deck, theirs: deck })];
+  } catch (error) {
+    return [errorBox(error)];
   }
-  return parts;
+}
+
+async function deckList(decks, mode) {
+  const mine = await myDeckFor(mode);
+  // All matchups at once rather than one after another: the tab opens sooner.
+  const matchups = await Promise.all(decks.map((d) => matchupFor(mine, d.deck, mode)));
+  return decks.flatMap((d, i) => {
+    const when = d.last_played ? ", last on " + new Date(d.last_played).toLocaleDateString() : "";
+    return [el("p", "Played " + plural(d.games, "time", "times") + " (" + d.wins + " wins" + when + ")", "label"),
+      deckView(d.deck, "theirs"), ...matchups[i]];
+  });
 }
 
 function newestPlay(decks) {

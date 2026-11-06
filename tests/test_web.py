@@ -1065,3 +1065,14 @@ def test_watcher_status_reaches_the_page_and_goes_stale():
 def test_watcher_status_is_validated(body):
     app, _, _ = make()
     assert app.post("/api/watch/status", json=body).status_code == 422
+
+
+@pytest.mark.parametrize("card_id, kind", [
+    (26000021, "troop"), (27000006, "building"), (28000011, "spell"),
+    (159000000, None), (9, None),   # tower troops and unknown ids get no kind
+])
+def test_card_kind_comes_from_the_id_range(card_id, kind):
+    from decklens.web.services import _cards, card_kind
+
+    assert card_kind(card_id) == kind
+    assert _cards([{"id": card_id, "name": "X"}])[0]["kind"] == kind

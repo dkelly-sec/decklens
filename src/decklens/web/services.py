@@ -80,6 +80,14 @@ def active_form(owned: int | None, slot: int) -> str | None:
     return None
 
 
+# The game numbers cards by kind: 26xxxxxx troops, 27xxxxxx buildings, 28xxxxxx spells.
+CARD_KINDS = {26: "troop", 27: "building", 28: "spell"}
+
+
+def card_kind(card_id: int) -> str | None:
+    return CARD_KINDS.get(card_id // 1_000_000)
+
+
 def _card(c: dict[str, Any], slot: int) -> dict[str, Any]:
     """One card's display details: only checked, typed values make it through."""
     level, max_level = opt_int(c.get("level")), opt_int(c.get("maxLevel"))
@@ -89,6 +97,7 @@ def _card(c: dict[str, Any], slot: int) -> dict[str, Any]:
     return {
         "id": c["id"],
         "name": _text(c.get("name"), 40) or str(c["id"]),
+        "kind": card_kind(c["id"]),
         "elixir": elixir if elixir is not None and 0 <= elixir <= 10 else None,
         "rarity": rarity.lower() if isinstance(rarity, str) and rarity.lower() in RARITIES else None,
         "below_max": below_max if below_max is not None and 0 <= below_max <= 20 else None,
@@ -96,7 +105,7 @@ def _card(c: dict[str, Any], slot: int) -> dict[str, Any]:
     }
 
 
-HIDDEN_CARD = {"id": None, "name": "Hidden Hero", "elixir": None, "rarity": None,
+HIDDEN_CARD = {"id": None, "name": "Hidden Hero", "kind": "troop", "elixir": None, "rarity": None,
                "below_max": None, "form": "hero", "hidden": True}
 
 
