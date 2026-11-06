@@ -24,5 +24,7 @@ if ($LASTEXITCODE -ne 0) {
 
 cmd /c ".venv\Scripts\python.exe -m decklens.crawl --seed-leaderboard 1000 --countries 1000 --max-players 1500 >> $log 2>&1"
 $code = $LASTEXITCODE
+# Your own battles too (does nothing unless DECKLENS_MY_TAGS is set in .env).
+cmd /c ".venv\Scripts\python.exe -m decklens.collector --mine >> $log 2>&1"
 Write-Log "nightly crawl finished (exit $code)"
 exit $code

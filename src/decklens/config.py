@@ -31,6 +31,22 @@ def _required(name: str) -> str:
     return value
 
 
+def my_tags() -> list[str]:
+    """Your own player tags (DECKLENS_MY_TAGS, comma-separated), whose battles are
+    collected so the app can show your own record. Invalid entries are skipped."""
+    from .validation import InvalidTagError, normalize_tag
+
+    tags = []
+    for raw in os.environ.get("DECKLENS_MY_TAGS", "").split(",")[:10]:
+        try:
+            tag = normalize_tag(raw)
+        except InvalidTagError:
+            continue
+        if tag not in tags:
+            tags.append(tag)
+    return tags
+
+
 def load_settings(*, require_database: bool = True) -> Settings:
     """Read settings from the environment, loading a local .env file if present."""
     try:

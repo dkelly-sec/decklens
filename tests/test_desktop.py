@@ -120,3 +120,23 @@ def test_missing_watcher_packages_leave_the_website_running(monkeypatch, caplog)
     assert "screen watcher not installed (mss)" in caplog.text
     assert board.status("anyone") == {"state": "unavailable",
                                       "detail": "screen reader not installed"}
+
+
+def test_my_battles_are_collected_until_the_app_closes():
+    import threading
+
+    calls = []
+    stop = threading.Event()
+
+    def collect():
+        calls.append(1)
+        if len(calls) == 1:
+            raise RuntimeError("API down")   # a failure never stops the loop
+        stop.set()
+
+    desktop.MY_BATTLES_EVERY, old = 0.01, desktop.MY_BATTLES_EVERY
+    try:
+        desktop.collect_my_battles(stop, collect)
+    finally:
+        desktop.MY_BATTLES_EVERY = old
+    assert len(calls) == 2

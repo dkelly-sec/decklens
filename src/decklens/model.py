@@ -277,6 +277,25 @@ class TreeMatchupModel:
         backward = self._proba([flipped(m) for m in matchups])
         return (forward + (1.0 - backward)) / 2.0
 
+    def proba_matrix(self, decks_a: Sequence[Sequence[int]], decks_b: Sequence[Sequence[int]],
+                     max_rows: int = 20_000) -> np.ndarray:
+        """P(deck_a[i] beats deck_b[j]) for every pair, between equally skilled players
+        with equal card levels; both orders averaged, like predict_proba."""
+        A = np.stack([self.vocab.one_hot(d) for d in decks_a])
+        B = np.stack([self.vocab.one_hot(d) for d in decks_b])
+        extras = np.zeros((1, len(EXTRA_FEATURES)), dtype=np.float32)
+        out = np.empty((len(A), len(B)))
+        step = max(1, max_rows // len(B))  # bounded memory, whatever the sizes
+        for start in range(0, len(A), step):
+            a = A[start:start + step]
+            left, right = np.repeat(a, len(B), axis=0), np.tile(B, (len(a), 1))
+            ext = np.repeat(extras, len(left), axis=0)
+            forward = self._raw(np.hstack([left, right, ext]))
+            backward = self._raw(np.hstack([right, left, ext]))
+            p = (1 / (1 + np.exp(-forward)) + 1 - 1 / (1 + np.exp(-backward))) / 2
+            out[start:start + step] = p.reshape(len(a), len(B))
+        return out
+
     def to_json(self) -> str:
         return json.dumps({
             "format": TREES_FORMAT, "vocab": self.vocab.to_dict(), "baseline": self.baseline,

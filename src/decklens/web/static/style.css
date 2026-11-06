@@ -301,6 +301,33 @@ a { color: var(--blue); text-underline-offset: 3px; }
 }
 .few { color: var(--muted); }
 
+.meta td { vertical-align: middle; }
+.meta tbody th { white-space: normal; font-family: var(--display); font-size: 17px; color: var(--text); }
+.trend { display: block; width: 112px; height: 28px; }
+.trend rect { fill: var(--blue); }
+#meta-bands .tab[aria-pressed="true"] { color: var(--text); background: var(--panel); box-shadow: var(--shadow); }
+#meta-bands[hidden] { display: none; }
+
+.rematch { margin: 12px 0 4px; padding: 12px 14px; border-radius: 12px; background: var(--red-soft); }
+.rematch .label { margin-top: 0; }
+.meeting { display: flex; flex-wrap: wrap; gap: 4px 10px; margin: 8px 0 4px; font-size: 14px; }
+.meeting [class^="result-"] { font-family: var(--display); font-weight: 700; font-size: 17px; }
+.result-won { color: var(--blue); }
+.result-lost { color: var(--red); }
+.rematch .scout-read { margin-top: 2px; }
+
+.my-record { margin-top: 16px; }
+.my-record .tabs .tab[aria-pressed="true"],
+#meta-bands .tab[aria-pressed="true"] { color: var(--text); background: var(--panel); box-shadow: var(--shadow); }
+
+.tweaks { margin-top: 16px; }
+.tweaks .tabs .tab[aria-pressed="true"] { color: var(--text); background: var(--panel); box-shadow: var(--shadow); }
+.tweak-table tbody th { white-space: normal; font-weight: 600; color: var(--text); }
+.tweak-table tr.now th, .tweak-table tr.now td { color: var(--muted); }
+.swap-out { color: var(--muted); text-decoration: line-through; text-decoration-thickness: 1px; }
+.swap-in { color: var(--blue); }
+.swap-vs { display: block; font-weight: 400; font-size: 12px; color: var(--muted); }
+
 .key-cards { margin: 4px 0 0; padding-left: 20px; font-size: 14px; }
 .key-cards .yours { color: var(--blue); font-weight: 600; }
 .key-cards .theirs { color: var(--red); font-weight: 600; }
@@ -390,3 +417,4 @@ footer { font-size: 13px; padding-bottom: 32px; }
 @media (prefers-reduced-motion: reduce) {
   .tug-bar::before, button { transition: none; }
 }
+.rematch .chip { background: var(--panel); }

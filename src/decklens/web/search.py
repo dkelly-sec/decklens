@@ -15,6 +15,49 @@ from psycopg import Connection
 
 from ..names import search_key
 
+# Stored games between two players (only Ranked and Trophy Road are stored).
+_MEETINGS = """
+    SELECT b.battle_time, b.battle_type = 'pathOfLegend',
+           CASE WHEN b.winner_side IS NULL THEN NULL ELSE b.winner_side = me.side END,
+           me.crowns, them.crowns, them.cards
+    FROM battle_players me
+    JOIN battle_players them ON them.battle_id = me.battle_id AND them.side <> me.side
+    JOIN battles b ON b.battle_id = me.battle_id
+    WHERE me.player_tag = %s AND them.player_tag = %s
+    ORDER BY b.battle_time DESC
+    LIMIT 10
+"""
+
+
+# One player's stored Ranked games: (time, did they win (None = draw), opponent's
+# card ids, opponent's raw cards). Capped: a month of heavy play is well under this.
+_MY_GAMES = """
+    SELECT b.battle_time,
+           CASE WHEN b.winner_side IS NULL THEN NULL ELSE b.winner_side = me.side END,
+           them.card_ids, them.cards
+    FROM battle_players me
+    JOIN battle_players them ON them.battle_id = me.battle_id AND them.side <> me.side
+    JOIN battles b ON b.battle_id = me.battle_id
+    WHERE me.player_tag = %s AND b.battle_type = 'pathOfLegend'
+      AND b.battle_time >= now() - make_interval(days => %s)
+    ORDER BY b.battle_time DESC
+    LIMIT 3000
+"""
+
+
+def my_games(conn: Connection, tag: str, days: int) -> list[tuple]:
+    with conn.cursor() as cur:
+        cur.execute(_MY_GAMES, (tag, days))
+        return cur.fetchall()
+
+
+def stored_meetings(conn: Connection, me: str, them: str) -> list[tuple]:
+    """(time, ranked?, did I win (None = draw), my crowns, their crowns, their cards)."""
+    with conn.cursor() as cur:
+        cur.execute(_MEETINGS, (me, them))
+        return cur.fetchall()
+
+
 MIN_QUERY = 2
 MAX_RESULTS = 10
 MAX_RATING = 20_000

@@ -13,7 +13,7 @@ import logging
 import os
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from importlib import resources
 from pathlib import Path
 from typing import Any, Callable, Iterator, Literal
@@ -27,6 +27,8 @@ from ..api_client import ApiError, ClashRoyaleClient, NotFoundError
 from ..archetypes import ArchetypeModel
 from ..model import LinearMatchupModel, TreeMatchupModel
 from .auth import Auth, User
+from .meta import meta
+from .tweaks import find_tweaks
 from .watch import WatchBoard
 from .security import (
     BodySizeLimitMiddleware, RateLimiter, SameOriginMiddleware, SecurityHeadersMiddleware,
@@ -34,7 +36,7 @@ from .security import (
 )
 from .services import (
     CLAN_SEARCH_LIMIT, Predictor, battle_mix, card_ids, last_opponent, live_clan_lookup,
-    recent_decks, safe_tag, summarise_player, validate_deck,
+    my_record, recent_decks, rematches, safe_tag, summarise_player, validate_deck,
 )
 
 log = logging.getLogger("decklens.web")
@@ -43,6 +45,8 @@ RATE_LIMITS = {
     "lookup": (30, 60.0),   # player / battle-log lookups: 30 a minute per client
     "search": (20, 60.0),   # name search: 20 a minute (slows down scraping the index)
     "predict": (60, 60.0),
+    "meta": (30, 60.0),     # meta tables work over every stored battle
+    "tweaks": (6, 60.0),    # a tweak search scores ~150 decks against the meta with the trees
     "images": (600, 60.0),  # card art: a page shows up to ~40 cards at once
     "login": (10, 60.0),    # password guesses per client, on top of per-username lockout
     "clan_lookup": (6, 60.0),  # live clan lookups cost up to 6 API calls each
@@ -87,6 +91,12 @@ class WatchStatus(BaseModel):
     state: Literal["connected", "screen_only", "no_window", "minimised", "starting",
                    "unavailable"]
     detail: str | None = Field(default=None, max_length=80)
+
+
+class TweakRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    deck: list[int]
+    band: Literal["all", "low", "mid", "high"] = "all"
 
 
 class PredictRequest(BaseModel):
@@ -186,6 +196,44 @@ def create_app(services: Services, *, hsts: bool = False) -> FastAPI:
         if services.predictor is not None and min(len(your), len(theirs)) >= 7:
             found["matchup"] = services.predictor.predict(your, theirs)
         return found
+
+    @app.get("/api/players/{tag}/record", dependencies=[*signed_in, Depends(limit("lookup"))])
+    def record_route(tag: str, days: int = Query(default=30, ge=1, le=90)) -> dict[str, Any]:
+        tag = tag_or_400(tag)
+        model = predictor()
+        games: list[tuple] = []
+        stored = False
+        if services.search_db is not None:
+            from .search import my_games
+
+            try:
+                with services.search_db() as conn:
+                    games, stored = my_games(conn, tag, days), True
+            except Exception as exc:  # database trouble: your battle log alone still answers
+                log.warning("stored games unavailable: %s", type(exc).__name__)
+        since = datetime.now(timezone.utc) - timedelta(days=days)
+        record = my_record(games, upstream("battlelog", tag), tag, model.archetypes, since)
+        return {**record, "days": days, "stored": stored and bool(games)}
+
+    @app.get("/api/players/{tag}/vs/{other}", dependencies=[*signed_in, Depends(limit("lookup"))])
+    def rematch_route(tag: str, other: str) -> dict[str, Any]:
+        me, them = tag_or_400(tag), tag_or_400(other)
+        stored: list[tuple] = []
+        if services.search_db is not None:
+            from .search import stored_meetings
+
+            try:
+                with services.search_db() as conn:
+                    stored = stored_meetings(conn, me, them)
+            except Exception as exc:  # database trouble: the battle log alone still answers
+                log.warning("stored meetings unavailable: %s", type(exc).__name__)
+        meetings = rematches(me, them, upstream("battlelog", me), stored)
+        if services.predictor is not None:
+            for m in meetings:
+                ids = card_ids(m["deck"]["cards"])
+                m["archetype"] = services.predictor.archetypes.names[
+                    int(services.predictor.archetypes.assign([tuple(ids)])[0])]
+        return {"meetings": meetings}
 
     @app.get("/api/search", dependencies=[*signed_in, Depends(limit("search"))])
     def search(name: str | None = Query(default=None, max_length=40),
@@ -290,6 +338,37 @@ def create_app(services: Services, *, hsts: bool = False) -> FastAPI:
         except ValueError as exc:
             raise HTTPException(400, str(exc)) from None
         return model.predict(deck_a, deck_b)
+
+    def battle_table() -> Any:
+        tiers = services.predictor.tiers if services.predictor is not None else None
+        table = tiers.table() if tiers is not None else None
+        if table is None:
+            raise HTTPException(503, "Needs stored battles: set WEB_DATABASE_URL and run the crawl")
+        return table
+
+    @app.get("/api/meta", dependencies=[*signed_in, Depends(limit("meta"))])
+    def meta_route(band: str = Query(default="all", pattern="^(all|low|mid|high)$")
+                   ) -> dict[str, Any]:
+        table = battle_table()
+        try:
+            return services.cache.get_or_set(
+                ("meta", band, id(table)),
+                lambda: meta(table, services.predictor.archetypes.names, band))
+        except KeyError:
+            raise HTTPException(404, "Not enough rated players for rating bands yet") from None
+
+    @app.post("/api/tweaks", dependencies=[*signed_in, Depends(limit("tweaks"))])
+    def tweaks_route(body: TweakRequest, model: Predictor = Depends(predictor)) -> dict[str, Any]:
+        if model.trees is None:
+            raise HTTPException(503, "Needs the trees model: run python -m decklens.train")
+        try:
+            deck = validate_deck(body.deck, model.known_cards())
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from None
+        table = battle_table()
+        return services.cache.get_or_set(
+            ("tweaks", deck, body.band, id(table)),
+            lambda: find_tweaks(model.trees, table, model.archetypes.names, deck, body.band))
 
     @app.get("/cards/{card_id}.png", include_in_schema=False,
              dependencies=[*signed_in, Depends(limit("images"))])

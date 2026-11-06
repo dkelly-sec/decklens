@@ -356,12 +356,156 @@ async function showMe(tag) {
     storageSet("decklens.myTag", me.tag);
     const parts = [playerLine(me)];
     if (me.deck.cards.length) parts.push(el("p", "Current deck", "label"), deckView(me.deck, "yours"));
+    const record = el("div", null, "my-record");
+    parts.push(record);
+    if (me.deck.cards.length) {
+      const tweaks = el("div", null, "tweaks");
+      const find = el("button", "Find deck tweaks", "link-button");
+      find.type = "button";
+      find.addEventListener("click", () => showTweaks(me.deck, tweaks, "all"));
+      tweaks.append(find);
+      parts.push(tweaks);
+    }
     show(out, ...parts);
+    showRecord(me.tag, record, 30);
   } catch (error) {
     state.me = null;
     state.myDecks = undefined;
     show(out, errorBox(error));
   }
+}
+
+// --- deck tweak finder ---------------------------------------------------------
+
+function signed(g) {
+  const pts = Math.round(g * 1000) / 10;
+  return (pts > 0 ? "+" : pts < 0 ? "−" : "±") + Math.abs(pts).toFixed(1) + "%";
+}
+
+function gainCell(g) {
+  const td = el("td", null, "record");
+  if (g === undefined) {
+    td.append(el("span", "—", "rate"));
+    return td;
+  }
+  td.append(el("span", signed(g), "rate" + (g >= 0.005 ? " good" : g <= -0.005 ? " bad" : "")));
+  return td;
+}
+
+// One-card swaps the model rates best against the meta, in each rating band.
+async function showTweaks(deck, box, band) {
+  show(box, el("p", "Deck tweaks", "label"),
+    el("p", "Trying one-card swaps against the most played decks in each rating range…", "muted"));
+  let t;
+  try {
+    t = await api("/api/tweaks", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ deck: knownIds(deck), band }),
+    });
+  } catch (error) {
+    show(box, el("p", "Deck tweaks", "label"), errorBox(error));
+    return;
+  }
+  const bands = t.bands.filter((b) => b.base !== undefined);
+  if (!t.swaps.length || !bands.length) {
+    show(box, el("p", "Deck tweaks", "label"), el("p", "Not enough stored battles to compare against yet.", "muted"));
+    return;
+  }
+  const sorter = el("div", null, "tabs");
+  sorter.setAttribute("role", "group");
+  sorter.setAttribute("aria-label", "Sort by rating range");
+  for (const b of bands) {
+    const button = el("button", b.key === "all" ? "All ratings" : b.label, "tab");
+    button.type = "button";
+    button.setAttribute("aria-pressed", String(b.key === band));
+    button.addEventListener("click", () => showTweaks(deck, box, b.key));
+    sorter.append(button);
+  }
+  const wrap = el("div", null, "table-wrap");
+  const table = el("table", null, "tiers tweak-table");
+  table.append(el("thead"), el("tbody"));
+  const head = el("tr");
+  head.append(el("th", "Swap"));
+  for (const b of bands) head.append(el("th", b.key === "all" ? "All" : b.label));
+  const now = el("tr", null, "now");
+  now.append(el("th", "Your deck now"));
+  for (const b of bands) now.append(el("td", pct(b.base), "rate"));
+  table.tHead.append(head);
+  table.tBodies[0].append(now);
+  for (const s of t.swaps) {
+    const tr = el("tr");
+    const swap = el("th");
+    swap.append(el("span", s.out, "swap-out"), el("span", " → "), el("span", s.in, "swap-in"));
+    if (s.vs.length) {
+      swap.append(el("span", s.vs.map((v) => signed(v.gain) + " vs " + v.archetype).join(", "), "swap-vs"));
+    }
+    tr.append(swap);
+    for (const b of bands) tr.append(gainCell(s.gain[b.key]));
+    table.tBodies[0].append(tr);
+  }
+  wrap.append(table);
+  show(box, el("p", "Deck tweaks", "label"), el("p", "Best swaps for:", "hint"), sorter, wrap,
+    el("p", "Win chance against the 60 most played decks in each rating range, from the model, " +
+      "between equally skilled players with equal card levels. Ranges split rated players into " +
+      "thirds. Swapped-in cards are judged plain (no Evo or Hero), and changes under about 1% " +
+      "are within the model's noise.", "note"));
+}
+
+const RECORD_DAYS = [7, 30, 90];
+
+// Your own Ranked record against each archetype you've faced.
+async function showRecord(tag, box, days) {
+  const tabs = el("div", null, "tabs");
+  tabs.setAttribute("role", "group");
+  tabs.setAttribute("aria-label", "How far back");
+  for (const d of RECORD_DAYS) {
+    const b = el("button", d + " days", "tab");
+    b.type = "button";
+    b.setAttribute("aria-pressed", String(d === days));
+    b.addEventListener("click", () => showRecord(tag, box, d));
+    tabs.append(b);
+  }
+  show(box, el("p", "Your record", "label"), tabs, el("p", "Loading your games…", "muted"));
+  let r;
+  try {
+    r = await api("/api/players/" + tagPath(tag) + "/record?days=" + days);
+  } catch (error) {
+    show(box, el("p", "Your record", "label"), tabs, errorBox(error));
+    return;
+  }
+  const parts = [el("p", "Your record", "label"), tabs];
+  if (!r.games) {
+    parts.push(el("p", "No Ranked games in this window yet.", "muted"));
+  } else {
+    parts.push(el("p", "Ranked: " + r.wins + " wins from " + plural(r.games, "game", "games") +
+      " (" + pct(r.wins / r.games) + ").", "detail"));
+    const wrap = el("div", null, "table-wrap");
+    const table = el("table", null, "tiers");
+    table.append(el("thead"), el("tbody"));
+    const head = el("tr");
+    for (const h of ["Against", "Record", "Win rate"]) head.append(el("th", h));
+    table.tHead.append(head);
+    for (const a of r.archetypes) {
+      const tr = el("tr");
+      tr.append(el("th", a.archetype), el("td", a.wins + "–" + (a.games - a.wins)));
+      const rate = el("td", null, "record");
+      const lean = a.range[0] > 0.5 ? " good" : a.range[1] < 0.5 ? " bad" : "";
+      const games = el("span", pct(a.range[0]) + "–" + pct(a.range[1]), "range");
+      rate.append(el("span", pct(a.rate), "rate" + lean), games);
+      if (a.games < 10) games.append(el("span", " (few)", "few"));
+      tr.append(rate);
+      table.tBodies[0].append(tr);
+    }
+    wrap.append(table);
+    parts.push(wrap);
+  }
+  if (!r.stored) {
+    parts.push(el("p", "Only your last ~25 battles are counted. To keep a longer record, add your " +
+      "tag to DECKLENS_MY_TAGS in .env: your games are then saved every 15 minutes while the app " +
+      "is open, and with each scheduled crawl.", "note"));
+  }
+  show(box, ...parts);
 }
 
 function pickButton(content, onPick) {
@@ -796,11 +940,46 @@ function newestPlay(decks) {
   return decks.reduce((best, d) => (String(d.last_played) > best ? String(d.last_played) : best), "");
 }
 
+function ago(iso) {
+  const minutes = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 60000));
+  if (minutes < 60) return plural(minutes, "minute", "minutes") + " ago";
+  if (minutes < 48 * 60) return plural(Math.round(minutes / 60), "hour", "hours") + " ago";
+  return plural(Math.round(minutes / 1440), "day", "days") + " ago";
+}
+
+const RESULT_WORDS = { won: "Won", lost: "Lost", draw: "Draw" };
+
+// "You've played them before": earlier games against this player, newest first.
+async function rematchBox(player) {
+  if (!state.me || !player.tag || player.tag === state.me.tag) return null;
+  let found;
+  try {
+    found = await api("/api/players/" + tagPath(state.me.tag) + "/vs/" + tagPath(player.tag));
+  } catch {
+    return null;  // optional extra: the decks below still load
+  }
+  if (!found.meetings.length) return null;
+  const box = el("div", null, "rematch");
+  box.append(el("p", "You've played them before", "label"));
+  for (const m of found.meetings) {
+    const line = el("p", null, "meeting");
+    line.append(el("span", RESULT_WORDS[m.result] + " " + m.crowns[0] + "–" + m.crowns[1],
+      "result-" + m.result));
+    line.append(el("span", ago(m.time) + (MODE_NAMES[m.mode] ? ", " + MODE_NAMES[m.mode] : "") +
+      (m.archetype ? ", they played " + m.archetype : ""), "muted"));
+    box.append(line);
+    const read = scoutRead(m.deck.cards);
+    if (read) box.append(read);
+  }
+  return box;
+}
+
 async function showOpponentDecks(player, container) {
   const panel = el("div", "Loading their recent decks…", "decks-panel");
   const old = container.querySelector(".decks-panel");
   if (old) old.remove();
   container.append(panel);
+  const rematch = rematchBox(player);  // in parallel with their decks
   let result;
   try {
     result = await api("/api/players/" + tagPath(player.tag) + "/decks");
@@ -846,8 +1025,92 @@ async function showOpponentDecks(player, container) {
     tabs.append(button);
   }
   show(panel, tabs, body);
+  const before = await rematch;
+  if (before) panel.prepend(before);
   const first = MODES.slice().sort((a, b) => newestPlay(modes[b] || []).localeCompare(newestPlay(modes[a] || [])))[0];
   await select(first);
+}
+
+// --- ranked meta ---------------------------------------------------------------
+
+// 14 tiny columns: how much of the field this archetype was, day by day.
+function trendBars(daily) {
+  const W = 6, GAP = 2, H = 28;
+  const top = Math.max(...daily.map((d) => d.share || 0), 0.0001);
+  const chart = svg("svg", { viewBox: "0 0 " + daily.length * (W + GAP) + " " + H, class: "trend" });
+  chart.setAttribute("role", "img");
+  const first = daily.find((d) => d.share !== null), last = [...daily].reverse().find((d) => d.share !== null);
+  chart.setAttribute("aria-label", "Play rate by day" + (first && last
+    ? ", from " + pct(first.share) + " to " + pct(last.share) : ""));
+  daily.forEach((d, i) => {
+    const h = d.share ? Math.max(1, (d.share / top) * H) : 0;
+    if (h) chart.append(svg("rect", { x: i * (W + GAP), y: H - h, width: W, height: h, rx: 1 }));
+  });
+  return chart;
+}
+
+function svg(tag, attrs) {
+  const node = document.createElementNS("http://www.w3.org/2000/svg", tag);
+  for (const [k, v] of Object.entries(attrs)) node.setAttribute(k, String(v));
+  return node;
+}
+
+function metaTable(m) {
+  const wrap = el("div", null, "table-wrap");
+  const table = el("table", null, "tiers meta");
+  table.append(el("thead"), el("tbody"));
+  const head = el("tr");
+  for (const h of ["Archetype", "Played", "Wins", "Last 14 days"]) head.append(el("th", h));
+  table.tHead.append(head);
+  for (const a of m.archetypes) {
+    const tr = el("tr");
+    tr.append(el("th", a.name));
+    tr.append(el("td", pct(a.share), "rate"));
+    const wins = el("td", null, "record");
+    if (a.games) {
+      const lean = a.range[0] > 0.5 ? " good" : a.range[1] < 0.5 ? " bad" : "";
+      wins.append(el("span", pct(a.win_rate), "rate" + lean),
+        el("span", plural(a.games, "game", "games"), "games"),
+        el("span", pct(a.range[0]) + "–" + pct(a.range[1]), "range"));
+    } else {
+      wins.append(el("span", "—", "rate"));
+    }
+    tr.append(wins);
+    const trend = el("td");
+    trend.append(trendBars(a.daily));
+    tr.append(trend);
+    table.tBodies[0].append(tr);
+  }
+  wrap.append(table);
+  return wrap;
+}
+
+async function showMeta(band = "all") {
+  const out = document.getElementById("meta-result");
+  show(out, el("p", "Loading the meta…", "muted"));
+  let m;
+  try {
+    m = await api("/api/meta?band=" + encodeURIComponent(band));
+  } catch (error) {
+    show(out, errorBox(error));
+    return;
+  }
+  const bands = document.getElementById("meta-bands");
+  bands.replaceChildren(...m.bands.map((b) => {
+    const button = el("button", b.label, "tab");
+    button.type = "button";
+    button.setAttribute("aria-pressed", String(b.key === m.band));
+    button.addEventListener("click", () => showMeta(b.key));
+    return button;
+  }));
+  bands.hidden = m.bands.length < 2;
+  if (!m.archetypes.length) {
+    show(out, el("p", "No stored ranked battles in this range yet.", "muted"));
+    return;
+  }
+  show(out, el("p", plural(m.decks, "deck", "decks") + " from the last " + m.days + " days" +
+    (m.band === "all" ? "" : ", rating " + m.bands.find((b) => b.key === m.band).label) +
+    ". Rating bands split the rated players into thirds.", "hint"), metaTable(m));
 }
 
 // --- start -------------------------------------------------------------------
@@ -902,6 +1165,7 @@ document.addEventListener("DOMContentLoaded", () => {
   autoBox.addEventListener("change", () => setAutoScout(autoBox.checked));
   autoBox.checked = storageGet("decklens.autoScout") === "1";
   if (autoBox.checked) setAutoScout(true);
+  showMeta();
   const saved = asTag(storageGet("decklens.myTag") || "");
   if (saved) {
     document.getElementById("me-tag").value = saved;

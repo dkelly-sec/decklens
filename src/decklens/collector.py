@@ -2,6 +2,7 @@
 
     python -m decklens.collector --tag "#YOURTAG" --dry-run   # fetch and summarise only
     python -m decklens.collector --tags-file tags.txt          # fetch and store
+    python -m decklens.collector --mine                        # your tags (DECKLENS_MY_TAGS)
 
 Week 1 starts from tags you supply. Seeding from the Ranked leaderboard and
 crawling opponents comes next.
@@ -17,7 +18,7 @@ from pathlib import Path
 
 from .api_client import ApiError, ClashRoyaleClient, NotFoundError
 from .battles import Battle, parse_battle_log
-from .config import ConfigError, load_settings
+from .config import ConfigError, load_settings, my_tags
 from .validation import InvalidTagError, normalize_tag
 
 log = logging.getLogger("decklens.collector")
@@ -64,19 +65,26 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Collect Clash Royale battle logs.")
     parser.add_argument("--tag", action="append", help="player tag (repeatable)")
     parser.add_argument("--tags-file", help="file with one tag per line")
+    parser.add_argument("--mine", action="store_true",
+                        help="your own tags from DECKLENS_MY_TAGS (for your record)")
     parser.add_argument("--dry-run", action="store_true", help="fetch and summarise, don't store")
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
-
-    tags = _read_tags(args)
-    if not tags:
-        parser.error("give at least one valid --tag or --tags-file")
 
     try:
         settings = load_settings(require_database=not args.dry_run)
     except ConfigError as exc:
         log.error("%s", exc)
         return 2
+
+    tags = _read_tags(args)
+    if args.mine:
+        tags += [t for t in my_tags() if t not in tags]
+        if not tags:  # not set up: nothing to do, not an error (the scheduled scripts call this)
+            log.info("DECKLENS_MY_TAGS isn't set: no own battles to collect")
+            return 0
+    if not tags:
+        parser.error("give at least one valid --tag, --tags-file or --mine")
 
     client = ClashRoyaleClient(settings.api_token, timeout=settings.request_timeout)
     try:

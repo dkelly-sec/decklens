@@ -28,3 +28,11 @@ def test_secrets_hidden_from_repr(monkeypatch):
     text = repr(settings)
     assert "super-secret-token" not in text
     assert "dbpass" not in text
+
+
+def test_collecting_my_battles_without_tags_set_is_a_quiet_no_op(monkeypatch):
+    from decklens import collector
+
+    monkeypatch.setenv("CR_API_TOKEN", "test-token-not-real")
+    monkeypatch.delenv("DECKLENS_MY_TAGS", raising=False)
+    assert collector.main(["--mine", "--dry-run"]) == 0

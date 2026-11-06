@@ -17,7 +17,7 @@ from typing import Any, Callable, Sequence
 from ..archetypes import ArchetypeModel
 from ..battles import (
     CHALLENGE_GAME_MODE, EVO_SLOT, FORM_TOKEN, WILD_SLOT, Battle, active_form, form_token,
-    is_form_token, is_trophy_road, opt_int, parse_battle_log, parse_battle_time,
+    form_tokens, is_form_token, is_trophy_road, opt_int, parse_battle_log, parse_battle_time,
 )
 from ..names import fuzzy_score, search_key
 from ..features import Matchup
@@ -182,6 +182,68 @@ def last_opponent(tag: str, battle_log: list[dict[str, Any]]) -> dict[str, Any] 
             "your_deck": _deck(_cards(list(b.players[me].cards)), mode_of(b)),
         }
     return None
+
+
+def my_record(games: Sequence[tuple], battle_log: list[dict[str, Any]], tag: str,
+              archetypes: ArchetypeModel, since: datetime) -> dict[str, Any]:
+    """Your Ranked record against each opponent archetype: stored games (time, won?,
+    their card ids, their raw cards) plus anything newer in your battle log."""
+    tag = normalize_tag(tag)
+    seen: dict[datetime, tuple[bool | None, tuple[int, ...]]] = {}
+    for when, won, ids, raw in games:
+        seen[when] = (won, tuple(ids) + form_tokens(raw or []))
+    for b in _scouted(battle_log):
+        sides = _side(b, tag)
+        if sides is None or mode_of(b) != "ranked" or b.battle_time < since:
+            continue
+        them = b.players[sides[1]]
+        seen.setdefault(b.battle_time, (None if b.winner is None else b.winner == sides[0],
+                                        them.card_ids + form_tokens(list(them.cards))))
+    decided = [(won, deck) for won, deck in seen.values() if won is not None]
+    rows: dict[int, list[int]] = {}
+    if decided:
+        for (won, _), arch in zip(decided, archetypes.assign([d for _, d in decided])):
+            rows.setdefault(int(arch), [0, 0])
+            rows[int(arch)][0] += int(won)
+            rows[int(arch)][1] += 1
+    out = []
+    for arch, (wins, n) in sorted(rows.items(), key=lambda kv: -kv[1][1]):
+        lo, hi = wilson_interval(wins, n)
+        out.append({"archetype": archetypes.names[arch], "wins": wins, "games": n,
+                    "rate": round(wins / n, 3), "range": [round(lo, 3), round(hi, 3)]})
+    wins = sum(int(w) for w, _ in decided)
+    return {"games": len(decided), "wins": wins, "archetypes": out}
+
+
+MAX_MEETINGS = 5
+
+
+def _meeting(when: datetime, mode: str | None, my_crowns: int, their_crowns: int,
+             winner_is_me: bool | None, their_cards: list[dict[str, Any]]) -> dict[str, Any]:
+    result = "draw" if winner_is_me is None else ("won" if winner_is_me else "lost")
+    return {"time": when.isoformat(), "mode": mode, "result": result,
+            "crowns": [my_crowns, their_crowns], "deck": _deck(_cards(their_cards), mode)}
+
+
+def rematches(me: str, them: str, battle_log: list[dict[str, Any]],
+              stored: Sequence[tuple]) -> list[dict[str, Any]]:
+    """Earlier games between you and this opponent, newest first: from your battle
+    log, plus stored battles (time, game mode, my side won?, my crowns, their crowns,
+    their raw cards) that reach further back. Same time = same battle."""
+    me, them = normalize_tag(me), normalize_tag(them)
+    found: dict[datetime, dict[str, Any]] = {}
+    for b in _scouted(battle_log):
+        sides = _side(b, me)
+        if sides is None or b.players[sides[1]].tag != them:
+            continue
+        mine, theirs = b.players[sides[0]], b.players[sides[1]]
+        found[b.battle_time] = _meeting(b.battle_time, mode_of(b), mine.crowns, theirs.crowns,
+                                        None if b.winner is None else b.winner == sides[0],
+                                        list(theirs.cards))
+    for when, ranked, i_won, my_crowns, their_crowns, cards in stored:
+        found.setdefault(when, _meeting(when, "ranked" if ranked else "trophy", my_crowns,
+                                        their_crowns, i_won, list(cards or [])))
+    return [found[t] for t in sorted(found, reverse=True)][:MAX_MEETINGS]
 
 
 # Our own labels for what a player has been playing (raw API strings are never

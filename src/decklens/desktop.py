@@ -244,6 +244,23 @@ def run_watcher(board: Any, stop: threading.Event) -> None:
             log.exception("screen watcher hiccup")
 
 
+MY_BATTLES_EVERY = 15 * 60  # your battle log keeps about 25 games: often enough not to miss any
+
+
+def collect_my_battles(stop: threading.Event, collect: Callable[[], Any] | None = None) -> None:
+    """Store your own battles while the app is open, for your record."""
+    from .collector import main as collector
+
+    collect = collect or (lambda: collector(["--mine"]))
+    while True:
+        try:
+            collect()
+        except Exception:  # noqa: BLE001 - never take the app down; try again later
+            log.exception("collecting your battles failed")
+        if stop.wait(MY_BATTLES_EVERY):
+            return
+
+
 def main() -> int:
     os.chdir(ROOT)            # .env, models\ and logs\ live here
     _log_to_file()
@@ -287,6 +304,8 @@ def main() -> int:
             started["stop_watcher"] = stop_watcher
             threading.Thread(target=run_watcher, args=(app.state.services.watch, stop_watcher),
                              name="watcher", daemon=True).start()
+            threading.Thread(target=collect_my_battles, args=(stop_watcher,),
+                             name="my-battles", daemon=True).start()
             splash.close()
         except Exception as exc:  # noqa: BLE001 - show any start-up failure to the user
             log.exception("start-up failed")

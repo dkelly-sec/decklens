@@ -210,8 +210,10 @@ def test_tier_rows_include_recent_battles_with_known_or_unknown_ranks(conn):
     assert len(rows) == 2 + int(datetime.now(timezone.utc) - datetime(2026, 10, 30, 1, 15,
                                                                         tzinfo=timezone.utc)
                                 < timedelta(days=14))
-    winner, deck0, rank0, deck1, rank1 = next(r for r in rows if {r[2], r[4]} == {120, 450})
+    winner, deck0, rank0, deck1, rank1, when, rating0, rating1 = next(
+        r for r in rows if {r[2], r[4]} == {120, 450})
     assert len(deck0) == 8 and len(deck1) == 8 and winner in (0, 1)
+    assert when.tzinfo is not None and (rating0, rating1) == (None, None)  # no snapshots
 
 
 def test_tier_ranks_beyond_500_come_from_the_nearest_leaderboard_snapshot(conn):
@@ -243,8 +245,13 @@ def test_tier_ranks_beyond_500_come_from_the_nearest_leaderboard_snapshot(conn):
     unknown["team"][0]["globalRank"] = 90
     save_battles(conn, parse_battle_log([filled, clamped, unknown])[0])
 
-    ranks = {frozenset((r[2], r[4])) for r in load_rows(conn, days=14)}
+    rows = load_rows(conn, days=14)
+    ranks = {frozenset((r[2], r[4])) for r in rows}
     assert ranks == {frozenset((80, 2400)), frozenset((300, 501)), frozenset((90, None))}
+    # Ratings (medals) come from the nearest snapshot too: #9QJ and #8YY were rated 2000.
+    ratings = {frozenset((r[2], r[4])): {r[6], r[7]} for r in rows}
+    assert ratings[frozenset((80, 2400))] == {None, 2000}
+    assert ratings[frozenset((300, 501))] == {2000, None}
 
 
 def test_country_players_are_searchable_but_get_no_rank(conn):
@@ -541,3 +548,33 @@ def test_reindex_applies_new_name_rules_to_stored_players(conn):
     assert search_players(conn, "frank")[0]["tag"] == "#2PP"
     assert search_players(conn, None, clan="fancy clan")[0]["tag"] == "#2PP"
     assert reindex_names(conn) == 0                           # nothing left to do
+
+
+def test_stored_meetings_between_two_players(conn):
+    from decklens.storage import save_battles
+    from decklens.web.search import stored_meetings
+
+    won = battle(team_tag="#2PP", opp_tag="#9QJ", team_crowns=3, opp_crowns=1)
+    other = battle(team_tag="#2PP", opp_tag="#8YY")
+    other["battleTime"] = "20261030T020000.000Z"
+    save_battles(conn, parse_battle_log([won, other])[0])
+    rows = stored_meetings(conn, "#2PP", "#9QJ")
+    assert len(rows) == 1
+    when, ranked, i_won, mine, theirs, their_cards = rows[0]
+    assert ranked is True and i_won is True and (mine, theirs) == (3, 1) and len(their_cards) == 8
+    assert stored_meetings(conn, "#9QJ", "#2PP")[0][2] is False      # the other side lost
+
+
+def test_my_games_are_my_ranked_games_in_the_window(conn):
+    from decklens.storage import save_battles
+    from decklens.web.search import my_games
+
+    recent = (datetime.now(timezone.utc) - timedelta(days=2)).strftime("%Y%m%dT%H%M%S.000Z")
+    mine = battle(team_tag="#2PP", opp_tag="#9QJ", team_crowns=3, opp_crowns=1)
+    mine["battleTime"] = recent
+    ladder = battle(team_tag="#2PP", opp_tag="#8YY", kind="PvP")   # Trophy Road: not in the record
+    ladder["battleTime"] = recent
+    save_battles(conn, parse_battle_log([mine, ladder])[0])
+    rows = my_games(conn, "#2PP", 30)
+    assert len(rows) == 1 and rows[0][1] is True and len(rows[0][2]) == 8
+    assert my_games(conn, "#2PP", 1) == []                          # two days ago is outside 1 day

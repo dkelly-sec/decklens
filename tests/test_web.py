@@ -1203,3 +1203,97 @@ def test_trees_give_the_estimate_and_see_inside_one_archetype():
     assert m["win_chance"] == pytest.approx(p.model_chance(MY_DECK, same_style), abs=1e-3)
     assert "coin flip" not in m["note"]
     assert p.predict(MY_DECK, MY_DECK)["win_chance"] == 0.5     # identical decks stay even
+
+
+# --- meta ---------------------------------------------------------------------------------
+
+
+def _meta_rows():
+    from datetime import datetime, timedelta, timezone
+
+    now = datetime.now(timezone.utc)
+    rows = []
+    for k in range(400):
+        when = now - timedelta(days=k % 7, hours=1)
+        rating_a, rating_b = 1800 + k, 1800 + (k * 7) % 400
+        rows.append((k % 3 == 0, MY_DECK, None, OPP_DECK, None, when, rating_a, rating_b))
+    return [(int(w), *rest) for w, *rest in rows]
+
+
+def test_meta_shares_win_rates_days_and_rating_bands(predictor):
+    from decklens.web.meta import meta
+    from decklens.web.tiers import TierStats
+
+    t = TierStats(predictor.archetypes, _meta_rows).table()
+    names = predictor.archetypes.names
+    m = meta(t, names)
+    assert [b["key"] for b in m["bands"]] == ["all", "low", "mid", "high"]
+    top = {a["name"]: a for a in m["archetypes"]}
+    mine = names[int(predictor.archetypes.assign([MY_DECK])[0])]
+    assert top[mine]["share"] == 0.5 and top[mine]["games"] == 400
+    assert top[mine]["win_rate"] == pytest.approx(266 / 400, abs=0.001)   # side 0 wins 2 in 3
+    assert len(top[mine]["daily"]) == 14 and top[mine]["daily"][-1]["games"] > 0
+    assert sum(d["games"] for d in top[mine]["daily"][:7]) == 0           # nothing a week+ ago
+    high = meta(t, names, "high")
+    assert high["decks"] < m["decks"] and high["band"] == "high"
+    with pytest.raises(KeyError):
+        meta(t, names, "nope")
+
+
+def test_meta_route_needs_stored_battles(predictor):
+    from decklens.web.tiers import TierStats
+
+    app, _, _ = make(predictor)
+    assert app.get("/api/meta").status_code == 503
+    predictor.tiers = TierStats(predictor.archetypes, _meta_rows)
+    try:
+        ok = app.get("/api/meta?band=mid")
+        assert ok.status_code == 200 and ok.json()["band"] == "mid"
+        assert app.get("/api/meta?band=<script>").status_code == 422
+    finally:
+        predictor.tiers = None
+
+
+# --- rematches ----------------------------------------------------------------------------
+
+
+def test_rematch_lists_earlier_games_from_log_and_storage(predictor):
+    from datetime import datetime, timezone
+
+    older = datetime(2026, 10, 28, 20, 0, tzinfo=timezone.utc)
+    same = datetime(2026, 10, 30, 1, 3, tzinfo=timezone.utc)      # also in the battle log
+    stored = [(older, True, False, 0, 3, cards(OPP_DECK)), (same, True, True, 1, 0, cards(OPP_DECK))]
+    app, _, _ = make(predictor, rows=stored)
+    r = app.get("/api/players/%232PP/vs/%239QJ")
+    assert r.status_code == 200
+    meetings = r.json()["meetings"]
+    assert [m["result"] for m in meetings] == ["lost", "won", "lost"]     # newest first, no dupes
+    assert meetings[-1]["crowns"] == [0, 3] and meetings[-1]["mode"] == "ranked"
+    assert meetings[0]["archetype"] in predictor.archetypes.names
+    assert app.get("/api/players/%232PP/vs/nope").status_code == 400
+
+
+# --- your own record ----------------------------------------------------------------------
+
+
+def test_my_record_by_opponent_archetype(predictor):
+    from datetime import datetime, timezone
+
+    stored = [(datetime(2026, 10, 29, tzinfo=timezone.utc), True, list(OPP_DECK), cards(OPP_DECK)),
+              (datetime(2026, 10, 30, 1, 3, tzinfo=timezone.utc), True, list(OPP_DECK),
+               cards(OPP_DECK))]                     # same game as in the battle log
+    app, _, _ = make(predictor, rows=stored)
+    r = app.get("/api/players/%232PP/record?days=90").json()
+    assert (r["games"], r["wins"], r["stored"]) == (3, 2, True)   # 2 stored + 1 newer from the log
+    opp = predictor.archetypes.names[int(predictor.archetypes.assign([OPP_DECK])[0])]
+    assert r["archetypes"][0]["archetype"] == opp and r["archetypes"][0]["games"] == 3
+    assert app.get("/api/players/%232PP/record?days=500").status_code == 422
+
+
+def test_my_tags_come_from_the_environment(monkeypatch):
+    from decklens.config import my_tags
+
+    monkeypatch.setenv("DECKLENS_MY_TAGS", "#UPL9PJYCP, nonsense, #upl9pjycp,#2PP")
+    assert my_tags() == ["#UPL9PJYCP", "#2PP"]
+    monkeypatch.delenv("DECKLENS_MY_TAGS")
+    assert my_tags() == []
