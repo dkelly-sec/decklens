@@ -43,8 +43,9 @@ def _deck_matrix(vocab: CardVocab, decks: Sequence[Sequence[int]]) -> np.ndarray
     return X / np.maximum(norms, _EPS)
 
 
-# The cards a deck is built to get onto the tower. Earlier in the list leads when
-# a deck runs several: Lava Hound + Balloon, not Balloon + Lava Hound.
+# The cards a deck is built to get onto the tower. A deck's archetype family is
+# the first of these it runs (Lava Hound before Balloon, so LavaLoon is a Lava
+# Hound deck); a second win condition is just another card for k-means to split on.
 # shortcut: hand-kept list matched by the API's English card names; add new win conditions as Supercell releases them.
 WIN_CONDITIONS = (
     "Golem", "Lava Hound", "Electro Giant", "Goblin Giant", "Rune Giant", "Elixir Golem",
@@ -53,7 +54,9 @@ WIN_CONDITIONS = (
     "Goblin Drill", "Skeleton Barrel", "Wall Breakers", "Giant Skeleton", "Royal Recruits",
     "P.E.K.K.A", "Mega Knight",
 )
-KEY_SIZE = 2                # a deck's key: its first two win conditions
+# One, not two: keying on win-condition pairs gave 325 archetypes on 112k battles,
+# most of them rare pairs with a handful of games.
+KEY_SIZE = 1
 SHORT_NAMES = {"Hog Rider": "Hog"}
 PUMP = "Elixir Collector"   # players call it pump: "Golem Pump"
 CYCLE_MAX_ELIXIR = 3.2      # cycle decks go by average elixir: "Hog 2.6", "X-Bow 3.0"

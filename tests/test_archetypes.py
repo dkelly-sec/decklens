@@ -194,3 +194,21 @@ def test_win_conditions_survive_json_and_old_files_still_load(real):
     old["format"] = "decklens-archetypes-v1"
     del old["keys"]
     assert len(ArchetypeModel.from_json(json.dumps(old)).assign(decks)) == 50
+
+
+def test_win_condition_pairs_dont_explode_the_archetype_count():
+    from decklens.archetypes import WIN_CONDITIONS
+
+    rng = np.random.default_rng(1)
+    wincons = list(WIN_CONDITIONS[:12])
+    names = {i: n for i, n in enumerate(wincons)} | {100 + i: f"Filler {i}" for i in range(30)}
+    start = datetime(2026, 10, 1, tzinfo=timezone.utc)
+
+    def deck():
+        two = rng.choice(len(wincons), 2, replace=False)
+        return tuple(sorted([int(c) for c in two] + [100 + int(c) for c in rng.choice(30, 6, replace=False)]))
+
+    matchups = [Matchup(f"p{k}", start + timedelta(minutes=k), deck(), deck(), 0.0, 0.0, k % 2)
+                for k in range(2000)]
+    model = ArchetypeModel.fit(CardVocab.build(matchups, names=names), matchups, 10, 20)
+    assert len(model.names) <= len(wincons) + 10  # not one per pair (66 pairs here)
