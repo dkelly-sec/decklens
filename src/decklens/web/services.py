@@ -16,7 +16,8 @@ from typing import Any, Callable, Sequence
 
 from ..archetypes import ArchetypeModel
 from ..battles import (
-    CHALLENGE_GAME_MODE, Battle, is_trophy_road, opt_int, parse_battle_log, parse_battle_time,
+    CHALLENGE_GAME_MODE, EVO_SLOT, FORM_TOKEN, WILD_SLOT, Battle, active_form, form_token,
+    is_form_token, is_trophy_road, opt_int, parse_battle_log, parse_battle_time,
 )
 from ..names import fuzzy_score, search_key
 from ..model import LinearMatchupModel, wilson_interval
@@ -56,29 +57,6 @@ def _text(value: Any, limit: int = 64) -> str:
 
 
 RARITIES = {"common", "rare", "epic", "legendary", "champion"}
-
-# The API's evolutionLevel is a pair of flags for what the player OWNS, not what
-# is active: 1 = Evolution unlocked, 2 = Hero unlocked, 3 = both. What actually
-# plays depends on the slot (cards come in the game's slot order):
-#   slot 1: Evolution slot     slot 2: Hero / Champion slot
-#   slot 3: Wild slot (either) slots 4-8: plain cards, whatever is unlocked
-EVO_BIT, HERO_BIT = 1, 2
-EVO_SLOT, HERO_SLOT, WILD_SLOT = 0, 1, 2
-
-
-def active_form(owned: int | None, slot: int) -> str | None:
-    """"evo", "hero", "either" (Wild slot, both unlocked: the API doesn't say) or None."""
-    if owned is None or not 0 <= owned <= 3:
-        return None
-    evo, hero = bool(owned & EVO_BIT), bool(owned & HERO_BIT)
-    if slot == EVO_SLOT:
-        return "evo" if evo else None
-    if slot == HERO_SLOT:
-        return "hero" if hero else None
-    if slot == WILD_SLOT:
-        return "either" if evo and hero else "evo" if evo else "hero" if hero else None
-    return None
-
 
 # The game numbers cards by kind: 26xxxxxx troops, 27xxxxxx buildings, 28xxxxxx spells.
 CARD_KINDS = {26: "troop", 27: "building", 28: "spell"}
@@ -125,8 +103,11 @@ def _cards(raw_cards: Any) -> list[dict[str, Any]]:
 
 
 def card_ids(cards: Sequence[dict[str, Any]]) -> list[int]:
-    """The known card ids in a deck (a hidden card has none)."""
-    return [c["id"] for c in cards if c.get("id") is not None]
+    """The known card ids in a deck (a hidden card has none), then a form token for
+    each active Evolution or Hero, as the models were trained."""
+    known = [c for c in cards if c.get("id") is not None]
+    tokens = [form_token(c["id"], c.get("form")) for c in known]
+    return [c["id"] for c in known] + sorted(t for t in tokens if t is not None)
 
 
 def deck_summary(cards: Sequence[dict[str, Any]]) -> dict[str, Any]:
@@ -323,7 +304,7 @@ class Predictor:
             if new:
                 result["note"] += (f" No {new} decks were in the training data, so {whose} "
                                    "archetype is only the closest one: retrain once more are collected.")
-        if min(len(deck_a), len(deck_b)) < 8:
+        if min(len(base_cards(deck_a)), len(base_cards(deck_b))) < 8:
             result["note"] += (" One deck has a Hero the Clash Royale API doesn't show, so "
                                "this is judged on the other seven cards.")
         if self.tiers is not None:
@@ -447,9 +428,17 @@ def live_clan_lookup(clans: list[dict[str, Any]], members_of: Callable[[str], li
             "players": players[:MAX_LIVE_RESULTS]}
 
 
+MAX_FORMS = 3  # Evolution slot, Hero slot, Wild slot
+
+
+def base_cards(deck: Sequence[int]) -> list[int]:
+    return [c for c in deck if not is_form_token(c)]
+
+
 def validate_deck(deck: Sequence[Any], known: set[int]) -> tuple[int, ...]:
-    """8 different, known card ids (or 7 when the API hid a Hero), or ValueError."""
-    if not isinstance(deck, (list, tuple)) or len(deck) not in (7, 8):
+    """8 different, known card ids (or 7 when the API hid a Hero), plus up to 3 form
+    tokens for cards in the deck, or ValueError. Plain ids first, then tokens."""
+    if not isinstance(deck, (list, tuple)) or len(deck) > 8 + MAX_FORMS:
         raise ValueError("a deck must have 8 cards (7 if one is a hidden Hero)")
     ids = []
     for c in deck:
@@ -458,10 +447,16 @@ def validate_deck(deck: Sequence[Any], known: set[int]) -> tuple[int, ...]:
         ids.append(c)
     if len(set(ids)) != len(ids):
         raise ValueError("a deck can't contain the same card twice")
-    unknown = [c for c in ids if c not in known]
+    base = base_cards(ids)
+    forms = [c for c in ids if is_form_token(c)]
+    if len(base) not in (7, 8):
+        raise ValueError("a deck must have 8 cards (7 if one is a hidden Hero)")
+    if len(forms) > MAX_FORMS or any(t % FORM_TOKEN["evo"] not in base for t in forms):
+        raise ValueError("evolutions and heroes must be for cards in the deck")
+    unknown = [c for c in base if c not in known]
     if len(unknown) > 2:
         raise ValueError("too many cards the model has never seen")
-    return tuple(sorted(ids))
+    return tuple(sorted(base)) + tuple(sorted(forms))
 
 
 def safe_tag(raw: str) -> str:

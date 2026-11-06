@@ -70,6 +70,54 @@ def opt_int(value: Any) -> int | None:
     return value
 
 
+# The API's evolutionLevel is a pair of flags for what the player OWNS, not what
+# is active: 1 = Evolution unlocked, 2 = Hero unlocked, 3 = both. What actually
+# plays depends on the slot (cards come in the game's slot order):
+#   slot 1: Evolution slot     slot 2: Hero / Champion slot
+#   slot 3: Wild slot (either) slots 4-8: plain cards, whatever is unlocked
+EVO_BIT, HERO_BIT = 1, 2
+EVO_SLOT, HERO_SLOT, WILD_SLOT = 0, 1, 2
+
+
+def active_form(owned: int | None, slot: int) -> str | None:
+    """"evo", "hero", "either" (Wild slot, both unlocked: the API doesn't say) or None."""
+    if owned is None or not 0 <= owned <= 3:
+        return None
+    evo, hero = bool(owned & EVO_BIT), bool(owned & HERO_BIT)
+    if slot == EVO_SLOT:
+        return "evo" if evo else None
+    if slot == HERO_SLOT:
+        return "hero" if hero else None
+    if slot == WILD_SLOT:
+        return "either" if evo and hero else "evo" if evo else "hero" if hero else None
+    return None
+
+
+# Evolutions and Heroes play very differently from the plain card (Evo Giant rages
+# the troops behind him), so the models see an active form as an extra "card": a
+# form token, the card id plus FORM_TOKEN[form], next to the plain card id.
+FORM_TOKEN = {"evo": 1_000_000_000, "hero": 2_000_000_000}
+
+
+def is_form_token(card_id: int) -> bool:
+    return card_id >= FORM_TOKEN["evo"]
+
+
+def form_token(card_id: int, form: str | None) -> int | None:
+    return card_id + FORM_TOKEN[form] if form in FORM_TOKEN else None  # "either": unknown, none
+
+
+def form_tokens(cards: Any) -> tuple[int, ...]:
+    """Tokens for the active Evolutions and Heroes in raw API cards (in slot order)."""
+    out = []
+    for slot, c in enumerate(cards if isinstance(cards, (list, tuple)) else []):
+        if isinstance(c, dict) and opt_int(c.get("id")) is not None:
+            token = form_token(c["id"], active_form(opt_int(c.get("evolutionLevel")), slot))
+            if token is not None:
+                out.append(token)
+    return tuple(sorted(out))
+
+
 def parse_battle_time(raw: str) -> datetime:
     """Parse the API's timestamp format, e.g. '20261030T011500.000Z'."""
     return datetime.strptime(raw, "%Y%m%dT%H%M%S.%fZ").replace(tzinfo=timezone.utc)

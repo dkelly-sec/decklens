@@ -30,6 +30,7 @@ from typing import Any, Iterable, Sequence
 import numpy as np
 from sklearn.cluster import KMeans
 
+from .battles import FORM_TOKEN
 from .features import CardVocab, Matchup, labels
 
 ARCHETYPE_FORMAT = "decklens-archetypes-v2"
@@ -136,7 +137,7 @@ def _archetype_name(vocab: CardVocab, key: tuple[int, ...], share: np.ndarray,
         return _signature_name(vocab, share, global_share)
     head = _key_name(vocab, key)
     core = [i for i in np.argsort(-share * (share / np.maximum(global_share, _EPS)))
-            if share[i] >= CORE_SHARE and vocab.card_ids[i] not in key]
+            if share[i] >= CORE_SHARE and vocab.card_ids[i] % FORM_TOKEN["evo"] not in key]
     core_names = [vocab.name(vocab.card_ids[i]) for i in core]
     if PUMP in core_names:
         return f"{head} Pump"

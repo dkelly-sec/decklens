@@ -164,8 +164,14 @@ function scoutRead(cards) {
   return box;
 }
 
+// Card ids, then a "form token" for each active Evolution or Hero, as the server's
+// models expect (battles.FORM_TOKEN: Evo Giant is not plain Giant).
+const FORM_TOKEN = { evo: 1000000000, hero: 2000000000 };
+
 function knownIds(deck) {
-  return deck.cards.filter((c) => c.id !== null && c.id !== undefined).map((c) => c.id);
+  const known = deck.cards.filter((c) => c.id !== null && c.id !== undefined);
+  const forms = known.filter((c) => FORM_TOKEN[c.form]).map((c) => c.id + FORM_TOKEN[c.form]);
+  return known.map((c) => c.id).concat(forms);
 }
 
 function seenText(minutes) {

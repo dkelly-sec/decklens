@@ -102,6 +102,7 @@ def test_training_loader_reads_decided_ranked_battles(conn):
     for card in top["team"][0]["cards"]:
         card["maxLevel"] = 16  # Alice's cards are 2 levels below max
     top["team"][0]["cards"][0]["elixirCost"] = 3
+    top["team"][0]["cards"][0]["evolutionLevel"] = 1  # Evolution slot: plays as Evo Card 0
     low = battle(team_tag="#8YY", opp_tag="#9QJ", team_crowns=0, opp_crowns=1)
     low["battleTime"] = "20261030T020000.000Z"
     low["leagueNumber"] = 3
@@ -118,6 +119,9 @@ def test_training_loader_reads_decided_ranked_battles(conn):
     assert (first.rank_a, first.rank_b) == (40, None)
     assert second.a_won == 0  # side A (#8YY, lower tag) lost
     assert names[26000000] == "Card 0" and elixir == {26000000: 3}
+    assert names[1_026_000_000] == "Evo Card 0"
+    alice = first.deck_a if 26000000 in first.deck_a else first.deck_b
+    assert alice[-1] == 1_026_000_000 and len(alice) == 9   # 8 cards, then the Evo token
 
     only_top, _, _ = load_matchups(conn, min_league=7)
     assert [m.battle_id for m in only_top] == [first.battle_id]

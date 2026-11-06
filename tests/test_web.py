@@ -421,7 +421,7 @@ def test_hero_left_out_by_the_api_gets_a_placeholder_in_the_hero_slot():
     out = _cards(raw)
     assert len(out) == 8 and out[1]["hidden"] is True and out[1]["id"] is None
     assert out[0]["form"] == "evo" and out[2]["form"] == "either" and out[3]["form"] is None
-    assert card_ids(out) == [100 + i for i in range(7)]
+    assert card_ids(out) == [100 + i for i in range(7)] + [1_000_000_100]  # + Evo token for slot 1
     s = deck_summary(out)
     assert s["hidden"] == 1 and s["heroes"] == 1 and s["levels_known"] == 7 and s["avg_elixir"] == 3
 
@@ -625,6 +625,38 @@ def test_predict_includes_breakdown_when_available(predictor):
         assert data["breakdown"]["window_days"] == 14
     finally:
         predictor.tiers = None
+
+
+def test_evolutions_and_heroes_become_form_tokens():
+    from decklens.battles import form_tokens
+    from decklens.web.services import validate_deck
+
+    raw = [{"id": 26000003, "evolutionLevel": 1},   # Evolution slot: Evo Giant
+           {"id": 26000004, "evolutionLevel": 2},   # Hero slot: a Hero
+           {"id": 26000005, "evolutionLevel": 3},   # Wild slot, both unlocked: unknown, no token
+           {"id": 26000006, "evolutionLevel": 1}]   # ordinary slot: plain card
+    assert form_tokens(raw) == (1_026_000_003, 2_026_000_004)
+
+    deck = list(range(26000001, 26000009))
+    known = set(deck)
+    assert validate_deck(deck + [1_026_000_003], known)[-1] == 1_026_000_003
+    for bad in ([1_026_000_099],                                 # evo of a card not in the deck
+                [1_026_000_001, 1_026_000_002, 1_026_000_003, 2_026_000_004]):  # 4 forms
+        with pytest.raises(ValueError):
+            validate_deck(deck + bad, known)
+
+
+def test_evo_and_plain_versions_are_different_matchups(predictor):
+    from decklens.web.tiers import TierStats
+
+    evo_opp = OPP_DECK + (OPP_DECK[0] + 1_000_000_000,)
+    rows = ([(0, MY_DECK, None, OPP_DECK, None)] * 6
+            + [(1, MY_DECK, None, evo_opp, None)] * 4)       # the Evo version beats me
+    stats = TierStats(predictor.archetypes, lambda: rows)
+    i, j = (int(x) for x in predictor.archetypes.assign([MY_DECK, evo_opp]))
+    vs_evo = stats.matchup(MY_DECK, evo_opp, i, j)
+    assert {lvl: (_cells(vs_evo, lvl)[None].get("wins"), _cells(vs_evo, lvl)[None]["games"])
+            for lvl in ("exact", "7")} == {"exact": (0, 4), "7": (0, 4)}
 
 
 LOG, ROCKET, FIREBALL = 28000011, 28000005, 28000000   # spells, by the game's id ranges

@@ -97,6 +97,7 @@ python -m decklens.train --min-league 7   # top league only
 This writes a report to `reports/model-YYYY-MM-DD.md`, plus `models/decklens-linear-YYYY-MM-DD.json` and `models/decklens-archetypes-YYYY-MM-DD.json`.
 
 - **Honest evaluation:** training uses older battles and testing uses strictly newer ones, the same way the model will be used for real. Results are compared against a coin flip and a card-levels-only baseline, with 95% confidence ranges.
+- **Evolutions and Heroes count:** an active Evolution or Hero (worked out from the card's slot and what the player owns) is fed to the models as its own card next to the plain one, so Evo Giant and Giant get separate strengths. Matchup rows also require the same Evolutions and Heroes on both decks.
 - **Decks, not players:** features are the cards in each deck, the average card-level gap, and how highly each player was ranked when the battle was played. Player identity is never used, so the model can't learn "this player usually wins".
 - **Skill is controlled for:** strong players favour certain cards, so without skill data those cards look stronger than they are. Including rank at battle time means card weights measure what a card does between equally skilled players, and a skill-only baseline shows whether decks add anything beyond skill.
 - **Recent meta only:** by default only the last 14 days are used, so balance changes don't mix old and new metas.

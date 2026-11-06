@@ -9,9 +9,10 @@ Rows, from strictest to loosest:
   exact      both decks card-for-card the same as yours and theirs
   7 / 6      each deck shares at least 7 (or 6) of its 8 cards with yours / theirs
   archetype  same deck styles, using the trained archetype model
-Below exact, each deck must also keep the same win condition and the same
-spells: swapping Fireball for Rocket keeps 7 of 8 cards but can turn an X-Bow
-mirror into 70-30, so those games are a different matchup.
+Every level also needs the same win condition, the same spells and the same
+active Evolutions and Heroes on each deck: swapping Fireball for Rocket keeps
+7 of 8 cards but can turn an X-Bow mirror into 70-30, and Evo Giant is not
+plain Giant, so those games are a different matchup.
 
 Where ranks come from: battle logs only carry a rank for the top 500 (checked
 against real data: 9,698 ranked sides, highest rank 500). Beyond that, the
@@ -35,6 +36,7 @@ from typing import Any, Callable, Sequence
 import numpy as np
 
 from ..archetypes import ArchetypeModel, _deck_key
+from ..battles import form_tokens, is_form_token
 from ..model import wilson_interval
 from .services import card_kind
 
@@ -56,7 +58,7 @@ SNAPSHOT_WINDOW_HOURS = 24    # leaderboard snapshots are taken nightly
 # leaderboard snapshot (never better than BATTLE_RANK_LIMIT + 1). Written out in
 # full for both sides: no SQL is ever assembled from strings.
 _ROWS = """
-    SELECT b.winner_side, p0.card_ids, r0.rank, p1.card_ids, r1.rank
+    SELECT b.winner_side, p0.card_ids, r0.rank, p1.card_ids, r1.rank, p0.cards, p1.cards
     FROM battles b
     JOIN battle_players p0 ON p0.battle_id = b.battle_id AND p0.side = 0
     JOIN battle_players p1 ON p1.battle_id = b.battle_id AND p1.side = 1
@@ -92,11 +94,12 @@ _ROWS = """
 
 def load_rows(conn: Any, days: int = WINDOW_DAYS) -> list[tuple]:
     """(winner side, deck 0, rank 0, deck 1, rank 1) for recent decided ranked
-    battles. A rank is None when it isn't known."""
+    battles. A rank is None when it isn't known. Decks are card ids then form tokens."""
     with conn.cursor() as cur:
         cur.execute(_ROWS, {"days": days, "hours": SNAPSHOT_WINDOW_HOURS,
                             "limit": BATTLE_RANK_LIMIT})
-        return cur.fetchall()
+        return [(w, tuple(d0) + form_tokens(c0), r0, tuple(d1) + form_tokens(c1), r1)
+                for w, d0, r0, d1, r1, c0, c1 in cur.fetchall()]
 
 
 @dataclass
@@ -116,16 +119,18 @@ class BattleTable:
         return self.locks.get(lock_of(deck, wincons), -1)  # -1: no stored deck has it
 
     def overlap(self, side: np.ndarray, deck: Sequence[int]) -> np.ndarray:
-        """How many of deck's cards each battle's side played."""
-        cols = [self.columns[c] for c in set(deck) if c in self.columns]
+        """How many of deck's cards each battle's side played (plain cards; forms go in the lock)."""
+        cols = [self.columns[c] for c in set(deck) if c in self.columns and not is_form_token(c)]
         return side[:, cols].sum(axis=1) if cols else np.zeros(len(side), dtype=int)
 
 
 def lock_of(deck: Sequence[int], wincons: Sequence[int]) -> tuple:
-    """What must stay the same for decks to count as similar: win condition and spells."""
+    """What must stay the same for decks to count as similar: win condition, spells,
+    and which cards are played as Evolutions or Heroes."""
     # shortcut: a deck with a hidden Hero is keyed on its 7 known cards, so if that Hero is its
     # win condition it finds no similar games; fix if hero win conditions get common.
-    return (_deck_key(deck, wincons), tuple(sorted(c for c in set(deck) if card_kind(c) == "spell")))
+    return (_deck_key(deck, wincons), tuple(sorted(c for c in set(deck) if card_kind(c) == "spell")),
+            tuple(sorted(c for c in set(deck) if is_form_token(c))))
 
 
 def _lock_ids(decks: Sequence[Sequence[int]], wincons: Sequence[int], locks: dict[tuple, int]
@@ -216,13 +221,12 @@ class TierStats:
                 second = (t.arch1 == arch_a) & (t.arch0 == arch_b)   # you were side 1
                 mirror = arch_a == arch_b
             else:
-                need_a = need - (DECK_SIZE - len(set(deck_a)))
-                need_b = need - (DECK_SIZE - len(set(deck_b)))
+                need_a = need - (DECK_SIZE - sum(not is_form_token(c) for c in set(deck_a)))
+                need_b = need - (DECK_SIZE - sum(not is_form_token(c) for c in set(deck_b)))
                 first = (a0 >= need_a) & (b1 >= need_b)
                 second = (a1 >= need_a) & (b0 >= need_b)
                 mirror = deck_mirror
-            if key != "exact":  # exact already means same spells
-                first, second = first & locked_first, second & locked_second
+            first, second = first & locked_first, second & locked_second
             games = first | second
             won = (first & (t.winner == 0)) | (~first & second & (t.winner == 1))
             levels.append({"level": key, "cells": [

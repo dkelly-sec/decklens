@@ -7,6 +7,7 @@ from typing import Any
 
 from psycopg import Connection
 
+from .battles import FORM_TOKEN, form_tokens
 from .features import Matchup, level_gap
 
 # Side 0 is the player with the lower tag, which is arbitrary with respect to
@@ -32,6 +33,8 @@ def _card_names(cards: Any, names: dict[int, str], elixir: dict[int, int]) -> No
             name, cost = card.get("name"), card.get("elixirCost")
             if isinstance(name, str):
                 names.setdefault(card["id"], name[:40])
+                for form, offset in FORM_TOKEN.items():  # "Evo Giant", "Hero Giant"
+                    names.setdefault(card["id"] + offset, f"{form.title()} {name[:40]}")
             if isinstance(cost, int) and not isinstance(cost, bool) and 0 <= cost <= 10:
                 elixir.setdefault(card["id"], cost)
 
@@ -57,8 +60,8 @@ def load_matchups(
                 Matchup(
                     battle_id=bid,
                     battle_time=when,
-                    deck_a=tuple(ids_a),
-                    deck_b=tuple(ids_b),
+                    deck_a=tuple(ids_a) + form_tokens(cards_a),  # plain cards, then Evos/Heroes
+                    deck_b=tuple(ids_b) + form_tokens(cards_b),
                     level_gap_a=level_gap(cards_a or []),
                     level_gap_b=level_gap(cards_b or []),
                     a_won=1 if winner == 0 else 0,
