@@ -1,114 +1,106 @@
-"""Deck tweak finder: which one-card swap would most raise your win rate against
-the current meta, overall and within each rating (medals) band.
+"""Deck tweak finder: one-card swaps that real players of your deck already make,
+and how those versions actually did, overall and in each rating (medals) band.
 
-The meta is the most played opponent decks in stored Ranked battles (the same
-in-memory table as the matchup rows), weighted by how often each was played.
-Every candidate deck is scored against all of them by the trees model, between
-equally skilled players with equal card levels, so a gain means "this deck does
-better against what people play", not "you'll win more if you're better".
+Candidates come only from stored Ranked decks that share 7 of your 8 cards: the
+card they run instead of one of yours is the swap ("Rocket for Fireball", "Evo
+Giant Snowball for The Log"). So every suggestion is a version people really
+play with your win condition, never a model guess like Graveyard in X-Bow.
 
-Candidates swap one card for a popular card of the same kind (a spell for a
-spell, a troop or building for a troop or building). The new card comes in plain:
-its Evolution or Hero form isn't guessed. Swapping out an Evolution or Hero
-drops that form with it.
+Win rates are pulled toward the family's (decks sharing 6+ of your 8 cards) by
+PULL games' worth, so a 3-0 variant doesn't top the list, and the table shows
+how many games each number rests on.
 """
 
 from __future__ import annotations
 
-from collections import Counter
-from itertools import compress
+from collections import defaultdict
 from typing import Any, Sequence
 
 import numpy as np
 
 from ..battles import FORM_TOKEN, is_form_token
-from ..model import TreeMatchupModel
+from ..features import CardVocab
+from ..model import wilson_interval
 from .meta import in_band, rating_bands
-from .services import card_kind
 from .tiers import BattleTable
 
-OPPONENT_DECKS = 60     # most played decks per band: the bulk of what you'll face
-CARDS_PER_KIND = 30     # most played spells, and troops/buildings, to try swapping in (~2 s)
+PULL = 20          # games' worth of the family's win rate added to every number
+MIN_GAMES = 10     # a swap needs this many games in a band to be ranked there
 TOP_SWAPS = 8
-VS_ARCHETYPES = 3       # the meta's top archetypes, for "+18% vs X-Bow Rocket"
-MIN_DECKS = 30          # fewer stored decks in a band than this: no number for that band
 
 
-def _group(card_id: int) -> str:
-    return "spell" if card_kind(card_id) == "spell" else "unit"
+def _split(deck: Sequence[int]) -> tuple[frozenset[int], dict[int, int]]:
+    """(plain cards, card -> its Evo/Hero token)."""
+    base = frozenset(c for c in deck if not is_form_token(c))
+    forms = {t % FORM_TOKEN["evo"]: t for t in deck if is_form_token(t)}
+    return base, forms
 
 
-def _meta(t: BattleTable, band: dict[str, Any]) -> tuple[list[tuple[int, ...]], np.ndarray,
-                                                          np.ndarray, int]:
-    """(top decks, play counts, archetype of each, decks in the band)."""
-    counts: Counter = Counter()
-    arch: dict[tuple[int, ...], int] = {}
-    for decks, archs, ratings in ((t.decks0, t.arch0, t.rating0), (t.decks1, t.arch1, t.rating1)):
-        mask = in_band(ratings, band)
-        for d, a in zip(compress(decks, mask), archs[mask]):
-            counts[d] += 1
-            arch[d] = int(a)
-    top = counts.most_common(OPPONENT_DECKS)
-    return ([d for d, _ in top], np.array([n for _, n in top], dtype=float),
-            np.array([arch[d] for d, _ in top], dtype=int), sum(counts.values()))
-
-
-def candidates(deck: Sequence[int], popular: Sequence[int]) -> list[tuple[int, int, tuple[int, ...]]]:
-    """(card out, card in, new deck) for every one-card swap worth trying."""
-    base = [c for c in deck if not is_form_token(c)]
-    forms = [c for c in deck if is_form_token(c)]
-    out = []
-    for old in base:
-        pool = [c for c in popular if c not in base and _group(c) == _group(old)][:CARDS_PER_KIND]
-        kept_forms = [f for f in forms if f % FORM_TOKEN["evo"] != old]
-        for new in pool:
-            out.append((old, new, tuple(sorted([c for c in base if c != old] + [new])) +
-                        tuple(kept_forms)))
-    return out
-
-
-def find_tweaks(trees: TreeMatchupModel, t: BattleTable, names: list[str],
-                deck: Sequence[int], sort_band: str = "all") -> dict[str, Any]:
+def find_tweaks(t: BattleTable, vocab: CardVocab, deck: Sequence[int],
+                sort_band: str = "all") -> dict[str, Any]:
+    mine, my_forms = _split(deck)
     bands = rating_bands(t)
-    metas = {b["key"]: _meta(t, b) for b in bands}
-    all_decks, all_weights, _, _ = metas["all"]
-    popularity: Counter = Counter()
-    for d, w in zip(all_decks, all_weights):
-        popularity.update({c: w for c in d if not is_form_token(c) and c in trees.vocab.index})
-    swaps = candidates(deck, [c for c, _ in popularity.most_common()])
-    decks = [tuple(deck)] + [s[2] for s in swaps]
-
+    # Every stored side with its result and rating, both seats together.
+    sides = []
+    for decks, cards, ratings, won_if in ((t.decks0, t.cards0, t.rating0, 0),
+                                          (t.decks1, t.cards1, t.rating1, 1)):
+        sides.append((decks, t.overlap(cards, list(mine)), ratings, t.winner == won_if))
     result: dict[str, Any] = {"bands": [], "swaps": []}
-    gains: dict[str, np.ndarray] = {}
-    vs: list[tuple[int, np.ndarray]] = []
-    for b in bands:
-        top, weights, archs, n_decks = metas[b["key"]]
-        info = {"key": b["key"], "label": b["label"], "decks": n_decks}
-        result["bands"].append(info)
-        if n_decks < MIN_DECKS or not top:
-            continue
-        p = trees.proba_matrix(decks, top)                  # (1 + swaps) x opponents
-        rates = p @ weights / weights.sum()
-        info["base"] = round(float(rates[0]), 3)
-        gains[b["key"]] = rates[1:] - rates[0]
-        if b["key"] == "all":
-            share = Counter()
-            for a, w in zip(archs, weights):
-                share[int(a)] += w
-            for a, _ in share.most_common(VS_ARCHETYPES):
-                mask = archs == a
-                r = p[:, mask] @ weights[mask] / weights[mask].sum()
-                vs.append((a, r[1:] - r[0]))
+    swaps: dict[tuple[int, int], dict[str, np.ndarray]] = defaultdict(
+        lambda: {"wins": np.zeros(len(bands)), "games": np.zeros(len(bands))})
+    you, family = np.zeros((len(bands), 2)), np.zeros((len(bands), 2))
+    band_masks = [[in_band(ratings, b) for b in bands] for _, _, ratings, _ in sides]
+    exact = tuple(sorted(mine)) + tuple(sorted(my_forms.values()))
+    for (decks, overlap, _, won), masks in zip(sides, band_masks):
+        for row in np.flatnonzero(overlap >= len(mine) - 2):
+            in_bands = [i for i, m in enumerate(masks) if m[row]]
+            w = float(won[row])
+            for i in in_bands:
+                family[i] += (w, 1)
+            if overlap[row] == len(mine) and decks[row] == exact:
+                for i in in_bands:
+                    you[i] += (w, 1)
+            elif overlap[row] == len(mine) - 1:
+                base, forms = _split(decks[row])
+                if len(base) != len(mine):
+                    continue
+                (old,), (new,) = mine - base, base - mine
+                key = (old, forms.get(new, new))  # the Evo or Hero version counts as its own swap
+                for i in in_bands:
+                    swaps[key]["wins"][i] += w
+                    swaps[key]["games"][i] += 1
 
-    if sort_band not in gains or not swaps:
+    def pulled(wins: float, games: float, prior: float) -> float:
+        return (wins + PULL * prior) / (games + PULL)
+
+    gains, keys = {}, list(swaps)
+    for i, b in enumerate(bands):
+        fam_w, fam_n = family[i]
+        info = {"key": b["key"], "label": b["label"], "family_games": int(fam_n),
+                "games": int(you[i][1])}
+        result["bands"].append(info)
+        if fam_n < MIN_GAMES:
+            continue
+        prior = fam_w / fam_n
+        base_rate = pulled(*you[i], prior)
+        info["base"] = round(base_rate, 3)
+        gains[b["key"]] = np.array([pulled(swaps[k]["wins"][i], swaps[k]["games"][i], prior)
+                                    - base_rate for k in keys])
+    if sort_band not in gains:
         return result
-    order = np.argsort(-gains[sort_band])[:TOP_SWAPS]
-    vocab = trees.vocab
-    for i in order:
-        old, new, _ = swaps[i]
-        result["swaps"].append({
-            "out": vocab.name(old), "in": vocab.name(new), "out_id": old, "in_id": new,
-            "gain": {k: round(float(g[i]), 3) for k, g in gains.items()},
-            "vs": [{"archetype": names[a], "gain": round(float(g[i]), 3)} for a, g in vs],
-        })
+    sort_i = next(i for i, b in enumerate(bands) if b["key"] == sort_band)
+    enough = np.array([swaps[k]["games"][sort_i] >= MIN_GAMES for k in keys], dtype=bool)
+    for j in [j for j in np.argsort(-gains[sort_band]) if enough[j]][:TOP_SWAPS]:
+        old, new = keys[j]
+        s = swaps[keys[j]]
+        cells = {}
+        for i, b in enumerate(bands):
+            if b["key"] in gains:
+                n, w = int(s["games"][i]), int(s["wins"][i])
+                lo, hi = wilson_interval(w, n) if n else (0.0, 1.0)
+                cells[b["key"]] = {"gain": round(float(gains[b["key"]][j]), 3), "games": n,
+                                   "rate": round(w / n, 3) if n else None,
+                                   "range": [round(lo, 3), round(hi, 3)]}
+        result["swaps"].append({"out": vocab.name(old), "in": vocab.name(new),
+                                "out_id": old, "in_id": new, "bands": cells})
     return result

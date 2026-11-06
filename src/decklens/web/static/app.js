@@ -421,20 +421,23 @@ function signed(g) {
   return (pts > 0 ? "+" : pts < 0 ? "−" : "±") + Math.abs(pts).toFixed(1) + "%";
 }
 
-function gainCell(g) {
+function gainCell(c) {
   const td = el("td", null, "record");
-  if (g === undefined) {
-    td.append(el("span", "—", "rate"));
+  if (!c || !c.games) {
+    td.append(el("span", "—", "rate"), el("span", "0 games", "games"));
     return td;
   }
-  td.append(el("span", signed(g), "rate" + (g >= 0.005 ? " good" : g <= -0.005 ? " bad" : "")));
+  td.append(el("span", signed(c.gain), "rate" + (c.gain >= 0.005 ? " good" : c.gain <= -0.005 ? " bad" : "")));
+  const games = el("span", plural(c.games, "game", "games"), "games");
+  if (c.games < 30) games.append(el("span", " (few)", "few"));
+  td.append(games, el("span", pct(c.rate) + " won", "range"));
   return td;
 }
 
 // One-card swaps the model rates best against the meta, in each rating band.
 async function showTweaks(deck, box, band) {
   show(box, el("p", "Deck tweaks", "label"),
-    el("p", "Trying one-card swaps against the most played decks in each rating range…", "muted"));
+    el("p", "Looking at stored decks one card away from yours…", "muted"));
   let t;
   try {
     t = await api("/api/tweaks", {
@@ -448,7 +451,8 @@ async function showTweaks(deck, box, band) {
   }
   const bands = t.bands.filter((b) => b.base !== undefined);
   if (!t.swaps.length || !bands.length) {
-    show(box, el("p", "Not enough stored battles to compare against yet.", "muted"));
+    show(box, el("p", "No version of your deck with one card different has 10+ stored games " +
+      (band === "all" ? "" : "in this range ") + "yet. Try another range, or check back after more crawls.", "muted"));
     return;
   }
   const sorter = el("div", null, "tabs");
@@ -469,26 +473,27 @@ async function showTweaks(deck, box, band) {
   for (const b of bands) head.append(el("th", b.key === "all" ? "All" : b.label));
   const now = el("tr", null, "now");
   now.append(el("th", "Your deck now"));
-  for (const b of bands) now.append(el("td", pct(b.base), "rate"));
+  for (const b of bands) {
+    const td = el("td", null, "record");
+    td.append(el("span", pct(b.base), "rate"), el("span", plural(b.games, "game", "games"), "games"));
+    now.append(td);
+  }
   table.tHead.append(head);
   table.tBodies[0].append(now);
   for (const s of t.swaps) {
     const tr = el("tr");
     const swap = el("th");
     swap.append(el("span", s.out, "swap-out"), el("span", " → "), el("span", s.in, "swap-in"));
-    if (s.vs.length) {
-      swap.append(el("span", s.vs.map((v) => signed(v.gain) + " vs " + v.archetype).join(", "), "swap-vs"));
-    }
     tr.append(swap);
-    for (const b of bands) tr.append(gainCell(s.gain[b.key]));
+    for (const b of bands) tr.append(gainCell(s.bands[b.key]));
     table.tBodies[0].append(tr);
   }
   wrap.append(table);
   show(box, el("p", "Best swaps for:", "hint"), sorter, wrap,
-    el("p", "Win chance against the 60 most played decks in each rating range, from the model, " +
-      "between equally skilled players with equal card levels. Ranges split rated players into " +
-      "thirds. Swapped-in cards are judged plain (no Evo or Hero), and changes under about 1% " +
-      "are within the model's noise.", "note"));
+    el("p", "Real stored Ranked games of decks that share 7 of your 8 cards: the swap is the card " +
+      "they play instead of one of yours. Win rates are pulled toward all decks close to yours " +
+      "(6+ of 8 cards) by 20 games, so a lucky 3–0 doesn't top the list. Ranges split rated " +
+      "players into thirds. Swaps need 10+ games in the range you sort by.", "note"));
 }
 
 const RECORD_DAYS = [7, 30, 90];

@@ -46,7 +46,7 @@ RATE_LIMITS = {
     "search": (20, 60.0),   # name search: 20 a minute (slows down scraping the index)
     "predict": (60, 60.0),
     "meta": (30, 60.0),     # meta tables work over every stored battle
-    "tweaks": (6, 60.0),    # a tweak search scores ~150 decks against the meta with the trees
+    "tweaks": (12, 60.0),   # a tweak search walks every stored deck close to yours
     "images": (600, 60.0),  # card art: a page shows up to ~40 cards at once
     "login": (10, 60.0),    # password guesses per client, on top of per-username lockout
     "clan_lookup": (6, 60.0),  # live clan lookups cost up to 6 API calls each
@@ -359,8 +359,6 @@ def create_app(services: Services, *, hsts: bool = False) -> FastAPI:
 
     @app.post("/api/tweaks", dependencies=[*signed_in, Depends(limit("tweaks"))])
     def tweaks_route(body: TweakRequest, model: Predictor = Depends(predictor)) -> dict[str, Any]:
-        if model.trees is None:
-            raise HTTPException(503, "Needs the trees model: run python -m decklens.train")
         try:
             deck = validate_deck(body.deck, model.known_cards())
         except ValueError as exc:
@@ -368,7 +366,7 @@ def create_app(services: Services, *, hsts: bool = False) -> FastAPI:
         table = battle_table()
         return services.cache.get_or_set(
             ("tweaks", deck, body.band, id(table)),
-            lambda: find_tweaks(model.trees, table, model.archetypes.names, deck, body.band))
+            lambda: find_tweaks(table, model.archetypes.vocab, deck, body.band))
 
     @app.get("/cards/{card_id}.png", include_in_schema=False,
              dependencies=[*signed_in, Depends(limit("images"))])
