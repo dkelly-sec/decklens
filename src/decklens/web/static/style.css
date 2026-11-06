@@ -54,7 +54,7 @@ body {
   margin: 0;
   background: var(--bg);
   color: var(--text);
-  font: 16px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+  font: 1rem/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
   font-variant-numeric: tabular-nums;
   caret-color: var(--blue);
   accent-color: var(--blue);
@@ -71,8 +71,8 @@ header, main, footer {
 
 header { padding-top: 28px; }
 h1, h2 { font-family: var(--display); font-weight: 700; line-height: 1.1; }
-h1 { margin: 0; font-size: 34px; letter-spacing: 0.01em; }
-h2 { margin: 0 0 10px; font-size: 24px; display: flex; align-items: center; gap: 10px; }
+h1 { margin: 0; font-size: 2.125rem; letter-spacing: 0.01em; }
+h2 { margin: 0 0 10px; font-size: 1.5rem; display: flex; align-items: center; gap: 10px; }
 .tagline, .hint, .muted, footer { color: var(--muted); }
 .tagline { margin: 2px 0 0; }
 
@@ -81,7 +81,7 @@ h2 { margin: 0 0 10px; font-size: 24px; display: flex; align-items: center; gap:
 .pages { position: sticky; top: 0; z-index: 5; max-width: 720px; margin: 12px auto 0; padding: 8px 16px;
   background: var(--bg); }
 .pages .tabs { margin: 0; box-shadow: var(--shadow); }
-.pages .tabs .tab { font-size: 17px; padding: 10px 12px; }
+.pages .tabs .tab { font-size: 1.0625rem; padding: 10px 12px; }
 .pages .tabs .tab[aria-selected="true"] { color: var(--text); background: var(--panel); box-shadow: var(--shadow); }
 .page[hidden] { display: none; }
 
@@ -131,6 +131,10 @@ button {
   transition: filter 120ms ease-out;
 }
 button:hover { filter: brightness(1.08); }
+button, .link-button { min-height: 32px; }
+@media (pointer: coarse) {
+  button, .link-button, .tab { min-height: 44px; }
+}
 button:disabled { opacity: 0.55; cursor: default; filter: none; }
 .side-them form button[type="submit"], #last-button { background: var(--red); }
 
@@ -140,20 +144,20 @@ a { color: var(--blue); text-underline-offset: 3px; }
 .result { margin-top: 12px; }
 .error { color: var(--error); font-weight: 600; }
 .label { font-weight: 600; margin: 14px 0 6px; }
-.detail, .note { color: var(--muted); margin: 6px 0; font-size: 14px; }
+.detail, .note { color: var(--muted); margin: 6px 0; font-size: 0.875rem; }
 
 /* --- players ---------------------------------------------------------------- */
 
 .player { margin: 8px 0; display: flex; flex-wrap: wrap; align-items: baseline; column-gap: 12px; row-gap: 2px; }
-.player .name { font-family: var(--display); font-size: 22px; font-weight: 700; line-height: 1.2; }
-.player .facts { display: flex; flex-wrap: wrap; column-gap: 12px; color: var(--muted); font-size: 14px; }
+.player .name { font-family: var(--display); font-size: 1.375rem; font-weight: 700; line-height: 1.2; }
+.player .facts { display: flex; flex-wrap: wrap; column-gap: 12px; color: var(--muted); font-size: 0.875rem; }
 .player .online { color: #1f9d5c; font-weight: 600; }
 @media (prefers-color-scheme: dark) { .player .online { color: #4fd18b; } }
 
 /* --- decks ------------------------------------------------------------------- */
 
 .deck-box { margin: 4px 0; }
-.deck-facts { color: var(--muted); margin: 4px 0 8px; font-size: 14px; }
+.deck-facts { color: var(--muted); margin: 4px 0 8px; font-size: 0.875rem; }
 
 .deck {
   display: grid;
@@ -178,14 +182,14 @@ a { color: var(--blue); text-underline-offset: 3px; }
   border-radius: 8px;
   background: var(--panel);
   box-shadow: inset 0 -3px 0 var(--line);
-  font-size: 13px;
+  font-size: 0.8125rem;
   line-height: 1.25;
   text-align: center;
 }
 
 .deck img { width: 64px; height: auto; }
 .card-name { font-weight: 600; }
-.card-facts { font-size: 12px; color: var(--muted); }
+.card-facts { font-size: 0.75rem; color: var(--muted); }
 /* Rarity shows as the strip along each card's bottom edge. */
 .deck li.common { box-shadow: inset 0 -3px 0 #9aa3b5; }
 .deck li.rare { box-shadow: inset 0 -3px 0 #e0902b; }
@@ -201,14 +205,14 @@ a { color: var(--blue); text-underline-offset: 3px; }
 .drop {
   display: inline-grid;
   place-items: center;
-  width: 22px;
-  height: 22px;
+  width: 1.375rem;
+  height: 1.375rem;
   border-radius: 50% 50% 50% 0;
   transform: rotate(-45deg);
-  background: var(--elixir);
+  background: #9b2fc9;   /* one elixir purple in both modes: white on it passes 4.5:1 */
   color: #fff;
   font-family: var(--display);
-  font-size: 14px;
+  font-size: 0.875rem;
   font-weight: 700;
   line-height: 1;
 }
@@ -224,13 +228,13 @@ a { color: var(--blue); text-underline-offset: 3px; }
   border: 2px dashed var(--line);
   border-radius: 6px;
   font-family: var(--display);
-  font-size: 30px;
+  font-size: 1.875rem;
   color: var(--muted);
 }
 
 /* What to play around in their deck. */
 .scout-read { margin: 10px 0 0; display: grid; gap: 6px; }
-.scout-read p { margin: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 14px; }
+.scout-read p { margin: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 0.875rem; }
 .scout-read .what { color: var(--muted); min-width: 64px; }
 .chip {
   display: inline-flex;
@@ -241,7 +245,7 @@ a { color: var(--blue); text-underline-offset: 3px; }
   background: var(--red-soft);
   font-weight: 600;
 }
-.chip .drop { width: 18px; height: 18px; font-size: 12px; }
+.chip .drop { width: 18px; height: 18px; font-size: 0.75rem; }
 
 /* --- matchup ------------------------------------------------------------------ */
 
@@ -260,9 +264,9 @@ a { color: var(--blue); text-underline-offset: 3px; }
 /* The tug of war: blue pushes from the left by your win chance. */
 .tug { margin: 4px 0 6px; }
 .tug-numbers { display: flex; justify-content: space-between; align-items: baseline; font-family: var(--display); font-weight: 700; }
-.tug-numbers .you { color: var(--blue); font-size: 40px; line-height: 1; }
-.tug-numbers .them { color: var(--red); font-size: 26px; line-height: 1; }
-.tug-numbers small { font-size: 16px; margin-left: 4px; color: var(--muted); }
+.tug-numbers .you { color: var(--blue); font-size: 2.5rem; line-height: 1; }
+.tug-numbers .them { color: var(--red); font-size: 1.625rem; line-height: 1; }
+.tug-numbers small { font-size: 1rem; margin-left: 4px; color: var(--muted); }
 .tug-bar {
   --p: 50%;
   position: relative;
@@ -288,32 +292,33 @@ a { color: var(--blue); text-underline-offset: 3px; }
   background: var(--panel);
 }
 .tug.mirror .tug-bar, .tug.mirror .tug-bar::before { background: var(--muted); }
-.chance { margin: 6px 0 0; color: var(--muted); font-size: 14px; }
+.chance { margin: 6px 0 0; color: var(--muted); font-size: 0.875rem; }
 
-.tiers { width: 100%; border-collapse: collapse; margin: 10px 0 6px; font-size: 14px; }
+.tiers { width: 100%; border-collapse: collapse; margin: 10px 0 6px; font-size: 0.875rem; }
 .table-wrap { overflow-x: auto; }
 .tiers th, .tiers td { padding: 6px 8px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
 .tiers th { color: var(--muted); font-weight: 600; }
 .tiers tbody th { white-space: nowrap; }
 .tiers td.record span { display: block; }
-.tiers .rate { font-family: var(--display); font-size: 20px; font-weight: 700; line-height: 1.1; }
+.tiers .rate { font-family: var(--display); font-size: 1.25rem; font-weight: 700; line-height: 1.1; }
 .tiers .rate.good { color: var(--blue); }
 .tiers .rate.bad { color: var(--red); }
-.tiers .games, .tiers .range { font-size: 12px; color: var(--muted); }
+.tiers .games, .tiers .range { font-size: 0.75rem; color: var(--muted); }
 .tiers .games .few { display: inline; }
 @media (max-width: 480px) {
-  .tiers { font-size: 13px; }
+  .tiers { font-size: 0.8125rem; }
   .tiers th, .tiers td { padding: 6px 3px; }
-  .tiers .rate { font-size: 18px; }
+  .tiers .rate { font-size: 1.125rem; }
   .tiers .games .few { display: block; }
 }
 .few { color: var(--muted); }
 
 .meta td { vertical-align: middle; }
-.meta tbody th { white-space: normal; font-family: var(--display); font-size: 17px; color: var(--text); }
+.meta tbody th { white-space: normal; font-family: var(--display); font-size: 1.0625rem; color: var(--text); }
 .meta-name {
-  padding: 0; background: none; color: var(--text); text-align: left;
-  font: 700 17px/1.2 var(--display); text-decoration: underline dotted var(--muted);
+  display: block; width: 100%; min-height: 44px; padding: 0; background: none; color: var(--text);
+  text-align: left;
+  font: 700 1.0625rem/1.2 var(--display); text-decoration: underline dotted var(--muted);
   text-underline-offset: 4px;
 }
 .meta-name:hover { filter: none; color: var(--blue); }
@@ -327,8 +332,8 @@ a { color: var(--blue); text-underline-offset: 3px; }
 
 .rematch { margin: 12px 0 4px; padding: 12px 14px; border-radius: 12px; background: var(--red-soft); }
 .rematch .label { margin-top: 0; }
-.meeting { display: flex; flex-wrap: wrap; gap: 4px 10px; margin: 8px 0 4px; font-size: 14px; }
-.meeting [class^="result-"] { font-family: var(--display); font-weight: 700; font-size: 17px; }
+.meeting { display: flex; flex-wrap: wrap; gap: 4px 10px; margin: 8px 0 4px; font-size: 0.875rem; }
+.meeting [class^="result-"] { font-family: var(--display); font-weight: 700; font-size: 1.0625rem; }
 .result-won { color: var(--blue); }
 .result-lost { color: var(--red); }
 .rematch .scout-read { margin-top: 2px; }
@@ -340,7 +345,7 @@ a { color: var(--blue); text-underline-offset: 3px; }
 .tweak-table tr.now th, .tweak-table tr.now td { color: var(--muted); }
 .swap-out { color: var(--muted); text-decoration: line-through; text-decoration-thickness: 1px; }
 .swap-in { color: var(--blue); }
-.swap-vs { display: block; font-weight: 400; font-size: 12px; color: var(--muted); }
+.swap-vs { display: block; font-weight: 400; font-size: 0.75rem; color: var(--muted); }
 
 /* Your record: a filterable list; open a row to see your latest games against it. */
 .record-search { width: 100%; margin: 4px 0 8px; }
@@ -360,21 +365,21 @@ a { color: var(--blue); text-underline-offset: 3px; }
 }
 .record-row:hover { filter: none; border-color: var(--line); }
 .record-row[aria-expanded="true"] { border-color: var(--blue); border-radius: 8px 8px 0 0; }
-.row-name { font-family: var(--display); font-weight: 700; font-size: 17px; }
-.row-record { color: var(--muted); font-size: 14px; }
-.row-rate { font-family: var(--display); font-weight: 700; font-size: 20px; text-align: right; }
+.row-name { font-family: var(--display); font-weight: 700; font-size: 1.0625rem; }
+.row-record { color: var(--muted); font-size: 0.875rem; }
+.row-rate { font-family: var(--display); font-weight: 700; font-size: 1.25rem; text-align: right; }
 .row-rate.good { color: var(--blue); }
 .row-rate.bad { color: var(--red); }
 .record-detail { padding: 4px 12px 10px; border: 1px solid var(--blue); border-top: 0; border-radius: 0 0 8px 8px; }
 .record-list.variants { margin: 8px 0 4px; }
 .record-list.variants .record-row { background: var(--panel); }
-.record-list.variants .row-name { font-size: 15px; }
-.family-row .row-name { font-size: 19px; }
+.record-list.variants .row-name { font-size: 0.9375rem; }
+.family-row .row-name { font-size: 1.1875rem; }
 .record-game .meeting { margin: 8px 0 4px; }
 .mini-deck { display: grid; grid-template-columns: repeat(8, minmax(0, 36px)); gap: 4px;
   list-style: none; margin: 0; padding: 0; }
 .mini-deck img { display: block; width: 100%; height: auto; }
-.mini-missing, .mini-name { display: grid; place-items: center; width: 100%; aspect-ratio: 64 / 77; font-size: 10px;
+.mini-missing, .mini-name { display: grid; place-items: center; width: 100%; aspect-ratio: 64 / 77; font-size: 0.75rem;
   text-align: center; color: var(--muted); border: 1px dashed var(--line); border-radius: 4px; }
 
 .copy-deck { margin: 6px 0 4px; }
@@ -382,13 +387,13 @@ a { color: var(--blue); text-underline-offset: 3px; }
 .qr { width: 168px; height: 168px; border-radius: 6px; }
 .copy-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin: 0; }
 .tweak-table .copy-deck { margin-top: 4px; }
-.tweak-table .copy-deck .link-button { padding: 2px 8px; font-size: 12px; }
+.tweak-table .copy-deck .link-button { padding: 2px 8px; font-size: 0.75rem; }
 
 .session-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 14px; }
-.session-score { margin: 4px 0; font: 700 44px/1 var(--display); display: flex; gap: 6px; }
+.session-score { margin: 4px 0; font: 700 2.75rem/1 var(--display); display: flex; gap: 6px; }
 .session-strip { display: flex; flex-wrap: wrap; gap: 4px; list-style: none; margin: 8px 0; padding: 0; }
-.session-strip li { display: grid; place-items: center; width: 24px; height: 24px; border-radius: 6px;
-  font: 700 13px var(--display); color: var(--on-accent); }
+.session-strip li { display: grid; place-items: center; width: 1.5rem; height: 1.5rem; border-radius: 6px;
+  font: 700 0.8125rem var(--display); color: var(--on-accent); }
 .dot-won { background: var(--blue); }
 .dot-lost { background: var(--red); }
 .dot-draw { background: var(--muted); }
@@ -398,13 +403,33 @@ a { color: var(--blue); text-underline-offset: 3px; }
 .rank-chart { display: block; width: 100%; height: 180px; }
 .rank-line { fill: none; stroke: var(--blue); stroke-width: 2.5; stroke-linejoin: round; }
 .rank-now { fill: var(--blue); }
-.rank-axis { display: flex; justify-content: space-between; margin: 4px 0 0; font-size: 12px; color: var(--muted); }
+.rank-axis { display: flex; justify-content: space-between; margin: 4px 0 0; font-size: 0.75rem; color: var(--muted); }
 
 .share { margin-top: 10px; }
 .share-panel { display: grid; justify-items: start; gap: 8px; margin-top: 8px; }
 .share-preview { width: 100%; max-width: 320px; height: auto; border-radius: 10px; box-shadow: var(--shadow); }
 
-.key-cards { margin: 4px 0 0; padding-left: 20px; font-size: 14px; }
+/* Something is loading: a small turning ring before the words (a slow pulse with
+   Reduce Motion), so it's clear the app hasn't stalled. */
+.loading { display: flex; align-items: center; gap: 10px; }
+.loading::before {
+  content: ""; flex: none; width: 1rem; height: 1rem; border-radius: 50%;
+  border: 2px solid var(--line); border-top-color: var(--blue);
+  animation: spin 0.8s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+@keyframes pulse { 50% { opacity: 0.35; } }
+@media (prefers-reduced-motion: reduce) {
+  .loading::before { animation: pulse 1.6s ease-in-out infinite; }
+}
+
+/* Tabs that would wrap stay on one row and scroll sideways instead. */
+.tabs.strip { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; }
+.tabs.strip::-webkit-scrollbar { display: none; }
+.tabs.strip .tab { flex: 1 0 auto; padding-left: 8px; padding-right: 8px; }
+@media (max-width: 480px) { .tabs.strip .tab { font-size: 0.9375rem; padding-left: 6px; padding-right: 6px; } }
+
+.key-cards { margin: 4px 0 0; padding-left: 20px; font-size: 0.875rem; }
 .key-cards .yours { color: var(--blue); font-weight: 600; }
 .key-cards .theirs { color: var(--red); font-weight: 600; }
 
@@ -433,7 +458,7 @@ a { color: var(--blue); text-underline-offset: 3px; }
   border-radius: 999px;
   background: var(--red);
   color: var(--on-accent);
-  font-size: 12px;
+  font-size: 0.75rem;
   font-weight: 700;
 }
 
@@ -452,7 +477,7 @@ a { color: var(--blue); text-underline-offset: 3px; }
 /* --- header, account, auto-scout ------------------------------------------------- */
 
 .title-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
-.account { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 14px; }
+.account { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 0.875rem; }
 .account[hidden] { display: none; }
 .link-button {
   background: transparent;
@@ -467,7 +492,7 @@ a { color: var(--blue); text-underline-offset: 3px; }
 #find-form .hint { font-weight: 400; }
 .login form button { justify-self: start; margin-top: 4px; }
 .toggle { display: flex; align-items: center; gap: 8px; font-weight: 600; margin: 4px 0 8px; flex-wrap: wrap; }
-.toggle input { flex: none; width: 18px; height: 18px; padding: 0; margin: 0; accent-color: var(--red); }
+.toggle input { flex: none; width: 22px; height: 22px; padding: 0; margin: 0; accent-color: var(--red); }
 .toggle .hint { font-weight: 400; }
 #auto-status { display: flex; align-items: center; gap: 8px; }
 .status-dot { flex: none; width: 10px; height: 10px; border-radius: 50%; background: var(--muted); }
@@ -476,18 +501,18 @@ a { color: var(--blue); text-underline-offset: 3px; }
 .status-dot.off { background: #e5484d; }
 #auto-status[hidden] { display: none; }
 
-footer { font-size: 13px; padding-bottom: 32px; }
+footer { font-size: 0.8125rem; padding-bottom: 32px; }
 
 @media (max-width: 480px) {
   /* Keep the game's 4 x 2 deck shape on a phone: the whole deck in one glance. */
   .deck { gap: 4px; padding: 6px; }
-  .deck li { padding: 6px 2px 5px; font-size: 11px; }
+  .deck li { padding: 6px 2px 5px; font-size: 0.75rem; }
   .deck img, .card-placeholder { width: 100%; max-width: 56px; }
   .card-placeholder { height: 67px; }
-  .card-facts { font-size: 10px; }
-  .deck .drop { width: 18px; height: 18px; font-size: 12px; top: 2px; left: 2px; }
+  .card-facts { font-size: 0.75rem; }
+  .deck .drop { width: 18px; height: 18px; font-size: 0.75rem; top: 2px; left: 2px; }
   .row { flex-direction: column; }
-  .tug-numbers .you { font-size: 34px; }
+  .tug-numbers .you { font-size: 2.125rem; }
 }
 
 @media (prefers-reduced-motion: reduce) {

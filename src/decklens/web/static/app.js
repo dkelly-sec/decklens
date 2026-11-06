@@ -8,6 +8,13 @@ const state = { me: null };
 
 // --- small helpers -----------------------------------------------------------
 
+// "Loading…" text with a turning ring, announced politely to screen readers.
+function loadingText(text) {
+  const p = el("p", text, "muted loading");
+  p.setAttribute("role", "status");
+  return p;
+}
+
 function el(tag, text, className) {
   const node = document.createElement(tag);
   if (text !== undefined && text !== null) node.textContent = String(text);
@@ -183,7 +190,7 @@ function copyDeckButton(ids) {
     panel.hidden = !opening;
     button.setAttribute("aria-expanded", String(opening));
     if (!opening || panel.childElementCount) return;
-    show(panel, el("p", "Making the link…", "muted"));
+    show(panel, loadingText("Making the link…"));
     try {
       const r = await api("/api/deck-link", {
         method: "POST",
@@ -511,7 +518,7 @@ function shareButton(m, mine, theirs) {
   button.addEventListener("click", async () => {
     panel.hidden = !panel.hidden;
     if (panel.hidden || panel.childElementCount) return;
-    show(panel, el("p", "Drawing…", "muted"));
+    show(panel, loadingText("Drawing…"));
     const canvas = await shareCanvas(m, mine, theirs);
     canvas.className = "share-preview";
     canvas.setAttribute("role", "img");
@@ -553,7 +560,7 @@ function asTag(text) {
 
 async function showMe(tag) {
   const out = document.getElementById("me-result");
-  show(out, el("p", "Looking up…", "muted"));
+  show(out, loadingText("Looking up…"));
   try {
     const me = await api("/api/players/" + tagPath(tag));
     state.me = me;
@@ -573,7 +580,7 @@ const YOU_TABS = [["deck", "Deck"], ["today", "Today"], ["record", "Record"], ["
   ["tweaks", "Tweaks"]];
 
 function youTabs(me) {
-  const bar = el("div", null, "tabs");
+  const bar = el("div", null, "tabs strip");
   bar.setAttribute("role", "tablist");
   bar.setAttribute("aria-label", "About you");
   const panel = el("div", null, "tab-panel");
@@ -607,6 +614,7 @@ function youTabs(me) {
     built[key] = built[key] || build(key);
     panel.replaceChildren(built[key]);
     storageSet("decklens.youTab", key);
+    if (buttons[key].scrollIntoView) buttons[key].scrollIntoView({ block: "nearest", inline: "nearest" });
   }
 
   for (const [key, label] of YOU_TABS) {
@@ -634,7 +642,7 @@ function refreshButton(onClick) {
 }
 
 async function showSession(tag, box) {
-  show(box, el("p", "Reading your battle log…", "muted"));
+  show(box, loadingText("Reading your battle log…"));
   let s;
   try {
     s = await api("/api/players/" + tagPath(tag) + "/session");
@@ -720,7 +728,7 @@ async function showRank(tag, box, days) {
     b.addEventListener("click", () => showRank(tag, box, d));
     tabs.append(b);
   }
-  show(box, tabs, el("p", "Loading your rank…", "muted"));
+  show(box, tabs, loadingText("Loading your rank…"));
   let h;
   try {
     h = await api("/api/players/" + tagPath(tag) + "/rank-history?days=" + days);
@@ -787,7 +795,7 @@ function gainCell(c) {
 // One-card swaps real players of your deck make, and how they did, by rank range.
 async function showTweaks(deck, box, band) {
   show(box, el("p", "Deck tweaks", "label"),
-    el("p", "Looking at stored decks one card away from yours…", "muted"));
+    loadingText("Looking at stored decks one card away from yours…"));
   let t;
   try {
     t = await api("/api/tweaks", {
@@ -945,7 +953,7 @@ async function showRecord(tag, box, days) {
     b.addEventListener("click", () => showRecord(tag, box, d));
     tabs.append(b);
   }
-  show(box, tabs, el("p", "Loading your games…", "muted"));
+  show(box, tabs, loadingText("Loading your games…"));
   let r;
   try {
     r = await api("/api/players/" + tagPath(tag) + "/record?days=" + days);
@@ -1034,7 +1042,7 @@ async function lookUpMe(event) {
     else show(out, el("p", "That isn't a valid player tag.", "error"));
     return;
   }
-  show(out, el("p", "Searching…", "muted"));
+  show(out, loadingText("Searching…"));
   let results = [];
   let searchError = null;
   try {
@@ -1076,7 +1084,7 @@ async function scoutLast() {
     show(out, el("p", "Look yourself up first.", "error"));
     return;
   }
-  show(out, el("p", "Checking your battle log…", "muted"));
+  show(out, loadingText("Checking your battle log…"));
   try {
     const opp = await api("/api/players/" + tagPath(state.me.tag) + "/last-opponent");
     show(out, ...lastOpponentParts(opp));
@@ -1134,7 +1142,7 @@ async function liveClanParts(clan, name) {
 }
 
 async function liveClanLookup(clan, name, out) {
-  show(out, el("p", "Checking clans named \u201c" + clan + "\u201d in the game…", "muted"));
+  show(out, loadingText("Checking clans named \u201c" + clan + "\u201d in the game…"));
   show(out, ...(await liveClanParts(clan, name)));
 }
 
@@ -1189,7 +1197,7 @@ async function findOpponent(event, options = {}) {
   // yours, as Ranked pairs similar ratings.
   const near = options.rating || (state.me && state.me.rating);
   if (near) path += "&near_rating=" + encodeURIComponent(near);
-  show(out, el("p", "Searching…", "muted"));
+  show(out, loadingText("Searching…"));
   let results = [];
   try {
     results = (await api(path)).results;
@@ -1230,7 +1238,7 @@ async function findOpponent(event, options = {}) {
     // Nobody we know is in that clan (with that name): check the game first,
     // keep what we found underneath in case the clan or name was misread.
     show(out, el("p", "Nobody DeckLens knows " + (name ? "with that name " : "") +
-      "is in that clan. Checking the game…", "muted"));
+      "is in that clan. Checking the game…", "muted loading"));
     const live = await liveClanParts(clan, name);
     show(out, ...live, el("p", "Other players DeckLens knows with a similar name or clan:", "hint"), resultList(results));
     if (options.auto) autoOpen(out, !options.nameUnread);
@@ -1277,7 +1285,7 @@ async function showAfterBattle(out) {
   const token = ++auto.afterToken;
   const before = await auto.afterBattle.before;
   auto.afterBattle = null;
-  show(out, el("p", "Battle over. Getting your opponent from your battle log…", "muted"));
+  show(out, loadingText("Battle over. Getting your opponent from your battle log…"));
   for (let attempt = 0; attempt < AFTER_BATTLE_TRIES; attempt++) {
     if (attempt) await new Promise((r) => setTimeout(r, AFTER_BATTLE_WAIT_MS));
     if (token !== auto.afterToken) return;  // a newer battle took over
@@ -1481,7 +1489,8 @@ async function rematchBox(player) {
 }
 
 async function showOpponentDecks(player, container) {
-  const panel = el("div", "Loading their recent decks…", "decks-panel");
+  const panel = el("div", null, "decks-panel");
+  panel.append(loadingText("Loading their recent decks…"));
   const old = container.querySelector(".decks-panel");
   if (old) old.remove();
   container.append(panel);
@@ -1514,7 +1523,7 @@ async function showOpponentDecks(player, container) {
       rendered[mode] = decks.length ? deckList(decks, mode)
         : Promise.resolve([el("p", emptyMessage(mode, result.recent_modes), "muted")]);
     }
-    show(body, el("p", "Loading matchups…", "muted"));
+    show(body, loadingText("Loading matchups…"));
     const nodes = await rendered[mode];
     if (buttons[mode].getAttribute("aria-selected") === "true") show(body, ...nodes);
   }
@@ -1613,7 +1622,7 @@ function metaTable(m) {
 
 async function showMeta(top = 1000) {
   const out = document.getElementById("meta-result");
-  show(out, el("p", "Loading the meta…", "muted"));
+  show(out, loadingText("Loading the meta…"));
   let m;
   try {
     m = await api("/api/meta?top=" + encodeURIComponent(top));
