@@ -1235,6 +1235,13 @@ def test_meta_is_the_top_of_the_ladder_by_day(predictor):
     assert len(top[mine]["daily"]) == 14 and top[mine]["daily"][-1]["games"] > 0
     assert sum(d["games"] for d in top[mine]["daily"][:7]) == 0        # nothing a week+ ago
     assert meta(t, names, 200)["decks"] == 2 * 134
+    evo_deck = MY_DECK + (MY_DECK[0] + 1_000_000_000,)
+    shown = meta(TierStats(predictor.archetypes, lambda: [
+        (0, evo_deck, 50, OPP_DECK, 60, None)] * 3).table(), names, vocab=predictor.archetypes.vocab)
+    best = next(a["decks"][0] for a in shown["archetypes"]
+                if a["decks"][0]["cards"][0]["id"] == MY_DECK[0])
+    assert best["games"] == 3 and len(best["cards"]) == 8
+    assert best["cards"][0]["form"] == "evo" and best["cards"][0]["name"].startswith("Card")
     with pytest.raises(KeyError):
         meta(t, names, 500)
 
@@ -1318,3 +1325,35 @@ def test_missing_evolution_art_falls_back_to_the_plain_card():
     now[0] = 601
     images.image(26000010, form="evo")
     assert [u for u, _ in session.calls].count(EVO_URL) == 2      # ...until 10 minutes pass
+
+
+def test_background_rebuild_never_makes_a_request_wait(predictor):
+    import threading
+
+    from decklens.web.tiers import TierStats
+
+    release, calls, now = threading.Event(), [], [0.0]
+
+    def slow():
+        calls.append(1)
+        if len(calls) > 1:
+            release.wait(5)          # the second build takes "a long time"
+        return _tier_rows()
+
+    stats = TierStats(predictor.archetypes, slow, ttl=600, clock=lambda: now[0], background=True)
+    stats.warm()
+    first = stats.table()            # waits only for the very first build
+    assert first is not None and len(calls) == 1
+    now[0] = 601
+    assert stats.table() is first    # stale: answered at once with the old table...
+    for _ in range(100):
+        if len(calls) == 2:
+            break
+        threading.Event().wait(0.02)
+    assert stats.table() is first and len(calls) == 2   # ...and only one rebuild runs
+    release.set()
+    for _ in range(100):
+        if stats.table() is not first:
+            break
+        threading.Event().wait(0.02)
+    assert stats.table() is not first                    # the new table took over

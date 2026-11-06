@@ -63,7 +63,15 @@ SNAPSHOT_WINDOW_HOURS = 24    # leaderboard snapshots are taken nightly
 # when nobody is past 2,200 yet. Written out in full for both sides: no SQL is
 # ever assembled from strings.
 _ROWS = """
-    SELECT b.winner_side, p0.card_ids, r0.rank, p1.card_ids, r1.rank, p0.cards, p1.cards,
+    SELECT b.winner_side, p0.card_ids, r0.rank, p1.card_ids, r1.rank,
+           -- just each card's id and evolution flags, in slot order (for Evos and
+           -- Heroes): the full card data, art links and all, is many times bigger
+           (SELECT jsonb_agg(jsonb_build_object('id', c -> 'id', 'evolutionLevel',
+                                                c -> 'evolutionLevel') ORDER BY i)
+            FROM jsonb_array_elements(p0.cards) WITH ORDINALITY AS e(c, i)),
+           (SELECT jsonb_agg(jsonb_build_object('id', c -> 'id', 'evolutionLevel',
+                                                c -> 'evolutionLevel') ORDER BY i)
+            FROM jsonb_array_elements(p1.cards) WITH ORDINALITY AS e(c, i)),
            b.battle_time
     FROM battles b
     JOIN battle_players p0 ON p0.battle_id = b.battle_id AND p0.side = 0
@@ -145,9 +153,19 @@ def lock_of(deck: Sequence[int], wincons: Sequence[int]) -> tuple:
             tuple(sorted(c for c in set(deck) if is_form_token(c))))
 
 
-def _lock_ids(decks: Sequence[Sequence[int]], wincons: Sequence[int], locks: dict[tuple, int]
-              ) -> np.ndarray:
-    return np.array([locks.setdefault(lock_of(d, wincons), len(locks)) for d in decks], dtype=int)
+def _per_deck(model: ArchetypeModel, decks: list[tuple[int, ...]], locks: dict[tuple, int]
+              ) -> tuple[np.ndarray, np.ndarray]:
+    """(archetype, lock id) for each deck. Top-ladder decks repeat a lot, so each
+    distinct deck is worked out once."""
+    unique = list(dict.fromkeys(decks))
+    if not unique:
+        return np.zeros(0, dtype=int), np.zeros(0, dtype=int)
+    where = {d: i for i, d in enumerate(unique)}
+    index = np.array([where[d] for d in decks], dtype=int)
+    archs = model.assign(unique)
+    lock = np.array([locks.setdefault(lock_of(d, model._wincons), len(locks)) for d in unique],
+                    dtype=int)
+    return archs[index], lock[index]
 
 
 def build_table(model: ArchetypeModel, rows: Sequence[tuple]) -> BattleTable:
@@ -164,23 +182,20 @@ def build_table(model: ArchetypeModel, rows: Sequence[tuple]) -> BattleTable:
     ranks = [np.array([r[i] if r[i] is not None else np.inf for r in rows], dtype=float)
              for i in (2, 4)]
     worst = np.maximum(ranks[0], ranks[1])
-    empty = np.zeros(0, dtype=int)
     now = datetime.now(timezone.utc)
-
     days_ago = np.array([(now - r[5]).days if len(r) > 5 and r[5] else -1 for r in rows],
                         dtype=int)  # older 5-field rows carry no time
     locks: dict[tuple, int] = {}
-    wincons = model._wincons
+    arch0, lock0 = _per_deck(model, [tuple(r[1]) for r in rows], locks)
+    arch1, lock1 = _per_deck(model, [tuple(r[3]) for r in rows], locks)
     return BattleTable(
         columns, cards0, cards1,
         winner=np.array([int(r[0]) for r in rows], dtype=int),
         worst=worst,
-        arch0=model.assign([tuple(r[1]) for r in rows]) if n else empty,
-        arch1=model.assign([tuple(r[3]) for r in rows]) if n else empty,
+        arch0=arch0, arch1=arch1,
         decks0=[tuple(r[1]) for r in rows], decks1=[tuple(r[3]) for r in rows],
         days_ago=days_ago, rank0=ranks[0], rank1=ranks[1],
-        lock0=_lock_ids([r[1] for r in rows], wincons, locks),
-        lock1=_lock_ids([r[3] for r in rows], wincons, locks),
+        lock0=lock0, lock1=lock1,
         locks=locks,
     )
 
@@ -197,23 +212,56 @@ def _cell(won: np.ndarray, games: np.ndarray, mirror: bool) -> dict[str, Any]:
     return cell
 
 
+FIRST_BUILD_WAIT = 180.0   # seconds a request waits for the very first table
+
+
 class TierStats:
+    """The battle table, rebuilt every ttl seconds. With background=True (the app),
+    a rebuild runs on its own thread while requests keep getting the previous
+    table, so no request waits for the database; only the first build is waited
+    for, and warm() starts that one when the app starts."""
+
     def __init__(self, model: ArchetypeModel, load: Callable[[], Sequence[tuple]],
-                 *, ttl: float = 600.0, clock: Callable[[], float] = time.monotonic):
+                 *, ttl: float = 600.0, clock: Callable[[], float] = time.monotonic,
+                 background: bool = False):
         self.model, self._load, self.ttl, self.clock = model, load, ttl, clock
+        self.background = background
         self._table: BattleTable | None = None
         self._built_at = -float("inf")
         self._lock = threading.Lock()
+        self._building = False
+        self._first = threading.Event()
 
-    def table(self) -> BattleTable | None:
+    def _rebuild(self) -> None:
+        try:
+            table: BattleTable | None = build_table(self.model, self._load())
+        except Exception as exc:  # database trouble: keep serving the last table
+            log.warning("could not refresh matchup stats: %s", type(exc).__name__)
+            table = None
         with self._lock:
-            if self._table is None or self.clock() - self._built_at >= self.ttl:
-                try:
-                    self._table = build_table(self.model, self._load())
-                except Exception as exc:  # database trouble: keep serving the last table
-                    log.warning("could not refresh matchup stats: %s", type(exc).__name__)
-                self._built_at = self.clock()
-            return self._table
+            if table is not None:
+                self._table = table
+            self._built_at = self.clock()
+            self._building = False
+        self._first.set()
+
+    def warm(self) -> None:
+        """Start building now (in the background), before anyone asks."""
+        self.table(wait=False)
+
+    def table(self, wait: bool = True) -> BattleTable | None:
+        with self._lock:
+            due = self._table is None or self.clock() - self._built_at >= self.ttl
+            start = due and not self._building
+            if start:
+                self._building = True
+        if start and not self.background:
+            self._rebuild()
+        elif start:
+            threading.Thread(target=self._rebuild, name="battle-table", daemon=True).start()
+        if self._table is None and wait and self.background:
+            self._first.wait(FIRST_BUILD_WAIT)
+        return self._table
 
     def matchup(self, deck_a: Sequence[int], deck_b: Sequence[int], arch_a: int, arch_b: int
                 ) -> dict[str, Any] | None:

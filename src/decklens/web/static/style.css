@@ -303,6 +303,15 @@ a { color: var(--blue); text-underline-offset: 3px; }
 
 .meta td { vertical-align: middle; }
 .meta tbody th { white-space: normal; font-family: var(--display); font-size: 17px; color: var(--text); }
+.meta-name {
+  padding: 0; background: none; color: var(--text); text-align: left;
+  font: 700 17px/1.2 var(--display); text-decoration: underline dotted var(--muted);
+  text-underline-offset: 4px;
+}
+.meta-name:hover { filter: none; color: var(--blue); }
+.meta-name[aria-expanded="true"] { color: var(--blue); }
+.meta-decks td { padding: 4px 8px 12px; }
+.meta-decks .mini-deck { margin-bottom: 6px; }
 .trend { display: block; width: 112px; height: 28px; }
 .trend rect { fill: var(--blue); }
 #meta-bands .tab[aria-pressed="true"] { color: var(--text); background: var(--panel); box-shadow: var(--shadow); }

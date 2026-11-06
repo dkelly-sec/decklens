@@ -1217,7 +1217,12 @@ function metaTable(m) {
   table.tHead.append(head);
   for (const a of m.archetypes) {
     const tr = el("tr");
-    tr.append(el("th", a.name));
+    const name = el("th");
+    const open = el("button", a.name, "meta-name");
+    open.type = "button";
+    open.setAttribute("aria-expanded", "false");
+    name.append(open);
+    tr.append(name);
     tr.append(el("td", pct(a.share), "rate"));
     const wins = el("td", null, "record");
     if (a.games) {
@@ -1232,7 +1237,22 @@ function metaTable(m) {
     const trend = el("td");
     trend.append(trendBars(a.daily));
     tr.append(trend);
-    table.tBodies[0].append(tr);
+    // Tap the archetype: its most played decks, card by card.
+    const detail = el("tr", null, "meta-decks");
+    detail.hidden = true;
+    const cell = el("td");
+    cell.colSpan = 4;
+    for (const d of a.decks || []) {
+      const line = el("p", null, "meeting");
+      line.append(el("span", plural(d.games, "game", "games")), el("span", pct(d.win_rate) + " won", "muted"));
+      cell.append(line, miniDeck(d));
+    }
+    detail.append(cell);
+    open.addEventListener("click", () => {
+      detail.hidden = !detail.hidden;
+      open.setAttribute("aria-expanded", String(!detail.hidden));
+    });
+    table.tBodies[0].append(tr, detail);
   }
   wrap.append(table);
   return wrap;
@@ -1263,7 +1283,7 @@ async function showMeta(top = 1000) {
   }
   show(out, el("p", m.decks.toLocaleString() + " decks from the last " + m.days + " days, only " +
     "from battles where both players were in the global top " + m.top.toLocaleString() +
-    " when they played.", "hint"), metaTable(m));
+    " when they played. Tap an archetype to see its most played decks.", "hint"), metaTable(m));
 }
 
 // --- start -------------------------------------------------------------------

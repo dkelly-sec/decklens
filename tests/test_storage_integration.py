@@ -198,6 +198,7 @@ def test_tier_rows_include_recent_battles_with_known_or_unknown_ranks(conn):
     both = battle(team_tag="#2PP", opp_tag="#9QJ")
     both["battleTime"] = stamp
     both["team"][0]["globalRank"], both["opponent"][0]["globalRank"] = 120, 450
+    both["team"][0]["cards"][0]["evolutionLevel"] = 1         # Evolution slot: an Evo
     one = battle(team_tag="#8YY", opp_tag="#9QJ")
     one["battleTime"] = stamp
     one["team"][0]["globalRank"] = 30                 # opponent unranked: rank is None
@@ -211,7 +212,9 @@ def test_tier_rows_include_recent_battles_with_known_or_unknown_ranks(conn):
                                                                         tzinfo=timezone.utc)
                                 < timedelta(days=14))
     winner, deck0, rank0, deck1, rank1, when = next(r for r in rows if {r[2], r[4]} == {120, 450})
-    assert len(deck0) == 8 and len(deck1) == 8 and winner in (0, 1) and when.tzinfo is not None
+    assert winner in (0, 1) and when.tzinfo is not None
+    team = deck0 if rank0 == 120 else deck1
+    assert len(team) == 9 and team[-1] == 1_026_000_000       # 8 cards, then the Evo token
 
 
 def test_tier_ranks_beyond_500_come_from_the_nearest_leaderboard_snapshot(conn):

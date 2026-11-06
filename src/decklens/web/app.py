@@ -353,7 +353,9 @@ def create_app(services: Services, *, hsts: bool = False) -> FastAPI:
             raise HTTPException(422, "top must be 200 or 1000")
         table = battle_table()
         return services.cache.get_or_set(
-            ("meta", top, id(table)), lambda: meta(table, services.predictor.archetypes.names, top))
+            ("meta", top, id(table)),
+            lambda: meta(table, services.predictor.archetypes.names, top,
+                         vocab=services.predictor.archetypes.vocab))
 
     @app.post("/api/tweaks", dependencies=[*signed_in, Depends(limit("tweaks"))])
     def tweaks_route(body: TweakRequest, model: Predictor = Depends(predictor)) -> dict[str, Any]:
@@ -537,7 +539,8 @@ def create_app_from_env() -> FastAPI:
             with search_db() as conn:
                 return load_rows(conn)
 
-        predictor.tiers = TierStats(predictor.archetypes, rows)
+        predictor.tiers = TierStats(predictor.archetypes, rows, background=True)
+        predictor.tiers.warm()  # the first build starts now, not on someone's first click
 
     from .cards import CardImages
 
