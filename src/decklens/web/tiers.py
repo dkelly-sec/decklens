@@ -9,6 +9,9 @@ Rows, from strictest to loosest:
   exact      both decks card-for-card the same as yours and theirs
   7 / 6      each deck shares at least 7 (or 6) of its 8 cards with yours / theirs
   archetype  same deck styles, using the trained archetype model
+Below exact, each deck must also keep the same win condition and the same
+spells: swapping Fireball for Rocket keeps 7 of 8 cards but can turn an X-Bow
+mirror into 70-30, so those games are a different matchup.
 
 Where ranks come from: battle logs only carry a rank for the top 500 (checked
 against real data: 9,698 ranked sides, highest rank 500). Beyond that, the
@@ -31,8 +34,9 @@ from typing import Any, Callable, Sequence
 
 import numpy as np
 
-from ..archetypes import ArchetypeModel
+from ..archetypes import ArchetypeModel, _deck_key
 from ..model import wilson_interval
+from .services import card_kind
 
 log = logging.getLogger("decklens.web.tiers")
 
@@ -104,11 +108,29 @@ class BattleTable:
     worst: np.ndarray         # worse of the two ranks; inf when either is unknown
     arch0: np.ndarray         # archetype of each side
     arch1: np.ndarray
+    lock0: np.ndarray         # each side's win condition and spells, as an id (see lock_of)
+    lock1: np.ndarray
+    locks: dict[tuple, int]   # win condition and spells -> id
+
+    def lock_id(self, deck: Sequence[int], wincons: Sequence[int]) -> int:
+        return self.locks.get(lock_of(deck, wincons), -1)  # -1: no stored deck has it
 
     def overlap(self, side: np.ndarray, deck: Sequence[int]) -> np.ndarray:
         """How many of deck's cards each battle's side played."""
         cols = [self.columns[c] for c in set(deck) if c in self.columns]
         return side[:, cols].sum(axis=1) if cols else np.zeros(len(side), dtype=int)
+
+
+def lock_of(deck: Sequence[int], wincons: Sequence[int]) -> tuple:
+    """What must stay the same for decks to count as similar: win condition and spells."""
+    # shortcut: a deck with a hidden Hero is keyed on its 7 known cards, so if that Hero is its
+    # win condition it finds no similar games; fix if hero win conditions get common.
+    return (_deck_key(deck, wincons), tuple(sorted(c for c in set(deck) if card_kind(c) == "spell")))
+
+
+def _lock_ids(decks: Sequence[Sequence[int]], wincons: Sequence[int], locks: dict[tuple, int]
+              ) -> np.ndarray:
+    return np.array([locks.setdefault(lock_of(d, wincons), len(locks)) for d in decks], dtype=int)
 
 
 def build_table(model: ArchetypeModel, rows: Sequence[tuple]) -> BattleTable:
@@ -125,12 +147,17 @@ def build_table(model: ArchetypeModel, rows: Sequence[tuple]) -> BattleTable:
     worst = np.array([max(r[2], r[4]) if r[2] is not None and r[4] is not None else np.inf
                       for r in rows], dtype=float)
     empty = np.zeros(0, dtype=int)
+    locks: dict[tuple, int] = {}
+    wincons = model._wincons
     return BattleTable(
         columns, cards0, cards1,
         winner=np.array([int(r[0]) for r in rows], dtype=int),
         worst=worst,
         arch0=model.assign([tuple(r[1]) for r in rows]) if n else empty,
         arch1=model.assign([tuple(r[3]) for r in rows]) if n else empty,
+        lock0=_lock_ids([r[1] for r in rows], wincons, locks),
+        lock1=_lock_ids([r[3] for r in rows], wincons, locks),
+        locks=locks,
     )
 
 
@@ -178,6 +205,10 @@ class TierStats:
                       for c in COLUMNS]
         a0, a1 = t.overlap(t.cards0, deck_a), t.overlap(t.cards1, deck_a)
         b0, b1 = t.overlap(t.cards0, deck_b), t.overlap(t.cards1, deck_b)
+        wincons = self.model._wincons
+        la, lb = t.lock_id(deck_a, wincons), t.lock_id(deck_b, wincons)
+        locked_first = (t.lock0 == la) & (t.lock1 == lb)
+        locked_second = (t.lock1 == la) & (t.lock0 == lb)
         levels = []
         for key, need in LEVELS:
             if need is None:
@@ -190,6 +221,8 @@ class TierStats:
                 first = (a0 >= need_a) & (b1 >= need_b)
                 second = (a1 >= need_a) & (b0 >= need_b)
                 mirror = deck_mirror
+            if key != "exact":  # exact already means same spells
+                first, second = first & locked_first, second & locked_second
             games = first | second
             won = (first & (t.winner == 0)) | (~first & second & (t.winner == 1))
             levels.append({"level": key, "cells": [

@@ -266,6 +266,29 @@ def recent_decks(tag: str, battle_log: list[dict[str, Any]], top: int = 3
     }
 
 
+MIRROR_NOTE = "Mirror match: same archetype on both sides, so it's a coin flip on decks."
+HEADLINE_MIN_GAMES = 5   # a level needs this many games (all players) to set the headline
+HEADLINE_PULL = 10       # ...and is pulled toward the archetype estimate as if by this many games
+LEVEL_WORDS = {"exact": "these exact decks", "7": "decks 7+ of 8 cards the same",
+               "6": "decks 6+ of 8 cards the same", "archetype": "the same archetypes"}
+
+
+def headline(breakdown: dict[str, Any], archetype_chance: float) -> dict[str, Any]:
+    """Win chance from the most specific level with enough games (same spells and win
+    condition below exact), pulled toward the archetype estimate when games are few:
+    2 wins in 7 exact games with a 53% archetype estimate gives (2 + 5.3) / 17 = 43%."""
+    for level in breakdown["levels"]:
+        cell = next(c for c in level["cells"] if c["tier"] is None)
+        if cell.get("mirror") or cell["games"] < HEADLINE_MIN_GAMES:
+            continue
+        chance = ((cell["wins"] + HEADLINE_PULL * archetype_chance)
+                  / (cell["games"] + HEADLINE_PULL))
+        return {"win_chance": round(chance, 3), "archetype_chance": archetype_chance,
+                "based_on": {"level": level["level"], "games": cell["games"],
+                             "words": LEVEL_WORDS.get(level["level"], level["level"])}}
+    return {}
+
+
 @dataclass
 class Predictor:
     archetypes: ArchetypeModel
@@ -288,7 +311,7 @@ class Predictor:
             result["record"] = {"wins": int(model.wins[i, j]), "games": games,
                                 "range": [round(lo, 3), round(hi, 3)]}
         if i == j:
-            result["note"] = "Mirror match: same archetype on both sides, so it's a coin flip on decks."
+            result["note"] = MIRROR_NOTE
         elif games < MIN_GAMES_FOR_CONFIDENCE:
             result["note"] = (f"Only {games} recorded games between these archetypes, so this "
                               "estimate leans mostly on each archetype's overall record.")
@@ -307,6 +330,13 @@ class Predictor:
             breakdown = self.tiers.matchup(deck_a, deck_b, i, j)
             if breakdown is not None:
                 result["breakdown"] = breakdown
+                if set(deck_a) != set(deck_b):
+                    result.update(headline(breakdown, result["win_chance"]))
+                    if "based_on" in result and result["mirror"]:  # same archetype, different decks
+                        result["mirror"] = False
+                        result["note"] = result["note"].replace(MIRROR_NOTE, (
+                            "Same archetype on both sides, but the decks differ, so this uses "
+                            "games between decks like these."))
         if self.linear is not None:
             result["key_cards"] = self._key_cards(deck_a, deck_b)
         return result

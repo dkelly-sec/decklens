@@ -286,13 +286,21 @@ function matchupBox(m, label, mode) {
   const names = el("p", null, "archetypes");
   names.append(el("span", m.archetype_a, "a"), el("span", m.archetype_b, "b"));
   box.append(names, tugBar(m));
+  let why = "";
+  if (m.based_on) {
+    why = " From " + plural(m.based_on.games, "game", "games") + " between " + m.based_on.words +
+      " (same win conditions and spells), pulled toward the archetype estimate of " +
+      pct(m.archetype_chance) + " by how few games there are.";
+  }
   box.append(el("p", m.mirror ? "Mirror match: a coin flip on decks."
-    : "Your deck wins about " + pct(m.win_chance) + " of games like this.", "chance"));
+    : "Your deck wins about " + pct(m.win_chance) + " of games like this." + why, "chance"));
   if (m.breakdown) {
     box.append(breakdownTable(m.breakdown));
     box.append(el("p", "Your win rate, from ranked games in the last " + m.breakdown.window_days +
       " days. Exact: both decks card for card. 7+ / 6+ of 8: each deck shares at least that " +
-      "many cards with yours and theirs. Archetype: same deck styles. Top 200 / 1,000 only " +
+      "many cards with yours and theirs. Archetype: same deck styles. Below Exact, both decks " +
+      "also keep the same win condition and spells (Rocket instead of Fireball is a different " +
+      "matchup). Top 200 / 1,000 only " +
       "count games where both players were in that bracket (ranks beyond 500 come from " +
       "that day's leaderboard).", "detail"));
   } else if (m.record || m.mirror) {

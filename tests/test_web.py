@@ -627,6 +627,55 @@ def test_predict_includes_breakdown_when_available(predictor):
         predictor.tiers = None
 
 
+LOG, ROCKET, FIREBALL = 28000011, 28000005, 28000000   # spells, by the game's id ranges
+MY_S = MY_DECK[:7] + (LOG,)
+THEM_ROCKET = OPP_DECK[:7] + (ROCKET,)
+THEM_FIREBALL = OPP_DECK[:7] + (FIREBALL,)    # 7 of 8 the same, but a different matchup
+
+
+def _spell_rows():
+    return ([(1, MY_S, None, THEM_ROCKET, None)] * 5 + [(0, MY_S, None, THEM_ROCKET, None)] * 2
+            + [(0, MY_S, None, THEM_FIREBALL, None)] * 10)
+
+
+def test_similar_decks_must_keep_the_same_spells(predictor):
+    from decklens.web.tiers import TierStats
+
+    stats = TierStats(predictor.archetypes, _spell_rows)
+    i, j = (int(x) for x in predictor.archetypes.assign([MY_S, THEM_ROCKET]))
+    b = stats.matchup(MY_S, THEM_ROCKET, i, j)
+    for level in ("exact", "7", "6", "archetype"):
+        cell = _cells(b, level)[None]
+        assert (cell.get("wins"), cell["games"]) in ((2, 7), (None, 7)), level  # Fireball games left out
+
+
+def test_headline_uses_the_most_specific_level_pulled_toward_the_archetype():
+    from decklens.web.services import headline
+
+    breakdown = {"levels": [
+        {"level": "exact", "cells": [{"tier": None, "games": 7, "wins": 2}]},
+        {"level": "7", "cells": [{"tier": None, "games": 22, "wins": 12}]},
+    ]}
+    out = headline(breakdown, 0.53)
+    assert out["win_chance"] == pytest.approx((2 + 5.3) / 17, abs=0.001)   # 43%
+    assert out["based_on"]["level"] == "exact" and out["archetype_chance"] == 0.53
+    breakdown["levels"][0]["cells"][0]["games"] = 4                        # too few: next level
+    assert headline(breakdown, 0.53)["based_on"]["level"] == "7"
+    assert headline({"levels": []}, 0.53) == {}
+
+
+def test_predict_headline_reflects_the_spell_matchup(predictor):
+    from decklens.web.tiers import TierStats
+
+    predictor.tiers = TierStats(predictor.archetypes, _spell_rows)
+    try:
+        m = predictor.predict(MY_S, THEM_ROCKET)
+        assert m["based_on"]["games"] == 7 and not m["mirror"]   # 2 wins in 7 games
+        assert m["win_chance"] < m["archetype_chance"]           # pulls the headline down
+    finally:
+        predictor.tiers = None
+
+
 # --- card images ------------------------------------------------------------------------
 
 PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 100
