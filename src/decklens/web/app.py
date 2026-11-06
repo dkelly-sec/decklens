@@ -302,8 +302,11 @@ def create_app(services: Services, *, hsts: bool = False) -> FastAPI:
             data = None  # card list unavailable: the page falls back to card names
         if data is None:
             raise HTTPException(404, "No image")
+        # Plain art standing in for an evolution or hero that isn't in the card list
+        # yet: cache it briefly, so the real art shows once Supercell adds it.
+        exact = services.images.has_art(card_id, form)
         return Response(data, media_type="image/png",
-                        headers={"Cache-Control": "public, max-age=86400"})
+                        headers={"Cache-Control": f"public, max-age={86400 if exact else 600}"})
 
     # --- logins ---------------------------------------------------------------
 

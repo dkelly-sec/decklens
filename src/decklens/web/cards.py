@@ -11,6 +11,10 @@ classic SSRF risk, so it is locked down:
 - No redirects, a 5 second timeout, PNG only (checked by header AND file
   signature), and at most 256 KB, read in chunks so a huge reply can't fill memory.
 - Results are cached, so each image is fetched once per day at most.
+
+New cards and forms (an evolution or hero on release day) show up without a
+restart: asking for art the card list doesn't have re-reads the list, at most
+once every CATALOG_RETRY_SECONDS, so made-up card ids can't hammer the API.
 """
 
 from __future__ import annotations
@@ -33,6 +37,7 @@ _PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 MAX_IMAGE_BYTES = 256 * 1024
 # (our key, field in the API's iconUrls)
 ICON_FIELDS = (("medium", "medium"), ("evo", "evolutionMedium"), ("hero", "heroMedium"))
+CATALOG_RETRY_SECONDS = 600
 
 
 def safe_asset_url(url: Any) -> str | None:
@@ -54,6 +59,8 @@ class CardImages:
         self._session = session or requests.Session()  # no Authorization header, ever
         self._catalog = TTLCache(ttl=6 * 3600, max_items=1, clock=clock)
         self._images = TTLCache(ttl=24 * 3600, max_items=400, clock=clock)
+        self._clock = clock
+        self._retried_at = -float("inf")
 
     def catalog(self) -> dict[int, dict[str, str]]:
         """card id -> {"medium": url, "evo": url, "hero": url}, only URLs that pass the checks."""
@@ -82,9 +89,23 @@ class CardImages:
 
         return self._catalog.get_or_set("catalog", build)
 
+    def has_art(self, card_id: int, form: str | None = None) -> bool:
+        """Whether the card list has this exact art (else a plain-card fallback is served)."""
+        urls = self._urls(card_id, form)
+        return bool(urls) and (form if form in ("evo", "hero") else "medium") in urls
+
+    def _urls(self, card_id: int, form: str | None) -> dict[str, str] | None:
+        urls = self.catalog().get(card_id)
+        missing = not urls or (form in ("evo", "hero") and form not in urls)
+        if missing and self._clock() - self._retried_at >= CATALOG_RETRY_SECONDS:
+            self._retried_at = self._clock()   # released since the list was read? read it again
+            self._catalog.forget("catalog")
+            urls = self.catalog().get(card_id)
+        return urls
+
     def image(self, card_id: int, form: str | None = None) -> bytes | None:
         """PNG for a card, in its Evolution or Hero art when asked and available."""
-        urls = self.catalog().get(card_id)
+        urls = self._urls(card_id, form)
         if not urls:
             return None
         url = urls.get(form) if form in ("evo", "hero") and form in urls else urls.get("medium")

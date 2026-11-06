@@ -770,6 +770,35 @@ def test_card_image_is_fetched_safely_and_cached():
     assert session.calls[-1][0] == GOOD_URL.replace("abc", "twelve")
 
 
+def test_new_evolution_art_shows_up_without_a_restart():
+    from decklens.web.cards import CardImages
+
+    class ReleaseDay(CatalogClient):
+        released = False
+
+        def get_cards(self):
+            cards = super().get_cards()
+            if not self.released:  # before the update: Card 12 has no evolution art yet
+                return cards
+            cards[1]["iconUrls"]["evolutionMedium"] = EVO_URL
+            return cards
+
+    client, now, session = ReleaseDay(), [0.0], FakeAssetSession()
+    images = CardImages(client, session=session, clock=lambda: now[0])
+    assert images.image(26000012, form="evo") == PNG and not images.has_art(26000012, "evo")
+    client.released = True
+    now[0] = 300
+    images.image(26000012, form="evo")
+    assert session.calls[-1][0] != EVO_URL               # re-read at most every 10 minutes
+    now[0] = 700
+    assert images.image(26000012, form="evo") == PNG and session.calls[-1][0] == EVO_URL
+    assert images.has_art(26000012, "evo")
+    reads = sum(1 for c in client.calls if c[0] == "cards")
+    for _ in range(5):
+        images.image(99999999)                            # made-up ids don't re-read the list
+    assert sum(1 for c in client.calls if c[0] == "cards") <= reads + 1
+
+
 def test_card_with_unsafe_url_in_catalog_is_skipped():
     images, session = _images()
     assert images.image(26000011) is None and session.calls == []
@@ -797,6 +826,8 @@ def test_card_image_route():
     assert ok.headers["cache-control"] == "public, max-age=86400"
     assert ok.headers["x-content-type-options"] == "nosniff"
     assert app.get("/cards/26000010.png?form=hero").status_code == 200
+    fallback = app.get("/cards/26000012.png?form=evo")    # no evo art yet: plain card, briefly cached
+    assert fallback.status_code == 200 and fallback.headers["cache-control"] == "public, max-age=600"
     for bad in ("/cards/99.png", "/cards/abc.png", "/cards/-5.png", "/cards/26000011.png",
                 "/cards/26000010.png?form=../../x", "/cards/26000010.png?form=both"):
         assert app.get(bad).status_code in (404, 422)

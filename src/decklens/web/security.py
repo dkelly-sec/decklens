@@ -182,6 +182,10 @@ class TTLCache:
         self._data: OrderedDict[Any, tuple[float, Any]] = OrderedDict()
         self._lock = threading.Lock()
 
+    def forget(self, key: Any) -> None:
+        with self._lock:
+            self._data.pop(key, None)
+
     def get_or_set(self, key: Any, compute: Callable[[], Any]) -> Any:
         now = self.clock()
         with self._lock:

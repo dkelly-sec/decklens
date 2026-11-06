@@ -151,7 +151,7 @@ Get-Content db\web_grants.sql | docker compose exec -T db psql -U decklens -d de
 
 How it's secured:
 - The API key never reaches the browser; all lookups go through the server.
-- Card art is fetched by the server from Supercell's official asset host only (never a URL from the browser), checked, cached and served from this site, so the page never loads anything from elsewhere.
+- Card art is fetched by the server from Supercell's official asset host only (never a URL from the browser), checked, cached and served from this site, so the page never loads anything from elsewhere. New cards and forms (a new evolution or hero) appear on their own once Supercell adds them to the card list: missing art re-reads the list at most every 10 minutes, and stand-in art is only cached for 10 minutes.
 - The page's typeface (Barlow Condensed, SIL Open Font License) is bundled and served from this site (`font-src 'self'`), so no font CDN sees visitors.
 - Strict Content Security Policy (no inline script), and the front end never builds HTML from data, so hostile player names display as text.
 - Every route is rate-limited; upstream lookups are cached; request bodies are capped at 4 KB; inputs are validated (tags, names, decks).
