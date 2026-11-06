@@ -126,6 +126,7 @@ function deckView(deck, side) {
   const list = el("ul", null, "deck");
   for (const card of deck.cards) list.append(cardTile(card));
   box.append(list);
+  if (knownIds(deck).length >= 8) box.append(copyDeckButton(knownIds(deck)));
   if (side === "theirs") {
     const read = scoutRead(deck.cards);
     if (read) box.append(read);
@@ -167,6 +168,69 @@ function scoutRead(cards) {
 // Card ids, then a "form token" for each active Evolution or Hero, as the server's
 // models expect (battles.FORM_TOKEN: Evo Giant is not plain Giant).
 const FORM_TOKEN = { evo: 1000000000, hero: 2000000000 };
+
+// "Copy to game": a QR code to scan with your phone (the app is on your PC), the
+// link itself, and a copy button. ids: card ids in slot order, then form tokens.
+function copyDeckButton(ids) {
+  const wrap = el("div", null, "copy-deck");
+  const button = el("button", "Copy to game", "link-button");
+  button.type = "button";
+  button.setAttribute("aria-expanded", "false");
+  const panel = el("div", null, "copy-panel");
+  panel.hidden = true;
+  button.addEventListener("click", async () => {
+    const opening = panel.hidden;
+    panel.hidden = !opening;
+    button.setAttribute("aria-expanded", String(opening));
+    if (!opening || panel.childElementCount) return;
+    show(panel, el("p", "Making the link…", "muted"));
+    try {
+      const r = await api("/api/deck-link", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ deck: ids }),
+      });
+      const copy = el("button", "Copy link", "link-button");
+      copy.type = "button";
+      copy.addEventListener("click", async () => {
+        try {
+          await navigator.clipboard.writeText(r.url);
+          copy.textContent = "Copied";
+        } catch {
+          copy.textContent = "Couldn't copy: use the link";
+        }
+      });
+      const open = el("a", "Open link");
+      open.href = r.url;
+      open.target = "_blank";
+      open.rel = "noopener noreferrer";
+      const actions = el("p", null, "copy-actions");
+      actions.append(copy, open);
+      show(panel, qrCode(r.qr), el("p", "Scan with your phone's camera to open this deck in " +
+        "Clash Royale.", "hint"), actions);
+    } catch (error) {
+      show(panel, errorBox(error));
+    }
+  });
+  wrap.append(button, panel);
+  return wrap;
+}
+
+// Rows of 0/1 from the server, drawn as squares with a white quiet zone.
+function qrCode(rows) {
+  const n = rows.length, pad = 4;
+  const code = svg("svg", { viewBox: "0 0 " + (n + 2 * pad) + " " + (n + 2 * pad), class: "qr",
+    "shape-rendering": "crispEdges" });
+  code.setAttribute("role", "img");
+  code.setAttribute("aria-label", "QR code for this deck");
+  code.append(svg("rect", { width: n + 2 * pad, height: n + 2 * pad, fill: "#fff" }));
+  rows.forEach((row, y) => {
+    for (let x = 0; x < row.length; x++) {
+      if (row[x] === "1") code.append(svg("rect", { x: x + pad, y: y + pad, width: 1, height: 1, fill: "#000" }));
+    }
+  });
+  return code;
+}
 
 function knownIds(deck) {
   const known = deck.cards.filter((c) => c.id !== null && c.id !== undefined);
@@ -286,7 +350,8 @@ function tugBar(m) {
   return tug;
 }
 
-function matchupBox(m, label, mode) {
+// decks: { mine, theirs } when both are known, for the share image.
+function matchupBox(m, label, mode, decks) {
   const box = el("div", null, "matchup");
   box.append(el("p", label || "Matchup", "label"));
   const names = el("p", null, "archetypes");
@@ -332,7 +397,147 @@ function matchupBox(m, label, mode) {
     }
     box.append(el("p", "Cards that matter most:", "detail"), cards);
   }
+  if (decks && decks.mine && decks.theirs) box.append(shareButton(m, decks.mine, decks.theirs));
   return box;
+}
+
+// --- share image ----------------------------------------------------------------
+
+const SHARE = { w: 1080, h: 1440, bg: "#131a2b", panel: "#1b2439", text: "#edf0f7",
+  muted: "#a3adc8", blue: "#5b95ff", red: "#ff6168", elixir: "#d968ff" };
+
+function loadImage(src) {
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = () => resolve(null);  // no art: the card's name is drawn instead
+    img.src = src;
+  });
+}
+
+function cardSrc(card) {
+  const form = card.form === "evo" || card.form === "hero" ? "?form=" + card.form : "";
+  return "/cards/" + encodeURIComponent(card.id) + ".png" + form;
+}
+
+// One deck: 4 x 2 cards on a tinted panel, with its archetype above.
+async function drawDeck(ctx, deck, x, y, colour, title) {
+  const C = SHARE, cw = 180, ch = 216, gap = 16;
+  ctx.fillStyle = colour;
+  ctx.font = "700 44px 'Barlow Condensed', sans-serif";
+  ctx.fillText(title, x, y + 40);
+  ctx.fillStyle = C.panel;
+  ctx.beginPath();
+  ctx.roundRect(x - 16, y + 60, 4 * cw + 3 * gap + 32, 2 * ch + gap + 32, 24);
+  ctx.fill();
+  ctx.fillStyle = colour;
+  ctx.fillRect(x - 16, y + 60, 8, 2 * ch + gap + 32);
+  const images = await Promise.all(deck.cards.map((c) => (c.id ? loadImage(cardSrc(c)) : null)));
+  deck.cards.slice(0, 8).forEach((card, i) => {
+    const cx = x + (i % 4) * (cw + gap), cy = y + 76 + Math.floor(i / 4) * (ch + gap);
+    if (images[i]) {
+      ctx.drawImage(images[i], cx, cy, cw, ch);
+    } else {
+      ctx.strokeStyle = C.muted;
+      ctx.setLineDash([10, 8]);
+      ctx.strokeRect(cx + 4, cy + 4, cw - 8, ch - 8);
+      ctx.setLineDash([]);
+      ctx.fillStyle = C.muted;
+      ctx.font = "600 28px system-ui, sans-serif";
+      ctx.fillText(card.name || "?", cx + 16, cy + ch / 2, cw - 32);
+    }
+    if (card.elixir) {
+      ctx.fillStyle = C.elixir;
+      ctx.beginPath();
+      ctx.arc(cx + 30, cy + 30, 24, 0, 2 * Math.PI);
+      ctx.fill();
+      ctx.fillStyle = "#fff";
+      ctx.font = "700 32px 'Barlow Condensed', sans-serif";
+      ctx.textAlign = "center";
+      ctx.fillText(String(card.elixir), cx + 30, cy + 41);
+      ctx.textAlign = "left";
+    }
+  });
+}
+
+async function shareCanvas(m, mine, theirs) {
+  const C = SHARE;
+  try { await document.fonts.load("700 64px 'Barlow Condensed'"); } catch { /* system font */ }
+  const canvas = document.createElement("canvas");
+  canvas.width = C.w;
+  canvas.height = C.h;
+  const ctx = canvas.getContext("2d");
+  ctx.fillStyle = C.bg;
+  ctx.fillRect(0, 0, C.w, C.h);
+  const left = (C.w - (4 * 180 + 3 * 16)) / 2;   // the decks sit centred
+  await drawDeck(ctx, mine, left, 30, C.blue, m.archetype_a);
+  // The verdict between the decks: the tug of war.
+  const you = m.mirror ? 0.5 : m.win_chance, top = 590;
+  ctx.font = "700 120px 'Barlow Condensed', sans-serif";
+  ctx.fillStyle = C.blue;
+  ctx.fillText(pct(you), 60, top + 100);
+  ctx.fillStyle = C.red;
+  ctx.textAlign = "right";
+  ctx.fillText(pct(1 - you), C.w - 60, top + 100);
+  ctx.textAlign = "left";
+  ctx.fillStyle = C.red;
+  ctx.beginPath();
+  ctx.roundRect(60, top + 124, C.w - 120, 28, 14);
+  ctx.fill();
+  ctx.save();
+  ctx.clip();
+  ctx.fillStyle = C.blue;
+  ctx.fillRect(60, top + 124, (C.w - 120) * you, 28);
+  ctx.restore();
+  ctx.fillStyle = C.bg;
+  ctx.fillRect(C.w / 2 - 2, top + 118, 4, 40);
+  await drawDeck(ctx, theirs, left, top + 180, C.red, m.archetype_b);
+  ctx.fillStyle = C.muted;
+  ctx.font = "500 26px system-ui, sans-serif";
+  const basis = m.based_on ? "From " + plural(m.based_on.games, "game", "games") + " between " +
+    m.based_on.words + "." : "Model estimate for equally skilled players.";
+  ctx.fillText("DeckLens · " + basis, 60, C.h - 56);
+  ctx.font = "400 20px system-ui, sans-serif";
+  ctx.fillText("Not affiliated with or endorsed by Supercell.", 60, C.h - 24);
+  return canvas;
+}
+
+function shareButton(m, mine, theirs) {
+  const wrap = el("div", null, "share");
+  const button = el("button", "Share image", "link-button");
+  button.type = "button";
+  const panel = el("div", null, "share-panel");
+  panel.hidden = true;
+  button.addEventListener("click", async () => {
+    panel.hidden = !panel.hidden;
+    if (panel.hidden || panel.childElementCount) return;
+    show(panel, el("p", "Drawing…", "muted"));
+    const canvas = await shareCanvas(m, mine, theirs);
+    canvas.className = "share-preview";
+    canvas.setAttribute("role", "img");
+    canvas.setAttribute("aria-label", "Share image: " + m.archetype_a + " vs " + m.archetype_b +
+      ", " + pct(m.win_chance) + " to " + pct(1 - m.win_chance));
+    const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/png"));
+    const save = el("a", "Download PNG", "link-button");
+    save.href = URL.createObjectURL(blob);
+    save.download = "decklens-" + (m.archetype_a + "-vs-" + m.archetype_b).toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") + ".png";
+    const copy = el("button", "Copy image", "link-button");
+    copy.type = "button";
+    copy.addEventListener("click", async () => {
+      try {
+        await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
+        copy.textContent = "Copied";
+      } catch {
+        copy.textContent = "Couldn't copy: download it";
+      }
+    });
+    const actions = el("p", null, "copy-actions");
+    actions.append(save, copy);
+    show(panel, canvas, actions);
+  });
+  wrap.append(button, panel);
+  return wrap;
 }
 
 // --- you ---------------------------------------------------------------------
@@ -364,7 +569,8 @@ async function showMe(tag) {
 
 // Deck, record and tweaks share one spot, so the page stays short. A tab is
 // built the first time it's opened; the last one you used is remembered.
-const YOU_TABS = [["deck", "Deck"], ["record", "Record"], ["tweaks", "Tweaks"]];
+const YOU_TABS = [["deck", "Deck"], ["today", "Today"], ["record", "Record"], ["rank", "Rank"],
+  ["tweaks", "Tweaks"]];
 
 function youTabs(me) {
   const bar = el("div", null, "tabs");
@@ -383,6 +589,10 @@ function youTabs(me) {
         : el("p", "No current deck in your profile.", "muted"));
     } else if (key === "record") {
       showRecord(me.tag, box, 30);
+    } else if (key === "today") {
+      showSession(me.tag, box);
+    } else if (key === "rank") {
+      showRank(me.tag, box, 30);
     } else if (me.deck.cards.length) {
       showTweaks(me.deck, box, "all");
     } else {
@@ -414,11 +624,151 @@ function youTabs(me) {
   return [bar, panel];
 }
 
+// --- today's session ------------------------------------------------------------
+
+function refreshButton(onClick) {
+  const b = el("button", "Refresh", "link-button");
+  b.type = "button";
+  b.addEventListener("click", onClick);
+  return b;
+}
+
+async function showSession(tag, box) {
+  show(box, el("p", "Reading your battle log…", "muted"));
+  let s;
+  try {
+    s = await api("/api/players/" + tagPath(tag) + "/session");
+  } catch (error) {
+    show(box, errorBox(error), refreshButton(() => showSession(tag, box)));
+    return;
+  }
+  if (!s.games) {
+    show(box, el("p", "No Ranked games in your recent battle log.", "muted"),
+      refreshButton(() => showSession(tag, box)));
+    return;
+  }
+  const head = el("div", null, "session-head");
+  const score = el("p", null, "session-score");
+  score.append(el("span", String(s.wins), "result-won"), el("span", "–"),
+    el("span", String(s.losses), "result-lost"));
+  head.append(score, el("p", pct(s.wins / Math.max(1, s.wins + s.losses)) + " won, " +
+    plural(s.games, "game", "games") + " since " + new Date(s.started).toLocaleTimeString([],
+      { hour: "numeric", minute: "2-digit" }), "detail"));
+  const parts = [head];
+  // Oldest on the left, like reading the session from the start.
+  const strip = el("ol", null, "session-strip");
+  strip.setAttribute("aria-label", "Results, oldest first");
+  for (const r of [...s.results].reverse()) {
+    const dot = el("li", r === "won" ? "W" : r === "lost" ? "L" : "D", "dot-" + r);
+    strip.append(dot);
+  }
+  parts.push(strip);
+  const st = s.streak;
+  parts.push(el("p", (st.result === "won" ? "Won " : st.result === "lost" ? "Lost " : "Drew ") +
+    st.games + " in a row.", "detail"));
+  if (s.rank && s.rank.now) {
+    const r = s.rank;
+    let text = "Rank now #" + r.now.toLocaleString();
+    if (r.start) {
+      const moved = r.start - r.now;
+      text += moved ? " (" + (moved > 0 ? "up " : "down ") + Math.abs(moved).toLocaleString() +
+        " from #" + r.start.toLocaleString() + ")" : " (no change)";
+    }
+    parts.push(el("p", text, "detail"));
+  }
+  if (s.tilt) {
+    parts.push(el("p", plural(st.games, "loss", "losses") + " in a row. A short break usually " +
+      "does more for your rank than the next game.", "tilt"));
+  }
+  parts.push(refreshButton(() => showSession(tag, box)));
+  show(box, ...parts);
+}
+
+// --- rank graph ----------------------------------------------------------------
+
+const RANK_DAYS = [7, 30, 90];
+
+// Rank over time, best (lowest number) at the top.
+function rankChart(points) {
+  const W = 600, H = 180, PAD = 8;
+  const times = points.map((p) => new Date(p.time).getTime());
+  const ranks = points.map((p) => p.rank);
+  const t0 = Math.min(...times), t1 = Math.max(...times);
+  const best = Math.min(...ranks), worst = Math.max(...ranks);
+  const x = (t) => PAD + (t1 > t0 ? (t - t0) / (t1 - t0) : 0.5) * (W - 2 * PAD);
+  const y = (r) => PAD + (worst > best ? (r - best) / (worst - best) : 0.5) * (H - 2 * PAD);
+  const chart = svg("svg", { viewBox: "0 0 " + W + " " + H, class: "rank-chart",
+    preserveAspectRatio: "none" });
+  chart.setAttribute("role", "img");
+  chart.setAttribute("aria-label", "Rank from #" + ranks[0].toLocaleString() + " to #" +
+    ranks[ranks.length - 1].toLocaleString() + ", best #" + best.toLocaleString());
+  chart.append(svg("polyline", { points: points.map((p, i) => x(times[i]) + "," + y(p.rank)).join(" "),
+    class: "rank-line", "vector-effect": "non-scaling-stroke" }));
+  chart.append(svg("circle", { cx: x(times[times.length - 1]), cy: y(ranks[ranks.length - 1]), r: 4,
+    class: "rank-now" }));
+  return chart;
+}
+
+async function showRank(tag, box, days) {
+  const tabs = el("div", null, "tabs");
+  tabs.setAttribute("role", "group");
+  tabs.setAttribute("aria-label", "How far back");
+  for (const d of RANK_DAYS) {
+    const b = el("button", d + " days", "tab");
+    b.type = "button";
+    b.setAttribute("aria-pressed", String(d === days));
+    b.addEventListener("click", () => showRank(tag, box, d));
+    tabs.append(b);
+  }
+  show(box, tabs, el("p", "Loading your rank…", "muted"));
+  let h;
+  try {
+    h = await api("/api/players/" + tagPath(tag) + "/rank-history?days=" + days);
+  } catch (error) {
+    show(box, tabs, errorBox(error));
+    return;
+  }
+  const pts = h.points;
+  if (!pts.length) {
+    show(box, tabs, el("p", "No rank yet this season (you need a global rank, about the top " +
+      "10,000).", "muted"));
+    return;
+  }
+  const now = pts[pts.length - 1].rank;
+  const best = Math.min(...pts.map((p) => p.rank));
+  const head = el("p", null, "session-score");
+  head.append(el("span", "#" + now.toLocaleString()));
+  const parts = [tabs, head, el("p", "Best #" + best.toLocaleString() + " in the last " + days +
+    " days. Higher on the chart is better.", "detail")];
+  if (pts.length > 1) {
+    const chart = el("div", null, "rank-wrap");
+    chart.append(rankChart(pts));
+    const axis = el("p", null, "rank-axis");
+    axis.append(el("span", new Date(pts[0].time).toLocaleDateString()), el("span", "now"));
+    parts.push(chart, axis);
+  } else {
+    parts.push(el("p", "One reading so far: the graph fills in as your games are collected " +
+      "(every 15 minutes while the app is open, with DECKLENS_MY_TAGS set).", "note"));
+  }
+  show(box, ...parts);
+}
+
 // --- deck tweak finder ---------------------------------------------------------
 
 function signed(g) {
   const pts = Math.round(g * 1000) / 10;
   return (pts > 0 ? "+" : pts < 0 ? "−" : "±") + Math.abs(pts).toFixed(1) + "%";
+}
+
+// Your deck's ids with one card swapped (the new card's Evo/Hero form comes along).
+function swappedIds(deck, s) {
+  const FORM = 1000000000;
+  const newBase = s.in_id % FORM;
+  const ids = knownIds(deck)
+    .filter((c) => !(c >= FORM && c % FORM === s.out_id))   // the old card's Evo/Hero goes too
+    .map((c) => (c === s.out_id ? newBase : c));
+  if (s.in_id >= FORM) ids.push(s.in_id);
+  return ids;
 }
 
 function gainCell(c) {
@@ -484,6 +834,7 @@ async function showTweaks(deck, box, band) {
     const tr = el("tr");
     const swap = el("th");
     swap.append(el("span", s.out, "swap-out"), el("span", " → "), el("span", s.in, "swap-in"));
+    swap.append(copyDeckButton(swappedIds(deck, s)));
     tr.append(swap);
     for (const b of bands) tr.append(gainCell(s.bands[b.key]));
     table.tBodies[0].append(tr);
@@ -713,7 +1064,8 @@ function lastOpponentParts(opp) {
     deckView(opp.deck, "theirs"),
   ];
   if (opp.matchup) {
-    parts.push(matchupBox(opp.matchup, "Your deck vs theirs", opp.mode));
+    parts.push(matchupBox(opp.matchup, "Your deck vs theirs", opp.mode,
+      { mine: opp.your_deck, theirs: opp.deck }));
   }
   return parts;
 }
@@ -1072,7 +1424,7 @@ async function matchupFor(mine, deck, mode) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ deck_a: knownIds(mine.deck), deck_b: knownIds(deck) }),
     });
-    return [matchupBox(m, mine.label, mode)];
+    return [matchupBox(m, mine.label, mode, { mine: mine.deck, theirs: deck })];
   } catch (error) {
     return [errorBox(error)];
   }
@@ -1245,7 +1597,7 @@ function metaTable(m) {
     for (const d of a.decks || []) {
       const line = el("p", null, "meeting");
       line.append(el("span", plural(d.games, "game", "games")), el("span", pct(d.win_rate) + " won", "muted"));
-      cell.append(line, miniDeck(d));
+      cell.append(line, miniDeck(d), copyDeckButton(knownIds(d)));
     }
     detail.append(cell);
     open.addEventListener("click", () => {

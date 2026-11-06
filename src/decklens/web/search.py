@@ -51,6 +51,22 @@ def my_games(conn: Connection, tag: str, days: int) -> list[tuple]:
         return cur.fetchall()
 
 
+# Your rank over time: leaderboard and profile snapshots (current season's ranks).
+_RANKS = """
+    SELECT observed_at, rank, rating FROM player_rank_snapshots
+    WHERE tag = %s AND source IN ('leaderboard', 'profile') AND rank IS NOT NULL
+      AND observed_at >= now() - make_interval(days => %s)
+    ORDER BY observed_at
+    LIMIT 5000
+"""
+
+
+def rank_history(conn: Connection, tag: str, days: int) -> list[tuple]:
+    with conn.cursor() as cur:
+        cur.execute(_RANKS, (tag, days))
+        return cur.fetchall()
+
+
 def stored_meetings(conn: Connection, me: str, them: str) -> list[tuple]:
     """(time, ranked?, did I win (None = draw), my crowns, their crowns, their cards)."""
     with conn.cursor() as cur:

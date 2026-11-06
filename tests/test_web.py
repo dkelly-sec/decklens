@@ -1357,3 +1357,65 @@ def test_background_rebuild_never_makes_a_request_wait(predictor):
             break
         threading.Event().wait(0.02)
     assert stats.table() is not first                    # the new table took over
+
+
+def test_deck_link_puts_evos_and_heroes_first_and_draws_a_qr(predictor):
+    from decklens.web.services import deck_link
+
+    deck = list(MY_DECK)
+    link = deck_link(deck[:2] + deck[2:] + [deck[5] + 1_000_000_000, deck[3] + 2_000_000_000])
+    ids = link.split("deck=")[1].split(";")
+    assert link.startswith("https://link.clashroyale.com/") and len(ids) == 8
+    assert ids[0] == str(deck[5]) and ids[1] == str(deck[3])     # Evo slot, then Hero slot
+    app, _, _ = make(predictor)
+    r = app.post("/api/deck-link", json={"deck": deck}, headers=ORIGIN).json()
+    assert r["url"].endswith(";".join(map(str, deck))) and len(r["qr"]) == len(r["qr"][0]) > 20
+    assert set("".join(r["qr"])) == {"0", "1"}
+    bad = app.post("/api/deck-link", json={"deck": deck[:3] + ["x"]}, headers=ORIGIN)
+    assert bad.status_code == 422
+
+
+# --- session and rank ---------------------------------------------------------------------
+
+
+def test_session_is_the_latest_run_of_ranked_games(predictor):
+    from datetime import datetime, timedelta, timezone
+
+    from decklens.web.services import session
+
+    t = datetime(2026, 10, 30, 1, 8, tzinfo=timezone.utc)
+    stored = [(t - timedelta(minutes=m), False) for m in (20, 30)] + [(t - timedelta(hours=3), True)]
+    s = session(stored, FakeClient().get_battle_log(ME), ME)
+    # Log: lost at 01:08, won at 01:03; stored losses at 00:48 and 00:38; 22:08 is another session.
+    assert s["results"] == ["lost", "won", "lost", "lost"]
+    assert (s["wins"], s["losses"], s["streak"]) == (1, 3, {"result": "lost", "games": 1})
+    assert s["tilt"] is False
+    tilted = session([(t - timedelta(minutes=m), False) for m in (1, 2, 3)], [], ME)
+    assert tilted["tilt"] is True and tilted["streak"]["games"] == 3
+    assert session([], [], ME) == {"games": 0}
+
+    app, _, _ = make(predictor, rows=[])
+    r = app.get("/api/players/%232PP/session").json()
+    assert r["games"] == 2 and r["rank"]["now"] == 150
+
+
+def test_rank_history_ends_with_your_current_rank(predictor):
+    from datetime import datetime, timezone
+
+    rows = [(datetime(2026, 11, 1, tzinfo=timezone.utc), 900, 2100),
+            (datetime(2026, 11, 3, tzinfo=timezone.utc), 400, 2300)]
+    app, _, _ = make(predictor, rows=rows)
+    points = app.get("/api/players/%232PP/rank-history").json()["points"]
+    assert [p["rank"] for p in points] == [900, 400, 150]          # last: the live profile
+    assert app.get("/api/players/%232PP/rank-history?days=0").status_code == 422
+
+
+def test_rank_at_the_start_of_a_session():
+    from datetime import datetime, timezone
+
+    from decklens.web.services import rank_at
+
+    day = lambda d: datetime(2026, 11, d, tzinfo=timezone.utc)  # noqa: E731
+    history = [(day(1), 900, None), (day(3), 400, None)]
+    assert rank_at(history, day(2)) == 900 and rank_at(history, day(4)) == 400
+    assert rank_at(history, datetime(2026, 10, 1, tzinfo=timezone.utc)) is None

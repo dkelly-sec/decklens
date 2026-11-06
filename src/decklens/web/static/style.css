@@ -369,6 +369,33 @@ a { color: var(--blue); text-underline-offset: 3px; }
 .mini-missing, .mini-name { display: grid; place-items: center; width: 100%; aspect-ratio: 64 / 77; font-size: 10px;
   text-align: center; color: var(--muted); border: 1px dashed var(--line); border-radius: 4px; }
 
+.copy-deck { margin: 6px 0 4px; }
+.copy-panel { display: grid; justify-items: start; gap: 6px; margin-top: 8px; }
+.qr { width: 168px; height: 168px; border-radius: 6px; }
+.copy-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin: 0; }
+.tweak-table .copy-deck { margin-top: 4px; }
+.tweak-table .copy-deck .link-button { padding: 2px 8px; font-size: 12px; }
+
+.session-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 14px; }
+.session-score { margin: 4px 0; font: 700 44px/1 var(--display); display: flex; gap: 6px; }
+.session-strip { display: flex; flex-wrap: wrap; gap: 4px; list-style: none; margin: 8px 0; padding: 0; }
+.session-strip li { display: grid; place-items: center; width: 24px; height: 24px; border-radius: 6px;
+  font: 700 13px var(--display); color: var(--on-accent); }
+.dot-won { background: var(--blue); }
+.dot-lost { background: var(--red); }
+.dot-draw { background: var(--muted); }
+.tilt { margin: 10px 0; padding: 10px 12px; border-radius: 10px; background: var(--red-soft);
+  color: var(--text); font-weight: 600; }
+.rank-wrap { margin: 8px 0 0; padding: 8px; border-radius: 10px; background: var(--sunk); }
+.rank-chart { display: block; width: 100%; height: 180px; }
+.rank-line { fill: none; stroke: var(--blue); stroke-width: 2.5; stroke-linejoin: round; }
+.rank-now { fill: var(--blue); }
+.rank-axis { display: flex; justify-content: space-between; margin: 4px 0 0; font-size: 12px; color: var(--muted); }
+
+.share { margin-top: 10px; }
+.share-panel { display: grid; justify-items: start; gap: 8px; margin-top: 8px; }
+.share-preview { width: 100%; max-width: 320px; height: auto; border-radius: 10px; box-shadow: var(--shadow); }
+
 .key-cards { margin: 4px 0 0; padding-left: 20px; font-size: 14px; }
 .key-cards .yours { color: var(--blue); font-weight: 600; }
 .key-cards .theirs { color: var(--red); font-weight: 600; }

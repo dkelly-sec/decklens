@@ -15,6 +15,7 @@ import logging
 import sys
 from collections import Counter
 from pathlib import Path
+from typing import Any
 
 from .api_client import ApiError, ClashRoyaleClient, NotFoundError
 from .battles import Battle, parse_battle_log
@@ -111,8 +112,30 @@ def main(argv: list[str] | None = None) -> int:
 
     with psycopg.connect(settings.database_url) as conn:
         new = save_battles(conn, battles)
-    log.info("stored %d new battles", new)
+        log.info("stored %d new battles", new)
+        if args.mine:  # your rank too, for the rank graph
+            save_my_ranks(client, conn, [t for t in tags if t in my_tags()])
     return 0
+
+
+def save_my_ranks(client: ClashRoyaleClient, conn: Any, tags: list[str]) -> int:
+    """Store each tag's current Ranked rank from its profile; how many had one."""
+    from datetime import datetime, timezone
+
+    from .rankings import parse_profile_rank
+    from .storage import save_rank_entries
+
+    saved = 0
+    for tag in tags:
+        try:
+            entry = parse_profile_rank(client.get_player(tag))
+        except ApiError as exc:
+            log.warning("couldn't read %s's profile: %s", tag, exc)
+            continue
+        if entry is not None and entry.rank is not None:
+            save_rank_entries(conn, [entry], datetime.now(timezone.utc), "profile")
+            saved += 1
+    return saved
 
 
 if __name__ == "__main__":

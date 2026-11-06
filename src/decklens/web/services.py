@@ -225,6 +225,43 @@ def my_record(games: Sequence[tuple], battle_log: list[dict[str, Any]], tag: str
     return {"games": len(decided), "wins": wins, "archetypes": out}
 
 
+SESSION_GAP_MINUTES = 45   # a longer break than this between games ends a session
+TILT_STREAK = 3            # this many losses in a row: suggest a break
+
+
+def session(games: Sequence[tuple[datetime, bool | None]], battle_log: list[dict[str, Any]],
+            tag: str) -> dict[str, Any]:
+    """Your latest Ranked session: games with no gap over SESSION_GAP_MINUTES, newest
+    first. games: stored (time, won?) to add to the battle log (it keeps ~25)."""
+    tag = normalize_tag(tag)
+    seen: dict[datetime, bool | None] = dict(games)
+    for b in _scouted(battle_log):
+        sides = _side(b, tag)
+        if sides is not None and mode_of(b) == "ranked":
+            seen.setdefault(b.battle_time, None if b.winner is None else b.winner == sides[0])
+    run: list[tuple[datetime, bool | None]] = []
+    for when in sorted(seen, reverse=True):
+        if run and (run[-1][0] - when).total_seconds() > SESSION_GAP_MINUTES * 60:
+            break
+        run.append((when, seen[when]))
+    if not run:
+        return {"games": 0}
+    results = ["draw" if won is None else ("won" if won else "lost") for _, won in run]
+    streak = next((i for i, r in enumerate(results) if r != results[0]), len(results))
+    return {
+        "games": len(run), "wins": results.count("won"), "losses": results.count("lost"),
+        "results": results, "started": run[-1][0].isoformat(), "last": run[0][0].isoformat(),
+        "streak": {"result": results[0], "games": streak},
+        "tilt": results[0] == "lost" and streak >= TILT_STREAK,
+    }
+
+
+def rank_at(history: Sequence[tuple], when: datetime) -> int | None:
+    """Your rank from the last snapshot before a time (history oldest first)."""
+    before = [rank for t, rank, _ in history if t <= when]
+    return before[-1] if before else None
+
+
 MAX_MEETINGS = 5
 
 
@@ -514,6 +551,29 @@ def live_clan_lookup(clans: list[dict[str, Any]], members_of: Callable[[str], li
         del p["_match"]
     return {"clans_checked": checked, "clans_found": len(valid),
             "players": players[:MAX_LIVE_RESULTS]}
+
+
+# The game's own copy-deck link (Supercell's blog links decks the same way: card
+# ids separated by ";"). Slot order matters: the Evolution slot first, then the
+# Hero slot, so a deck's Evos and Heroes come first.
+DECK_LINK = "https://link.clashroyale.com/en/?clashroyale://copyDeck?deck="
+
+
+def deck_link(deck: Sequence[int]) -> str:
+    """Link that opens this deck in Clash Royale. deck: validated ids, then form tokens."""
+    base = [c for c in deck if not is_form_token(c)]
+    evo = {t % FORM_TOKEN["evo"] for t in deck if FORM_TOKEN["evo"] <= t < FORM_TOKEN["hero"]}
+    hero = {t % FORM_TOKEN["evo"] for t in deck if t >= FORM_TOKEN["hero"]}
+    ordered = sorted(base, key=lambda c: (c not in evo, c not in hero))  # stable otherwise
+    return DECK_LINK + ";".join(str(int(c)) for c in ordered)
+
+
+def qr_rows(text: str) -> list[str]:
+    """A QR code as rows of 0/1, to draw as squares (scan it with your phone)."""
+    import segno
+
+    return ["".join("1" if dark else "0" for dark in row)
+            for row in segno.make(text, error="m").matrix]
 
 
 MAX_FORMS = 3  # Evolution slot, Hero slot, Wild slot

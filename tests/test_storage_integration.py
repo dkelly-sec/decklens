@@ -595,3 +595,20 @@ def test_my_games_are_my_ranked_games_in_the_window(conn):
     rows = my_games(conn, "#2PP", 30)
     assert len(rows) == 1 and rows[0][1] is True and len(rows[0][2]) == 8
     assert my_games(conn, "#2PP", 1) == []                          # two days ago is outside 1 day
+
+
+def test_rank_history_uses_this_seasons_ranks_only(conn):
+    from decklens.rankings import RankEntry
+    from decklens.storage import save_rank_entries
+    from decklens.web.search import rank_history
+
+    now = datetime.now(timezone.utc)
+
+    def entry(rank):
+        return RankEntry(tag="#2PP", name="Me", rating=2000, rank=rank, clan_tag=None, clan_name=None)
+
+    save_rank_entries(conn, [entry(900)], now - timedelta(days=3), "profile")
+    save_rank_entries(conn, [entry(5)], now - timedelta(days=2), "season")       # last season
+    save_rank_entries(conn, [entry(400)], now - timedelta(days=1), "leaderboard")
+    assert [r for _, r, _ in rank_history(conn, "#2PP", 30)] == [900, 400]
+    assert [r for _, r, _ in rank_history(conn, "#2PP", 2)] == [400]

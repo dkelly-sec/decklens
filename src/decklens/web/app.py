@@ -37,7 +37,8 @@ from .security import (
 )
 from .services import (
     CLAN_SEARCH_LIMIT, Predictor, battle_mix, card_ids, last_opponent, live_clan_lookup,
-    my_record, recent_decks, rematches, safe_tag, summarise_player, validate_deck,
+    deck_link, my_record, qr_rows, rank_at, recent_decks, rematches, safe_tag, session,
+    summarise_player, validate_deck,
 )
 
 log = logging.getLogger("decklens.web")
@@ -92,6 +93,11 @@ class WatchStatus(BaseModel):
     state: Literal["connected", "screen_only", "no_window", "minimised", "starting",
                    "unavailable"]
     detail: str | None = Field(default=None, max_length=80)
+
+
+class DeckRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    deck: list[int]
 
 
 class TweakRequest(BaseModel):
@@ -215,6 +221,44 @@ def create_app(services: Services, *, hsts: bool = False) -> FastAPI:
         since = datetime.now(timezone.utc) - timedelta(days=days)
         record = my_record(games, upstream("battlelog", tag), tag, model.archetypes, since)
         return {**record, "days": days, "stored": stored and bool(games)}
+
+    def stored(fetch: Callable[[Any], list[tuple]]) -> list[tuple]:
+        """Rows from the database, or none if there isn't one or it's down."""
+        if services.search_db is None:
+            return []
+        try:
+            with services.search_db() as conn:
+                return fetch(conn)
+        except Exception as exc:  # database trouble: answer from the live API alone
+            log.warning("stored rows unavailable: %s", type(exc).__name__)
+            return []
+
+    @app.get("/api/players/{tag}/rank-history", dependencies=[*signed_in, Depends(limit("lookup"))])
+    def rank_history_route(tag: str, days: int = Query(default=30, ge=1, le=90)) -> dict[str, Any]:
+        tag = tag_or_400(tag)
+        from .search import rank_history
+
+        points = [{"time": t.isoformat(), "rank": r, "rating": m}
+                  for t, r, m in stored(lambda conn: rank_history(conn, tag, days))]
+        now = summarise_player(upstream("player", tag))
+        if now.get("rank"):
+            points.append({"time": datetime.now(timezone.utc).isoformat(), "rank": now["rank"],
+                           "rating": now.get("rating")})
+        return {"days": days, "points": points}
+
+    @app.get("/api/players/{tag}/session", dependencies=[*signed_in, Depends(limit("lookup"))])
+    def session_route(tag: str) -> dict[str, Any]:
+        tag = tag_or_400(tag)
+        from .search import my_games, rank_history
+
+        games = [(t, won) for t, won, _, _ in stored(lambda conn: my_games(conn, tag, 1))]
+        out = session(games, upstream("battlelog", tag), tag)
+        if out["games"]:
+            now = summarise_player(upstream("player", tag)).get("rank")
+            start = rank_at(stored(lambda conn: rank_history(conn, tag, 2)),
+                            datetime.fromisoformat(out["started"]))
+            out["rank"] = {"start": start, "now": now}
+        return out
 
     @app.get("/api/players/{tag}/vs/{other}", dependencies=[*signed_in, Depends(limit("lookup"))])
     def rematch_route(tag: str, other: str) -> dict[str, Any]:
@@ -356,6 +400,17 @@ def create_app(services: Services, *, hsts: bool = False) -> FastAPI:
             ("meta", top, id(table)),
             lambda: meta(table, services.predictor.archetypes.names, top,
                          vocab=services.predictor.archetypes.vocab))
+
+    @app.post("/api/deck-link", dependencies=[*signed_in, Depends(limit("predict"))])
+    def deck_link_route(body: DeckRequest, model: Predictor = Depends(predictor)) -> dict[str, Any]:
+        try:
+            deck = validate_deck(body.deck, model.known_cards())
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from None
+        # validate_deck sorts; keep the order the page sent (the game's slot order)
+        ordered = [c for c in body.deck if c in deck]
+        url = deck_link(ordered)
+        return {"url": url, "qr": qr_rows(url)}
 
     @app.post("/api/tweaks", dependencies=[*signed_in, Depends(limit("tweaks"))])
     def tweaks_route(body: TweakRequest, model: Predictor = Depends(predictor)) -> dict[str, Any]:

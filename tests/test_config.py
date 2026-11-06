@@ -36,3 +36,21 @@ def test_collecting_my_battles_without_tags_set_is_a_quiet_no_op(monkeypatch):
     monkeypatch.setenv("CR_API_TOKEN", "test-token-not-real")
     monkeypatch.delenv("DECKLENS_MY_TAGS", raising=False)
     assert collector.main(["--mine", "--dry-run"]) == 0
+
+
+def test_my_rank_is_saved_from_my_profile(monkeypatch):
+    from decklens import collector
+    from decklens.api_client import ApiError
+
+    saved = []
+    monkeypatch.setattr("decklens.storage.save_rank_entries",
+                        lambda conn, entries, when, source: saved.extend((e.rank, source) for e in entries))
+
+    class Client:
+        def get_player(self, tag):
+            if tag == "#8YY":
+                raise ApiError(500, "busy")
+            return {"tag": tag, "name": "Me", "currentPathOfLegendSeasonResult": {"rank": 7853}}
+
+    assert collector.save_my_ranks(Client(), None, ["#2PP", "#8YY"]) == 1
+    assert saved == [(7853, "profile")]
