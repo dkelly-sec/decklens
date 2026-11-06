@@ -1,4 +1,6 @@
+import json
 import math
+from datetime import datetime, timedelta, timezone
 
 import numpy as np
 import pytest
@@ -113,3 +115,82 @@ def test_tuning_needs_options(data):
     train, _, vocab, _, _ = data
     with pytest.raises(ValueError, match="no archetype"):
         fit_tuned(vocab, train, cluster_options=())
+
+
+# --- archetypes by win condition, named the way players name them ------------------
+
+REAL_CARDS = {  # name: elixir
+    "Golem": 8, "Elixir Collector": 6, "Electro Dragon": 5, "Berserker": 2, "Elite Barbarians": 6,
+    "Skeleton Dragons": 4, "Tornado": 3, "The Log": 2, "Night Witch": 4, "Lumberjack": 4,
+    "X-Bow": 6, "Tesla": 4, "Archers": 3, "Knight": 3, "Fireball": 4, "Skeletons": 1,
+    "Electro Spirit": 1, "Hog Rider": 4, "Musketeer": 4, "Cannon": 3, "Ice Golem": 2,
+    "Ice Spirit": 1, "Graveyard": 5, "Poison": 4, "Baby Dragon": 4, "Ice Wizard": 3,
+    "Bowler": 5, "Barbarian Barrel": 2, "Valkyrie": 4, "Mortar": 4,
+}
+REAL_IDS = {name: 26000000 + i for i, name in enumerate(REAL_CARDS)}
+REAL_DECKS = {  # archetype: (core cards, flex pool), 8 cards per deck
+    "Golem Pump": (["Golem", "Elixir Collector", "Electro Dragon", "Berserker", "Elite Barbarians",
+                    "Skeleton Dragons", "Tornado", "The Log"], []),
+    "X-Bow 3.0": (["X-Bow", "Tesla", "Archers", "Knight", "Fireball", "The Log", "Skeletons",
+                   "Electro Spirit"], []),
+    "Hog 2.6": (["Hog Rider", "Musketeer", "Cannon", "Ice Golem", "Ice Spirit", "Skeletons",
+                 "Fireball", "The Log"], []),
+    # Shares Tornado, Log and Skeleton Dragons-style support with the Golem deck.
+    "Graveyard Poison": (["Graveyard", "Poison", "Tornado", "Knight"],
+                         ["Baby Dragon", "Ice Wizard", "Bowler", "Barbarian Barrel", "Valkyrie",
+                          "Skeleton Dragons", "The Log"]),
+}
+
+
+def _real_matchups(n=3000, seed=5, golem_share=0.04):
+    rng = np.random.default_rng(seed)
+    kinds = list(REAL_DECKS)
+    weights = np.array([golem_share] + [(1 - golem_share) / 3] * 3)
+    start = datetime(2026, 10, 1, tzinfo=timezone.utc)
+
+    def deck(kind):
+        core, flex = REAL_DECKS[kind]
+        extra = list(rng.choice(flex, 8 - len(core), replace=False)) if flex else []
+        return tuple(sorted(REAL_IDS[c] for c in core + extra))
+
+    return [Matchup(f"m{k}", start + timedelta(minutes=k), deck(kinds[rng.choice(4, p=weights)]),
+                    deck(kinds[rng.choice(4, p=weights)]), 0.0, 0.0, int(rng.random() < 0.5))
+            for k in range(n)]
+
+
+@pytest.fixture(scope="module")
+def real():
+    vocab = CardVocab.build(_real_matchups(), names={i: n for n, i in REAL_IDS.items()},
+                            elixir={REAL_IDS[n]: c for n, c in REAL_CARDS.items()})
+    return vocab, ArchetypeModel.fit(vocab, _real_matchups(), n_clusters=3, prior_strength=20)
+
+
+@pytest.mark.parametrize("kind", ["Golem Pump", "X-Bow 3.0", "Hog 2.6", "Graveyard Poison"])
+def test_rare_decks_keep_their_own_win_condition_and_name(real, kind):
+    _, model = real
+    core, flex = REAL_DECKS[kind]
+    deck = tuple(REAL_IDS[c] for c in core + flex[:8 - len(core)])
+    # Golem is 4% of decks and k=3 is too few clusters for k-means alone to
+    # keep it apart from Graveyard: the win condition keeps it apart.
+    assert model.names[model.assign([deck])[0]] == kind
+    assert model.unseen_wincon(deck) is None
+
+
+def test_a_win_condition_training_never_saw_is_flagged(real):
+    _, model = real
+    mortar = tuple(REAL_IDS[c] for c in ["Mortar", "Archers", "Knight", "Fireball", "The Log",
+                                          "Skeletons", "Cannon", "Ice Spirit"])
+    assert model.unseen_wincon(mortar) == "Mortar"
+    model.assign([mortar])  # still gets the closest archetype
+
+
+def test_win_conditions_survive_json_and_old_files_still_load(real):
+    vocab, model = real
+    again = ArchetypeModel.from_json(model.to_json())
+    assert again.keys == model.keys and again.vocab.elixir == vocab.elixir
+    decks = [m.deck_a for m in _real_matchups(50, seed=9)]
+    assert (again.assign(decks) == model.assign(decks)).all()
+    old = json.loads(model.to_json())
+    old["format"] = "decklens-archetypes-v1"
+    del old["keys"]
+    assert len(ArchetypeModel.from_json(json.dumps(old)).assign(decks)) == 50

@@ -101,6 +101,7 @@ def test_training_loader_reads_decided_ranked_battles(conn):
     top["team"][0]["globalRank"] = 40  # Alice was ranked 40th at the time
     for card in top["team"][0]["cards"]:
         card["maxLevel"] = 16  # Alice's cards are 2 levels below max
+    top["team"][0]["cards"][0]["elixirCost"] = 3
     low = battle(team_tag="#8YY", opp_tag="#9QJ", team_crowns=0, opp_crowns=1)
     low["battleTime"] = "20261030T020000.000Z"
     low["leagueNumber"] = 3
@@ -110,18 +111,18 @@ def test_training_loader_reads_decided_ranked_battles(conn):
     ladder["battleTime"] = "20261030T040000.000Z"
     save_battles(conn, parse_battle_log([top, low, draw, ladder])[0])
 
-    matchups, names = load_matchups(conn)
+    matchups, names, elixir = load_matchups(conn)
     assert len(matchups) == 2  # draw and non-ranked battle excluded
     first, second = matchups  # oldest first
     assert first.a_won == 1 and first.level_gap_a == 2.0 and first.level_gap_b == 0.0
     assert (first.rank_a, first.rank_b) == (40, None)
     assert second.a_won == 0  # side A (#8YY, lower tag) lost
-    assert names[26000000] == "Card 0"
+    assert names[26000000] == "Card 0" and elixir == {26000000: 3}
 
-    only_top, _ = load_matchups(conn, min_league=7)
+    only_top, _, _ = load_matchups(conn, min_league=7)
     assert [m.battle_id for m in only_top] == [first.battle_id]
 
-    recent, _ = load_matchups(conn, since=datetime(2026, 10, 30, 1, 30, tzinfo=timezone.utc))
+    recent, _, _ = load_matchups(conn, since=datetime(2026, 10, 30, 1, 30, tzinfo=timezone.utc))
     assert [m.battle_id for m in recent] == [second.battle_id]  # the 01:15 battle is too old
 
 

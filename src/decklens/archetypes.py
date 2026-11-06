@@ -1,9 +1,12 @@
 """Deck archetypes and an archetype-vs-archetype matchup model.
 
-Archetypes are found from the data rather than a hand-kept list, so they
-follow the meta: decks are grouped by the cards they share (k-means on
-normalised card vectors, so it compares decks by overlap), and each group is
-named after its signature cards.
+Decks are grouped by win condition first (Golem, X-Bow, Hog Rider...), the
+way players name them: a Golem deck is never the same archetype as a Graveyard
+deck, however many support cards they share. Within a win condition, decks are
+split by the cards they share (k-means on normalised card vectors, so it
+compares decks by overlap), which follows the meta without a hand-kept deck
+list. Groups are named the way players say them: "Golem Pump", "X-Bow 3.0"
+(cycle decks by average elixir), "Graveyard Poison".
 
 Matchups are a table of wins between archetypes. Pairings with few games are
 pulled towards a prior from each archetype's overall strength, so a 3-0
@@ -19,7 +22,8 @@ from __future__ import annotations
 import json
 import math
 from collections import Counter
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from functools import cached_property
 from pathlib import Path
 from typing import Any, Iterable, Sequence
 
@@ -28,7 +32,8 @@ from sklearn.cluster import KMeans
 
 from .features import CardVocab, Matchup, labels
 
-ARCHETYPE_FORMAT = "decklens-archetypes-v1"
+ARCHETYPE_FORMAT = "decklens-archetypes-v2"
+OLD_FORMATS = ("decklens-archetypes-v1",)  # no win conditions: still loads, retrain to fix names
 _EPS = 1e-6
 
 
@@ -37,6 +42,21 @@ def _deck_matrix(vocab: CardVocab, decks: Sequence[Sequence[int]]) -> np.ndarray
     norms = np.linalg.norm(X, axis=1, keepdims=True)
     return X / np.maximum(norms, _EPS)
 
+
+# The cards a deck is built to get onto the tower. Earlier in the list leads when
+# a deck runs several: Lava Hound + Balloon, not Balloon + Lava Hound.
+# shortcut: hand-kept list matched by the API's English card names; add new win conditions as Supercell releases them.
+WIN_CONDITIONS = (
+    "Golem", "Lava Hound", "Electro Giant", "Goblin Giant", "Rune Giant", "Elixir Golem",
+    "Royal Giant", "Giant", "X-Bow", "Mortar", "Graveyard", "Goblin Barrel", "Hog Rider",
+    "Royal Hogs", "Ram Rider", "Battle Ram", "Three Musketeers", "Sparky", "Balloon", "Miner",
+    "Goblin Drill", "Skeleton Barrel", "Wall Breakers", "Giant Skeleton", "Royal Recruits",
+    "P.E.K.K.A", "Mega Knight",
+)
+KEY_SIZE = 2                # a deck's key: its first two win conditions
+SHORT_NAMES = {"Hog Rider": "Hog"}
+PUMP = "Elixir Collector"   # players call it pump: "Golem Pump"
+CYCLE_MAX_ELIXIR = 3.2      # cycle decks go by average elixir: "Hog 2.6", "X-Bow 3.0"
 
 CORE_SHARE = 0.5      # a card is "core" to a group if at least half its decks run it
 MERGE_JACCARD = 0.6   # groups whose cores overlap this much are one archetype
@@ -50,8 +70,35 @@ def _card_share(vocab: CardVocab, member_decks: Counter) -> np.ndarray:
     return share / max(sum(member_decks.values()), 1)
 
 
-def _merge_by_core(cores: list[set[int]]) -> np.ndarray:
-    """Group clusters whose core cards mostly overlap (union-find on Jaccard similarity)."""
+def _wincon_ids(vocab: CardVocab) -> list[int]:
+    """Win condition card ids, in WIN_CONDITIONS order (names come with the vocab)."""
+    by_name = {name: cid for cid, name in vocab.names.items()}
+    return [by_name[n] for n in WIN_CONDITIONS if n in by_name]
+
+
+def _deck_key(deck: Iterable[int], wincons: Sequence[int]) -> tuple[int, ...]:
+    present = set(deck)
+    return tuple(c for c in wincons if c in present)[:KEY_SIZE]
+
+
+def _key_name(vocab: CardVocab, key: Sequence[int]) -> str:
+    return " + ".join(SHORT_NAMES.get(vocab.name(c), vocab.name(c)) for c in key)
+
+
+def _avg_elixir(vocab: CardVocab, member_decks: Counter) -> float | None:
+    """Average card cost across a group's decks, if costs are known."""
+    total = weight = 0.0
+    for deck, count in member_decks.items():
+        costs = [vocab.elixir[c] for c in deck if c in vocab.elixir]
+        if len(costs) >= 6:  # a couple of unknown costs is fine, most unknown isn't
+            total += count * sum(costs) / len(costs)
+            weight += count
+    return total / weight if weight else None
+
+
+def _merge_by_core(cores: list[set[int]], keys: list[tuple[int, ...]]) -> np.ndarray:
+    """Group clusters with the same win conditions whose core cards mostly overlap
+    (union-find on Jaccard similarity)."""
     parent = list(range(len(cores)))
 
     def root(x: int) -> int:
@@ -63,7 +110,7 @@ def _merge_by_core(cores: list[set[int]]) -> np.ndarray:
     for i in range(len(cores)):
         for j in range(i + 1, len(cores)):
             union = cores[i] | cores[j]
-            if union and len(cores[i] & cores[j]) / len(union) >= MERGE_JACCARD:
+            if keys[i] == keys[j] and union and len(cores[i] & cores[j]) / len(union) >= MERGE_JACCARD:
                 parent[root(j)] = root(i)
     roots = [root(i) for i in range(len(cores))]
     order = list(dict.fromkeys(roots))  # first-seen order
@@ -79,6 +126,22 @@ def _signature_name(vocab: CardVocab, share: np.ndarray, global_share: np.ndarra
     return " · ".join(vocab.name(vocab.card_ids[i]) for i in order)
 
 
+def _archetype_name(vocab: CardVocab, key: tuple[int, ...], share: np.ndarray,
+                    global_share: np.ndarray, avg_elixir: float | None) -> str:
+    """'Golem Pump', 'X-Bow 3.0', 'Graveyard Poison'; signature cards without a win condition."""
+    if not key:
+        return _signature_name(vocab, share, global_share)
+    head = _key_name(vocab, key)
+    core = [i for i in np.argsort(-share * (share / np.maximum(global_share, _EPS)))
+            if share[i] >= CORE_SHARE and vocab.card_ids[i] not in key]
+    core_names = [vocab.name(vocab.card_ids[i]) for i in core]
+    if PUMP in core_names:
+        return f"{head} Pump"
+    if avg_elixir is not None and avg_elixir <= CYCLE_MAX_ELIXIR:
+        return f"{head} {avg_elixir:.1f}"
+    return f"{head} {core_names[0]}" if core_names else head
+
+
 @dataclass
 class ArchetypeModel:
     vocab: CardVocab
@@ -89,6 +152,7 @@ class ArchetypeModel:
     games: np.ndarray           # games[i, j] == games[j, i]
     prior_strength: float
     deck_counts: np.ndarray     # how many training decks fell in each archetype
+    keys: list[tuple[int, ...]] = field(default_factory=list)  # cluster -> win conditions ([]: old model)
 
     # --- fitting -------------------------------------------------------------
 
@@ -99,36 +163,54 @@ class ArchetypeModel:
         for m in train:
             counts[m.deck_a] += 1
             counts[m.deck_b] += 1
-        decks = list(counts)
-        k = max(1, min(n_clusters, len(decks)))
-        X = _deck_matrix(vocab, decks)
-        km = KMeans(n_clusters=k, n_init=4, random_state=seed)
-        km.fit(X, sample_weight=np.array([counts[d] for d in decks], dtype=float))
-        centroids = km.cluster_centers_ / np.maximum(
-            np.linalg.norm(km.cluster_centers_, axis=1, keepdims=True), _EPS)
+        wincons = _wincon_ids(vocab)
+        buckets: dict[tuple[int, ...], list[tuple[int, ...]]] = {}
+        for deck in counts:
+            buckets.setdefault(_deck_key(deck, wincons), []).append(deck)
 
-        members: list[Counter] = [Counter() for _ in range(k)]
-        for deck, label in zip(decks, km.labels_):
-            members[int(label)][deck] = counts[deck]
+        # Every win condition gets at least one archetype, however rare (a Golem
+        # deck must never land in a Graveyard group); common ones get more,
+        # in proportion to how often they're played.
+        total = sum(counts.values())
+        centers, keys, members = [], [], []
+        for key, decks in buckets.items():
+            weight = np.array([counts[d] for d in decks], dtype=float)
+            k = max(1, min(len(decks), round(n_clusters * weight.sum() / total)))
+            X = _deck_matrix(vocab, decks)
+            if k == 1:
+                found, labels_ = (weight @ X)[None, :], np.zeros(len(decks), dtype=int)
+            else:
+                km = KMeans(n_clusters=k, n_init=4, random_state=seed).fit(X, sample_weight=weight)
+                found, labels_ = km.cluster_centers_, km.labels_
+            centers.append(found)
+            for c in range(k):
+                members.append(Counter({d: counts[d] for d, lab in zip(decks, labels_) if lab == c}))
+                keys.append(key)
+        stacked = np.vstack(centers)
+        centroids = stacked / np.maximum(np.linalg.norm(stacked, axis=1, keepdims=True), _EPS)
+        k = len(members)
         global_share = sum(vocab.one_hot(d) * c for d, c in counts.items()) / sum(counts.values())
 
         # k-means can split one deck type by its flex cards. Clusters whose core
         # cards mostly overlap are one archetype: merge them, pooling their games.
         cores = [set(np.flatnonzero(_card_share(vocab, members[c]) >= CORE_SHARE))
                  for c in range(k)]
-        groups = _merge_by_core(cores)
+        groups = _merge_by_core(cores, keys)
         m = int(groups.max()) + 1
         merged: list[Counter] = [Counter() for _ in range(m)]
+        group_key: list[tuple[int, ...]] = [()] * m
         for c in range(k):
             merged[groups[c]].update(members[c])
+            group_key[groups[c]] = keys[c]
         names: list[str] = []
         for g in range(m):
-            name = _signature_name(vocab, _card_share(vocab, merged[g]), global_share)
+            name = _archetype_name(vocab, group_key[g], _card_share(vocab, merged[g]), global_share,
+                                   _avg_elixir(vocab, merged[g]))
             names.append(name if name not in names else f"{name} ({g + 1})")  # always unique
         deck_counts = np.array([sum(merged[g].values()) for g in range(m)], dtype=float)
 
         model = cls(vocab, centroids, groups, names, np.zeros((m, m)), np.zeros((m, m)),
-                    float(prior_strength), deck_counts)
+                    float(prior_strength), deck_counts, keys)
         model._count(train)
         return model
 
@@ -147,8 +229,37 @@ class ArchetypeModel:
         """Nearest archetype for each deck; works for decks never seen in training."""
         if not decks:
             return np.zeros(0, dtype=int)
-        nearest = np.argmax(_deck_matrix(self.vocab, decks) @ self.centroids.T, axis=1)
-        return self.groups[nearest]
+        sims = _deck_matrix(self.vocab, decks) @ self.centroids.T
+        if any(self.keys):
+            masks: dict[tuple[int, ...], np.ndarray] = {}
+            for row, deck in enumerate(decks):
+                key = _deck_key(deck, self._wincons)
+                if key not in masks:
+                    masks[key] = self._allowed(key)
+                sims[row, ~masks[key]] = -np.inf
+        return self.groups[np.argmax(sims, axis=1)]
+
+    @cached_property
+    def _wincons(self) -> list[int]:
+        return _wincon_ids(self.vocab)
+
+    def _allowed(self, key: tuple[int, ...]) -> np.ndarray:
+        """Clusters a deck with this key may join: same win conditions, else the
+        same main one, else (a win condition training never saw) any."""
+        same = np.array([k == key for k in self.keys])
+        if not same.any() and key:
+            same = np.array([k[:1] == key[:1] for k in self.keys])
+        return same if same.any() else np.ones(len(self.keys), dtype=bool)
+
+    def unseen_wincon(self, deck: Sequence[int]) -> str | None:
+        """The deck's win condition if no training deck had it (its archetype is then
+        only the closest one), else None."""
+        if not any(self.keys):
+            return None
+        key = _deck_key(deck, self._wincons)
+        if key and not any(k[:1] == key[:1] for k in self.keys):
+            return _key_name(self.vocab, key[:1])
+        return None
 
     def _totals(self) -> tuple[np.ndarray, np.ndarray]:
         """Wins and games for each archetype against all others (mirrors excluded)."""
@@ -215,12 +326,13 @@ class ArchetypeModel:
             "games": self.games.astype(int).tolist(),
             "deck_counts": self.deck_counts.astype(int).tolist(),
             "prior_strength": self.prior_strength,
+            "keys": [list(k) for k in self.keys],
         })
 
     @classmethod
     def from_json(cls, text: str) -> "ArchetypeModel":
         data = json.loads(text)
-        if data.get("format") != ARCHETYPE_FORMAT:
+        if data.get("format") not in (ARCHETYPE_FORMAT, *OLD_FORMATS):
             raise ValueError("not a DeckLens archetype model file")
         vocab = CardVocab.from_dict(data["vocab"])
         centroids = np.asarray(data["centroids"], dtype=np.float64)
@@ -228,15 +340,17 @@ class ArchetypeModel:
         games = np.asarray(data["games"], dtype=np.float64)
         groups = np.asarray(data["groups"], dtype=int)
         m = len(data["names"])
+        keys = [tuple(int(c) for c in k) for k in data.get("keys", [])]
         if (centroids.ndim != 2 or centroids.shape[1] != len(vocab)
                 or groups.shape != (centroids.shape[0],) or wins.shape != (m, m)
                 or games.shape != (m, m) or not np.all(np.isfinite(centroids))
                 or (groups < 0).any() or (groups >= m).any()
-                or (wins < 0).any() or (games < 0).any()):
+                or (wins < 0).any() or (games < 0).any()
+                or (keys and len(keys) != centroids.shape[0])):
             raise ValueError("archetype model file is malformed")
         return cls(vocab, centroids, groups, [str(n) for n in data["names"]], wins, games,
                    float(data["prior_strength"]),
-                   np.asarray(data["deck_counts"], dtype=np.float64))
+                   np.asarray(data["deck_counts"], dtype=np.float64), keys)
 
     def save(self, path: Path) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)

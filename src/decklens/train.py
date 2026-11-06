@@ -67,6 +67,7 @@ def run_training(
     matchups: Sequence[Matchup],
     names: dict[int, str],
     *,
+    elixir: dict[int, int] | None = None,
     test_fraction: float = 0.2,
     min_card_count: int = 30,
     min_league: int | None = None,
@@ -78,7 +79,7 @@ def run_training(
         raise ValueError(f"need at least {MIN_BATTLES} decided battles, have {len(matchups)}")
 
     train, test, cutoff = time_split(matchups, test_fraction)
-    vocab = CardVocab.build(train, min_count=min_card_count, names=names)  # training data only
+    vocab = CardVocab.build(train, min_count=min_card_count, names=names, elixir=elixir)  # training data only
     y_test = labels(test)
 
     probs: dict[str, np.ndarray] = {COIN: np.full(len(test), 0.5)}
@@ -242,10 +243,12 @@ def _archetype_sections(r: TrainingResult) -> list[str]:
         "",
         "## Deck archetypes",
         "",
-        f"{len(model.names)} archetypes found automatically: decks were grouped by shared cards "
-        f"into {clusters} clusters (chosen on held-out battles from "
-        f"{', '.join(map(str, ARCHETYPE_OPTIONS))}), and clusters with mostly the same core "
-        "cards were merged. Each is named after its signature cards.",
+        f"{len(model.names)} archetypes found automatically: decks were grouped by win condition, "
+        f"then by shared cards into about {clusters} clusters (chosen on held-out battles from "
+        f"{', '.join(map(str, ARCHETYPE_OPTIONS))}; every win condition gets at least one), and "
+        "clusters with the same win condition and mostly the same core cards were merged. Names "
+        "follow how players say them: win condition plus Pump, average elixir for cycle decks, "
+        "or the most telling support card.",
         "",
         "| Archetype | Share of decks | Win rate vs others (95% range) | Games |",
         "| --- | --- | --- | --- |",
@@ -306,13 +309,13 @@ def main(argv: list[str] | None = None) -> int:
 
     since = datetime.now(timezone.utc) - timedelta(days=args.days) if args.days else None
     with psycopg.connect(settings.database_url) as conn:
-        matchups, names = load_matchups(conn, min_league=args.min_league, since=since)
+        matchups, names, elixir = load_matchups(conn, min_league=args.min_league, since=since)
     window = f"last {args.days} days" if args.days else "all time"
     log.info("loaded %d decided ranked battles (%s)", len(matchups), window)
 
     try:
         result = run_training(
-            matchups, names, test_fraction=args.test_fraction,
+            matchups, names, elixir=elixir, test_fraction=args.test_fraction,
             min_card_count=args.min_card_count, min_league=args.min_league,
             days=args.days or None, with_trees=not args.no_trees,
             with_archetypes=not args.no_archetypes,

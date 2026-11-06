@@ -280,69 +280,7 @@ function tugBar(m) {
   return tug;
 }
 
-const DUEL_COSTS = [1, 2, 3, 4, 5, 6, 7, 8, 9];
-
-function costCounts(deck) {
-  const counts = new Map(DUEL_COSTS.map((c) => [c, 0]));
-  for (const card of deck.cards) {
-    if (card.elixir) counts.set(Math.min(card.elixir, 9), counts.get(Math.min(card.elixir, 9)) + 1);
-  }
-  return counts;
-}
-
-function svg(tag, attrs) {
-  const node = document.createElementNS("http://www.w3.org/2000/svg", tag);
-  for (const [k, v] of Object.entries(attrs)) node.setAttribute(k, String(v));
-  return node;
-}
-
-// Plain-words read of the two curves: who cycles back to their answers sooner.
-function duelRead(mine, theirs) {
-  const a = mine.summary || {}, b = theirs.summary || {};
-  if (a.cycle && b.cycle && Math.abs(a.cycle - b.cycle) >= 2) {
-    return a.cycle < b.cycle
-      ? "You out-cycle them: your 4 cheapest cost " + (b.cycle - a.cycle) + " less than theirs."
-      : "They out-cycle you: their 4 cheapest cost " + (a.cycle - b.cycle) + " less than yours.";
-  }
-  if (a.avg_elixir && b.avg_elixir && Math.abs(a.avg_elixir - b.avg_elixir) >= 0.4) {
-    return a.avg_elixir < b.avg_elixir
-      ? "Your deck is lighter: punish their big pushes with a quick one the other side."
-      : "Their deck is lighter: expect fast cycles, so don't overcommit on one lane.";
-  }
-  return "Similar weight: whoever spends elixir better wins this one.";
-}
-
-// Elixir duel: your cost curve rises above the line, theirs hangs below it.
-function elixirDuel(mine, theirs) {
-  const you = costCounts(mine), them = costCounts(theirs);
-  const W = 30, UNIT = 12, MID = 62;
-  const chart = svg("svg", { viewBox: "0 0 " + W * DUEL_COSTS.length + " 124", role: "img" });
-  const said = (counts) => DUEL_COSTS.filter((c) => counts.get(c)).map((c) => counts.get(c) + " at " + c).join(", ");
-  chart.setAttribute("aria-label", "Cards by elixir cost. Yours: " + said(you) + ". Theirs: " + said(them) + ".");
-  DUEL_COSTS.forEach((cost, i) => {
-    const x = i * W + 5;
-    const up = you.get(cost) * UNIT, down = them.get(cost) * UNIT;
-    if (up) chart.append(svg("rect", { x, y: MID - 9 - up, width: W - 10, height: up, rx: 3, class: "you-bar" }));
-    if (down) chart.append(svg("rect", { x, y: MID + 9, width: W - 10, height: down, rx: 3, class: "them-bar" }));
-    const label = svg("text", { x: x + (W - 10) / 2, y: MID + 4, "text-anchor": "middle", class: "cost" });
-    label.textContent = String(cost);
-    chart.append(label);
-  });
-  const stats = el("dl", null, "duel-stats");
-  for (const [who, deck, className] of [["You", mine, "you"], ["Them", theirs, "them"]]) {
-    const s = deck.summary || {};
-    const bits = [];
-    if (s.avg_elixir) bits.push(s.avg_elixir + " average");
-    if (s.cycle) bits.push(s.cycle + " to cycle 4");
-    stats.append(el("dt", who, className), el("dd", bits.join(", ") || "costs unknown"));
-  }
-  const box = el("div", null, "duel");
-  box.append(el("p", "Elixir duel", "label"), chart, stats, el("p", duelRead(mine, theirs), "duel-read"));
-  return box;
-}
-
-// decks: { mine, theirs } when both are known, for the elixir duel.
-function matchupBox(m, label, mode, decks) {
+function matchupBox(m, label, mode) {
   const box = el("div", null, "matchup");
   box.append(el("p", label || "Matchup", "label"));
   const names = el("p", null, "archetypes");
@@ -350,8 +288,6 @@ function matchupBox(m, label, mode, decks) {
   box.append(names, tugBar(m));
   box.append(el("p", m.mirror ? "Mirror match: a coin flip on decks."
     : "Your deck wins about " + pct(m.win_chance) + " of games like this.", "chance"));
-  // The duel sits right under the verdict: it's what you can act on mid-battle.
-  if (decks && decks.mine && decks.theirs) box.append(elixirDuel(decks.mine, decks.theirs));
   if (m.breakdown) {
     box.append(breakdownTable(m.breakdown));
     box.append(el("p", "Your win rate, from ranked games in the last " + m.breakdown.window_days +
@@ -465,8 +401,7 @@ function lastOpponentParts(opp) {
     deckView(opp.deck, "theirs"),
   ];
   if (opp.matchup) {
-    parts.push(matchupBox(opp.matchup, "Your deck vs theirs", opp.mode,
-      { mine: opp.your_deck, theirs: opp.deck }));
+    parts.push(matchupBox(opp.matchup, "Your deck vs theirs", opp.mode));
   }
   return parts;
 }
@@ -825,7 +760,7 @@ async function matchupFor(mine, deck, mode) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ deck_a: knownIds(mine.deck), deck_b: knownIds(deck) }),
     });
-    return [matchupBox(m, mine.label, mode, { mine: mine.deck, theirs: deck })];
+    return [matchupBox(m, mine.label, mode)];
   } catch (error) {
     return [errorBox(error)];
   }

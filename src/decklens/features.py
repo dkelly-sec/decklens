@@ -77,10 +77,12 @@ def extra_features(m: Matchup) -> tuple[float, float, float]:
 class CardVocab:
     """Maps card ids to feature columns. Built from training data only."""
 
-    def __init__(self, card_ids: Sequence[int], names: dict[int, str] | None = None):
+    def __init__(self, card_ids: Sequence[int], names: dict[int, str] | None = None,
+                 elixir: dict[int, int] | None = None):
         self.card_ids = [int(c) for c in card_ids]  # plain ints, whatever the source
         self.index = {cid: i for i, cid in enumerate(self.card_ids)}
         self.names = {int(k): str(v) for k, v in (names or {}).items()}
+        self.elixir = {int(k): int(v) for k, v in (elixir or {}).items()}  # card costs, for names
 
     def __len__(self) -> int:
         return len(self.card_ids)
@@ -91,25 +93,28 @@ class CardVocab:
         matchups: Iterable[Matchup],
         min_count: int = 1,
         names: dict[int, str] | None = None,
+        elixir: dict[int, int] | None = None,
     ) -> "CardVocab":
         counts: Counter = Counter()
         for m in matchups:
             counts.update(m.deck_a)
             counts.update(m.deck_b)
         keep = sorted(cid for cid, n in counts.items() if n >= min_count)
-        return cls(keep, names)
+        return cls(keep, names, elixir)
 
     def name(self, card_id: int) -> str:
         return self.names.get(card_id, str(card_id))
 
     def to_dict(self) -> dict[str, Any]:
-        return {"card_ids": self.card_ids, "names": {str(k): v for k, v in self.names.items()}}
+        return {"card_ids": self.card_ids, "names": {str(k): v for k, v in self.names.items()},
+                "elixir": {str(k): v for k, v in self.elixir.items()}}
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "CardVocab":
         ids = [int(c) for c in data["card_ids"]]
         names = {int(k): str(v) for k, v in data.get("names", {}).items()}
-        return cls(ids, names)
+        elixir = {int(k): int(v) for k, v in data.get("elixir", {}).items()}
+        return cls(ids, names, elixir)
 
     def one_hot(self, deck: Iterable[int]) -> np.ndarray:
         row = np.zeros(len(self), dtype=np.float32)

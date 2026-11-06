@@ -295,6 +295,11 @@ class Predictor:
         else:
             result["note"] = (f"Based on {games} ranked games between these archetypes. "
                               "Player skill still decides most games.")
+        for deck, whose in ((deck_a, "your deck's"), (deck_b, "their deck's")):
+            new = model.unseen_wincon(deck)
+            if new:
+                result["note"] += (f" No {new} decks were in the training data, so {whose} "
+                                   "archetype is only the closest one: retrain once more are collected.")
         if min(len(deck_a), len(deck_b)) < 8:
             result["note"] += (" One deck has a Hero the Clash Royale API doesn't show, so "
                                "this is judged on the other seven cards.")

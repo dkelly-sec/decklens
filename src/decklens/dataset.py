@@ -26,12 +26,14 @@ _LOAD = """
 """
 
 
-def _card_names(cards: Any, names: dict[int, str]) -> None:
+def _card_names(cards: Any, names: dict[int, str], elixir: dict[int, int]) -> None:
     for card in cards or []:
         if isinstance(card, dict) and isinstance(card.get("id"), int):
-            name = card.get("name")
+            name, cost = card.get("name"), card.get("elixirCost")
             if isinstance(name, str):
                 names.setdefault(card["id"], name[:40])
+            if isinstance(cost, int) and not isinstance(cost, bool) and 0 <= cost <= 10:
+                elixir.setdefault(card["id"], cost)
 
 
 def load_matchups(
@@ -40,16 +42,17 @@ def load_matchups(
     battle_type: str = "pathOfLegend",
     min_league: int | None = None,
     since: datetime | None = None,
-) -> tuple[list[Matchup], dict[int, str]]:
+) -> tuple[list[Matchup], dict[int, str], dict[int, int]]:
     """Decided battles of one type (optionally only since a time), oldest first,
-    plus a card id -> name map."""
+    plus card id -> name and card id -> elixir cost maps."""
     matchups: list[Matchup] = []
     names: dict[int, str] = {}
+    elixir: dict[int, int] = {}
     with conn.cursor() as cur:
         cur.execute(_LOAD, (battle_type, min_league, min_league, since, since))
         for bid, when, winner, ids_a, cards_a, rank_a, ids_b, cards_b, rank_b in cur:
-            _card_names(cards_a, names)
-            _card_names(cards_b, names)
+            _card_names(cards_a, names, elixir)
+            _card_names(cards_b, names, elixir)
             matchups.append(
                 Matchup(
                     battle_id=bid,
@@ -63,4 +66,4 @@ def load_matchups(
                     rank_b=rank_b,
                 )
             )
-    return matchups, names
+    return matchups, names, elixir
