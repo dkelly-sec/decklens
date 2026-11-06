@@ -285,9 +285,9 @@ def test_names_players_actually_use():
     # A Hyperbait list with The Log in it isn't Hyperbait any more: it's Log Bait.
     with_log = [c if c != "Dart Goblin" else "The Log" for c in PLAYER_DECKS["Hyperbait"]]
     assert model.labels([_pn_deck(with_log)]) == ["Log Bait"]
-    # With some other spell instead (no Log), it's neither: just its win condition.
+    # Any other spell makes it Log Bait too.
     with_zap = [c if c != "Dart Goblin" else "Zap" for c in PLAYER_DECKS["Hyperbait"]]
-    assert model.labels([_pn_deck(with_zap)]) == ["Goblin Barrel"]
+    assert model.labels([_pn_deck(with_zap)]) == ["Log Bait"]
     # Graveyard with Poison is a Poison deck, not Splashyard.
     poison_yard = [c if c != "Tornado" else "Poison" for c in PLAYER_DECKS["Splashyard"]]
     assert model.labels([_pn_deck(poison_yard)]) != ["Splashyard"]

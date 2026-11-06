@@ -72,18 +72,22 @@ SPLASH = ("Baby Dragon", "Ice Wizard", "Bowler", "Executioner", "Wizard", "Witch
 class NameRule:
     """A deck name players actually use. It applies to a deck that has every card in
     needs (needs[0] is its main win condition), at least one of one_of, none of
-    without, and, with no_other_spells, no spell besides the needed ones."""
+    without, and, with no_other_spells, no spell besides the needed ones (with
+    other_spell, at least one)."""
     name: str
     needs: tuple[str, ...]
     one_of: tuple[str, ...] = ()
     without: tuple[str, ...] = ()
     no_other_spells: bool = False
+    other_spell: bool = False
 
     def fits(self, cards: set[str], spells: set[str]) -> bool:
+        others = spells - set(self.needs)
         return (all(c in cards for c in self.needs)
                 and (not self.one_of or any(c in cards for c in self.one_of))
                 and not any(c in cards for c in self.without)
-                and not (self.no_other_spells and spells - set(self.needs)))
+                and not (self.no_other_spells and others)
+                and (not self.other_spell or bool(others)))
 
 
 # Checked in order before the generic "win condition + card" name; the first that
@@ -95,7 +99,7 @@ PLAYER_NAMES = (
     NameRule("PEKKA Bridge Spam", ("Battle Ram", "P.E.K.K.A")),
     NameRule("Bridge Spam", ("Battle Ram",)),
     NameRule("Hyperbait", ("Goblin Barrel",), no_other_spells=True),
-    NameRule("Log Bait", ("Goblin Barrel", "The Log")),
+    NameRule("Log Bait", ("Goblin Barrel",), other_spell=True),   # The Log, Zap, Rocket...
     NameRule("Splashyard", ("Graveyard",), one_of=SPLASH, without=("Poison", "Freeze")),
 )
 RULES = {r.name: r for r in PLAYER_NAMES}
