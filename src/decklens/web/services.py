@@ -184,34 +184,44 @@ def last_opponent(tag: str, battle_log: list[dict[str, Any]]) -> dict[str, Any] 
     return None
 
 
+RECORD_RECENT = 8  # your latest games per archetype, for the row you open
+
+
 def my_record(games: Sequence[tuple], battle_log: list[dict[str, Any]], tag: str,
               archetypes: ArchetypeModel, since: datetime) -> dict[str, Any]:
     """Your Ranked record against each opponent archetype: stored games (time, won?,
-    their card ids, their raw cards) plus anything newer in your battle log."""
+    their card ids, their raw cards) plus anything newer in your battle log. Each
+    archetype also carries your latest games against it, with their deck."""
     tag = normalize_tag(tag)
-    seen: dict[datetime, tuple[bool | None, tuple[int, ...]]] = {}
+    seen: dict[datetime, tuple[bool | None, tuple[int, ...], list[Any]]] = {}
     for when, won, ids, raw in games:
-        seen[when] = (won, tuple(ids) + form_tokens(raw or []))
+        seen[when] = (won, tuple(ids) + form_tokens(raw or []), list(raw or []))
     for b in _scouted(battle_log):
         sides = _side(b, tag)
         if sides is None or mode_of(b) != "ranked" or b.battle_time < since:
             continue
         them = b.players[sides[1]]
         seen.setdefault(b.battle_time, (None if b.winner is None else b.winner == sides[0],
-                                        them.card_ids + form_tokens(list(them.cards))))
-    decided = [(won, deck) for won, deck in seen.values() if won is not None]
-    rows: dict[int, list[int]] = {}
+                                        them.card_ids + form_tokens(list(them.cards)),
+                                        list(them.cards)))
+    decided = sorted(((t, won, deck, raw) for t, (won, deck, raw) in seen.items()
+                      if won is not None), key=lambda g: g[0], reverse=True)
+    rows: dict[int, list[Any]] = {}
     if decided:
-        for (won, _), arch in zip(decided, archetypes.assign([d for _, d in decided])):
-            rows.setdefault(int(arch), [0, 0])
-            rows[int(arch)][0] += int(won)
-            rows[int(arch)][1] += 1
+        for (when, won, _, raw), arch in zip(decided, archetypes.assign([g[2] for g in decided])):
+            row = rows.setdefault(int(arch), [0, 0, []])
+            row[0] += int(won)
+            row[1] += 1
+            if len(row[2]) < RECORD_RECENT:  # newest first already
+                row[2].append({"time": when.isoformat(), "result": "won" if won else "lost",
+                               "deck": _deck(_cards(raw), "ranked")})
     out = []
-    for arch, (wins, n) in sorted(rows.items(), key=lambda kv: -kv[1][1]):
+    for arch, (wins, n, recent) in sorted(rows.items(), key=lambda kv: -kv[1][1]):
         lo, hi = wilson_interval(wins, n)
         out.append({"archetype": archetypes.names[arch], "wins": wins, "games": n,
-                    "rate": round(wins / n, 3), "range": [round(lo, 3), round(hi, 3)]})
-    wins = sum(int(w) for w, _ in decided)
+                    "rate": round(wins / n, 3), "range": [round(lo, 3), round(hi, 3)],
+                    "recent": recent})
+    wins = sum(int(g[1]) for g in decided)
     return {"games": len(decided), "wins": wins, "archetypes": out}
 
 

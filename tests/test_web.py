@@ -1287,6 +1287,9 @@ def test_my_record_by_opponent_archetype(predictor):
     assert (r["games"], r["wins"], r["stored"]) == (3, 2, True)   # 2 stored + 1 newer from the log
     opp = predictor.archetypes.names[int(predictor.archetypes.assign([OPP_DECK])[0])]
     assert r["archetypes"][0]["archetype"] == opp and r["archetypes"][0]["games"] == 3
+    recent = r["archetypes"][0]["recent"]
+    assert [g["result"] for g in recent] == ["lost", "won", "won"]       # newest first
+    assert len(recent[0]["deck"]["cards"]) == 8 and recent[0]["time"] > recent[1]["time"]
     assert app.get("/api/players/%232PP/record?days=500").status_code == 422
 
 

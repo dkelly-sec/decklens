@@ -354,25 +354,64 @@ async function showMe(tag) {
     state.me = me;
     state.myDecks = undefined;  // your Trophy Road / challenge decks: fetched again for this player
     storageSet("decklens.myTag", me.tag);
-    const parts = [playerLine(me)];
-    if (me.deck.cards.length) parts.push(el("p", "Current deck", "label"), deckView(me.deck, "yours"));
-    const record = el("div", null, "my-record");
-    parts.push(record);
-    if (me.deck.cards.length) {
-      const tweaks = el("div", null, "tweaks");
-      const find = el("button", "Find deck tweaks", "link-button");
-      find.type = "button";
-      find.addEventListener("click", () => showTweaks(me.deck, tweaks, "all"));
-      tweaks.append(find);
-      parts.push(tweaks);
-    }
-    show(out, ...parts);
-    showRecord(me.tag, record, 30);
+    show(out, playerLine(me), ...youTabs(me));
   } catch (error) {
     state.me = null;
     state.myDecks = undefined;
     show(out, errorBox(error));
   }
+}
+
+// Deck, record and tweaks share one spot, so the page stays short. A tab is
+// built the first time it's opened; the last one you used is remembered.
+const YOU_TABS = [["deck", "Deck"], ["record", "Record"], ["tweaks", "Tweaks"]];
+
+function youTabs(me) {
+  const bar = el("div", null, "tabs");
+  bar.setAttribute("role", "tablist");
+  bar.setAttribute("aria-label", "About you");
+  const panel = el("div", null, "tab-panel");
+  panel.setAttribute("role", "tabpanel");
+  panel.id = "you-panel";
+  const built = {};
+  const buttons = {};
+
+  function build(key) {
+    const box = el("div");
+    if (key === "deck") {
+      box.append(me.deck.cards.length ? deckView(me.deck, "yours")
+        : el("p", "No current deck in your profile.", "muted"));
+    } else if (key === "record") {
+      showRecord(me.tag, box, 30);
+    } else if (me.deck.cards.length) {
+      showTweaks(me.deck, box, "all");
+    } else {
+      box.append(el("p", "No current deck to tweak.", "muted"));
+    }
+    return box;
+  }
+
+  function select(key) {
+    for (const [k] of YOU_TABS) buttons[k].setAttribute("aria-selected", String(k === key));
+    panel.setAttribute("aria-labelledby", buttons[key].id);
+    built[key] = built[key] || build(key);
+    panel.replaceChildren(built[key]);
+    storageSet("decklens.youTab", key);
+  }
+
+  for (const [key, label] of YOU_TABS) {
+    const b = el("button", label, "tab");
+    b.type = "button";
+    b.id = "you-tab-" + key;
+    b.setAttribute("role", "tab");
+    b.setAttribute("aria-controls", panel.id);
+    b.addEventListener("click", () => select(key));
+    buttons[key] = b;
+    bar.append(b);
+  }
+  const saved = storageGet("decklens.youTab");
+  select(YOU_TABS.some(([k]) => k === saved) ? saved : "deck");
+  return [bar, panel];
 }
 
 // --- deck tweak finder ---------------------------------------------------------
@@ -404,12 +443,12 @@ async function showTweaks(deck, box, band) {
       body: JSON.stringify({ deck: knownIds(deck), band }),
     });
   } catch (error) {
-    show(box, el("p", "Deck tweaks", "label"), errorBox(error));
+    show(box, errorBox(error));
     return;
   }
   const bands = t.bands.filter((b) => b.base !== undefined);
   if (!t.swaps.length || !bands.length) {
-    show(box, el("p", "Deck tweaks", "label"), el("p", "Not enough stored battles to compare against yet.", "muted"));
+    show(box, el("p", "Not enough stored battles to compare against yet.", "muted"));
     return;
   }
   const sorter = el("div", null, "tabs");
@@ -445,7 +484,7 @@ async function showTweaks(deck, box, band) {
     table.tBodies[0].append(tr);
   }
   wrap.append(table);
-  show(box, el("p", "Deck tweaks", "label"), el("p", "Best swaps for:", "hint"), sorter, wrap,
+  show(box, el("p", "Best swaps for:", "hint"), sorter, wrap,
     el("p", "Win chance against the 60 most played decks in each rating range, from the model, " +
       "between equally skilled players with equal card levels. Ranges split rated players into " +
       "thirds. Swapped-in cards are judged plain (no Evo or Hero), and changes under about 1% " +
@@ -454,7 +493,55 @@ async function showTweaks(deck, box, band) {
 
 const RECORD_DAYS = [7, 30, 90];
 
-// Your own Ranked record against each archetype you've faced.
+// Eight small card pictures in a row: a deck you can take in at a glance.
+function miniDeck(deck) {
+  const list = el("ul", null, "mini-deck");
+  for (const card of deck.cards) {
+    const item = el("li");
+    if (card.hidden || card.id === null || card.id === undefined) {
+      item.append(el("span", "?", "mini-missing"));
+    } else {
+      const img = document.createElement("img");
+      const form = card.form === "evo" || card.form === "hero" ? "?form=" + card.form : "";
+      img.src = "/cards/" + encodeURIComponent(card.id) + ".png" + form;
+      img.alt = card.name + (FORM_LABELS[card.form] ? " (" + FORM_LABELS[card.form] + ")" : "");
+      img.title = img.alt;
+      img.width = 36;
+      img.height = 43;
+      img.loading = "lazy";
+      img.addEventListener("error", () => img.replaceWith(el("span", card.name, "mini-name")));
+      item.append(img);
+    }
+    list.append(item);
+  }
+  return list;
+}
+
+// Your latest games against one archetype, shown when you open its row.
+function recordDetail(a) {
+  const box = el("div", null, "record-detail");
+  if (!a.recent || !a.recent.length) {
+    box.append(el("p", "No game details stored.", "muted"));
+    return box;
+  }
+  for (const g of a.recent) {
+    const game = el("div", null, "record-game");
+    const line = el("p", null, "meeting");
+    line.append(el("span", RESULT_WORDS[g.result], "result-" + g.result), el("span", ago(g.time), "muted"));
+    game.append(line, miniDeck(g.deck));
+    box.append(game);
+  }
+  return box;
+}
+
+// Words a row can be found by: the archetype, plus every card the opponents played.
+function recordWords(a) {
+  const cards = (a.recent || []).flatMap((g) => g.deck.cards.map((c) => c.name));
+  return [a.archetype, ...cards].join(" ").toLowerCase();
+}
+
+// Your own Ranked record against each archetype you've faced: type to filter,
+// tap a row to see your latest games against it.
 async function showRecord(tag, box, days) {
   const tabs = el("div", null, "tabs");
   tabs.setAttribute("role", "group");
@@ -466,39 +553,65 @@ async function showRecord(tag, box, days) {
     b.addEventListener("click", () => showRecord(tag, box, d));
     tabs.append(b);
   }
-  show(box, el("p", "Your record", "label"), tabs, el("p", "Loading your games…", "muted"));
+  show(box, tabs, el("p", "Loading your games…", "muted"));
   let r;
   try {
     r = await api("/api/players/" + tagPath(tag) + "/record?days=" + days);
   } catch (error) {
-    show(box, el("p", "Your record", "label"), tabs, errorBox(error));
+    show(box, tabs, errorBox(error));
     return;
   }
-  const parts = [el("p", "Your record", "label"), tabs];
+  const parts = [tabs];
   if (!r.games) {
     parts.push(el("p", "No Ranked games in this window yet.", "muted"));
   } else {
     parts.push(el("p", "Ranked: " + r.wins + " wins from " + plural(r.games, "game", "games") +
       " (" + pct(r.wins / r.games) + ").", "detail"));
-    const wrap = el("div", null, "table-wrap");
-    const table = el("table", null, "tiers");
-    table.append(el("thead"), el("tbody"));
-    const head = el("tr");
-    for (const h of ["Against", "Record", "Win rate"]) head.append(el("th", h));
-    table.tHead.append(head);
+    const search = el("input", null, "record-search");
+    search.type = "search";
+    search.placeholder = "Find an archetype or card, e.g. golem or rocket";
+    search.setAttribute("aria-label", "Find an archetype or card");
+    search.maxLength = 40;
+    const list = el("ul", null, "record-list");
+    const none = el("p", "Nothing matches that.", "muted");
+    none.hidden = true;
+    let open = null;
     for (const a of r.archetypes) {
-      const tr = el("tr");
-      tr.append(el("th", a.archetype), el("td", a.wins + "–" + (a.games - a.wins)));
-      const rate = el("td", null, "record");
+      const item = el("li");
+      item.dataset.words = recordWords(a);
+      const row = el("button", null, "record-row");
+      row.type = "button";
+      row.setAttribute("aria-expanded", "false");
       const lean = a.range[0] > 0.5 ? " good" : a.range[1] < 0.5 ? " bad" : "";
-      const games = el("span", pct(a.range[0]) + "–" + pct(a.range[1]), "range");
-      rate.append(el("span", pct(a.rate), "rate" + lean), games);
-      if (a.games < 10) games.append(el("span", " (few)", "few"));
-      tr.append(rate);
-      table.tBodies[0].append(tr);
+      row.append(el("span", a.archetype, "row-name"),
+        el("span", a.wins + "–" + (a.games - a.wins), "row-record"),
+        el("span", pct(a.rate), "row-rate rate" + lean));
+      if (a.games < 10) row.title = "Few games: " + pct(a.range[0]) + "–" + pct(a.range[1]) + " likely";
+      let detail = null;
+      row.addEventListener("click", () => {
+        const opening = row.getAttribute("aria-expanded") !== "true";
+        if (open && open !== item) {   // one open row at a time
+          open.querySelector(".record-row").setAttribute("aria-expanded", "false");
+          open.querySelector(".record-detail").hidden = true;
+        }
+        detail = detail || item.appendChild(recordDetail(a));
+        detail.hidden = !opening;
+        row.setAttribute("aria-expanded", String(opening));
+        open = opening ? item : null;
+      });
+      item.append(row);
+      list.append(item);
     }
-    wrap.append(table);
-    parts.push(wrap);
+    search.addEventListener("input", () => {
+      const words = search.value.trim().toLowerCase().split(/\s+/).filter(Boolean);
+      let shown = 0;
+      for (const item of list.children) {
+        item.hidden = !words.every((w) => item.dataset.words.includes(w));
+        if (!item.hidden) shown++;
+      }
+      none.hidden = shown > 0;
+    });
+    parts.push(search, list, none);
   }
   if (!r.stored) {
     parts.push(el("p", "Only your last ~25 battles are counted. To keep a longer record, add your " +
