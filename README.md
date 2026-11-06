@@ -134,7 +134,8 @@ Other commands: `passwd` (new password, logs out everywhere), `logout-all`, `dis
 
 What the page does:
 - **You:** type your name (picked from the player index) or your tag to load your current deck; your tag is remembered in your browser.
-- **You: Deck, Record and Tweaks tabs** (the last one you used is remembered).
+- **Three pages: You, Scout, Meta**, tabs that stay at the top while you scroll. Auto-scout jumps to Scout when a battle starts; the last page you used is remembered.
+- **You: Deck, Today, Record, Rank and Tweaks tabs** (the last one you used is remembered).
 - **Today:** your latest Ranked session (games with no break over 45 minutes): wins and losses, each result in order, your streak, how far your rank moved, and a nudge to take a break after 3 losses in a row.
 - **Rank:** your global rank over 7, 30 or 90 days. Each time your games are collected (`--mine`), your profile rank is saved too.
 - **Copy to game:** every deck (yours, opponents', meta decks, tweak swaps) has a button with the game's own copy-deck link and a QR code: scan it with your phone to open the deck in Clash Royale. Evolution and Hero cards go first, so they land in their slots.

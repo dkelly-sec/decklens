@@ -22,7 +22,16 @@
     <p class="tagline">Matchup scouting for Clash Royale: Ranked and the 20-win challenge</p>
   </header>
 
+  <nav class="pages" aria-label="Pages">
+    <div class="tabs" role="tablist">
+      <button type="button" class="tab" role="tab" id="page-tab-you" aria-controls="page-you" data-page="you">You</button>
+      <button type="button" class="tab" role="tab" id="page-tab-scout" aria-controls="page-scout" data-page="scout">Scout</button>
+      <button type="button" class="tab" role="tab" id="page-tab-meta" aria-controls="page-meta" data-page="meta">Meta</button>
+    </div>
+  </nav>
+
   <main>
+    <div id="page-you" class="page" role="tabpanel" aria-labelledby="page-tab-you">
     <section aria-labelledby="me-heading" class="side-you">
       <h2 id="me-heading">You</h2>
       <form id="me-form" autocomplete="off">
@@ -35,6 +44,9 @@
       <div id="me-result" class="result" aria-live="polite"></div>
     </section>
 
+    </div>
+
+    <div id="page-scout" class="page" role="tabpanel" aria-labelledby="page-tab-scout" hidden>
     <section aria-labelledby="last-heading" class="side-them">
       <h2 id="last-heading">Last opponent</h2>
       <p class="hint">Your most recent Ranked, Trophy Road or 20-win challenge opponent, their deck, and how the matchup tends to go.</p>
@@ -58,6 +70,9 @@
       </form>
       <div id="find-result" class="result" aria-live="polite"></div>
     </section>
+    </div>
+
+    <div id="page-meta" class="page" role="tabpanel" aria-labelledby="page-tab-meta" hidden>
     <section aria-labelledby="meta-heading">
       <h2 id="meta-heading">Ranked meta</h2>
       <p class="hint">What the very top of the ladder is playing over the last 14 days, and how
@@ -65,6 +80,7 @@
       <div id="meta-bands" class="tabs" role="group" aria-label="How high on the ladder"></div>
       <div id="meta-result" class="result" aria-live="polite"></div>
     </section>
+    </div>
   </main>
 
   <footer>

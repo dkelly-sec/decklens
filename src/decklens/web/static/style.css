@@ -77,6 +77,14 @@ h2 { margin: 0 0 10px; font-size: 24px; display: flex; align-items: center; gap:
 .tagline { margin: 2px 0 0; }
 
 /* Which side a section is about: a short team bar beside its heading. */
+/* Page tabs: stay at the top while you scroll, so switching is one tap. */
+.pages { position: sticky; top: 0; z-index: 5; max-width: 720px; margin: 12px auto 0; padding: 8px 16px;
+  background: var(--bg); }
+.pages .tabs { margin: 0; box-shadow: var(--shadow); }
+.pages .tabs .tab { font-size: 17px; padding: 10px 12px; }
+.pages .tabs .tab[aria-selected="true"] { color: var(--text); background: var(--panel); box-shadow: var(--shadow); }
+.page[hidden] { display: none; }
+
 .side-you h2::before, .side-them h2::before {
   content: "";
   flex: none;

@@ -1341,6 +1341,7 @@ async function pollWatcher() {
   auto.lastId = latest.id;
   if (!fresh) return;
   const out = document.getElementById("find-result");
+  if (latest.kind !== "ended") setPage("scout");   // a battle started: show the opponent
   if (latest.kind === "unreadable") {
     if (out.scrollIntoView) out.scrollIntoView({ behavior: "smooth", block: "start" });
     battleUnreadable(out);
@@ -1638,6 +1639,25 @@ async function showMeta(top = 1000) {
     " when they played. Tap an archetype to see its most played decks.", "hint"), metaTable(m));
 }
 
+// --- pages ---------------------------------------------------------------------
+
+// You, Scout and Meta are separate pages, so each stays short. Auto-scout jumps
+// to Scout when a battle starts. The meta loads the first time it's opened.
+let metaLoaded = false;
+
+function setPage(key) {
+  for (const tab of document.querySelectorAll(".pages [data-page]")) {
+    const on = tab.dataset.page === key;
+    tab.setAttribute("aria-selected", String(on));
+    document.getElementById("page-" + tab.dataset.page).hidden = !on;
+  }
+  storageSet("decklens.page", key);
+  if (key === "meta" && !metaLoaded) {
+    metaLoaded = true;
+    showMeta();
+  }
+}
+
 // --- start -------------------------------------------------------------------
 
 async function showAccount() {
@@ -1690,7 +1710,11 @@ document.addEventListener("DOMContentLoaded", () => {
   autoBox.addEventListener("change", () => setAutoScout(autoBox.checked));
   autoBox.checked = storageGet("decklens.autoScout") === "1";
   if (autoBox.checked) setAutoScout(true);
-  showMeta();
+  for (const tab of document.querySelectorAll(".pages [data-page]")) {
+    tab.addEventListener("click", () => setPage(tab.dataset.page));
+  }
+  const page = storageGet("decklens.page");
+  setPage(["you", "scout", "meta"].includes(page) ? page : "you");
   const saved = asTag(storageGet("decklens.myTag") || "");
   if (saved) {
     document.getElementById("me-tag").value = saved;
