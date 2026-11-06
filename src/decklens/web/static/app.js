@@ -8,6 +8,27 @@ const state = { me: null };
 
 // --- small helpers -----------------------------------------------------------
 
+// Tabs: only the selected one is a Tab stop; arrow keys move between them
+// (and open the tab), Home and End jump to the ends, as tabs work everywhere.
+function selectTab(tab, on) {
+  tab.setAttribute("aria-selected", String(on));
+  tab.tabIndex = on ? 0 : -1;
+}
+
+document.addEventListener("keydown", (event) => {
+  const tab = event.target.closest && event.target.closest('[role="tab"]');
+  const list = tab && tab.closest('[role="tablist"]');
+  if (!list) return;
+  const tabs = [...list.querySelectorAll('[role="tab"]')];
+  const i = tabs.indexOf(tab);
+  const next = { ArrowRight: i + 1, ArrowLeft: i - 1, Home: 0, End: tabs.length - 1 }[event.key];
+  if (next === undefined) return;
+  event.preventDefault();
+  const target = tabs[(next + tabs.length) % tabs.length];
+  target.focus();
+  target.click();
+});
+
 // "Loading…" text with a turning ring, announced politely to screen readers.
 function loadingText(text) {
   const p = el("p", text, "muted loading");
@@ -609,7 +630,7 @@ function youTabs(me) {
   }
 
   function select(key) {
-    for (const [k] of YOU_TABS) buttons[k].setAttribute("aria-selected", String(k === key));
+    for (const [k] of YOU_TABS) selectTab(buttons[k], k === key);
     panel.setAttribute("aria-labelledby", buttons[key].id);
     built[key] = built[key] || build(key);
     panel.replaceChildren(built[key]);
@@ -718,11 +739,11 @@ function rankChart(points) {
 }
 
 async function showRank(tag, box, days) {
-  const tabs = el("div", null, "tabs");
+  const tabs = el("div", null, "chips");
   tabs.setAttribute("role", "group");
   tabs.setAttribute("aria-label", "How far back");
   for (const d of RANK_DAYS) {
-    const b = el("button", d + " days", "tab");
+    const b = el("button", d + " days", "chip-button");
     b.type = "button";
     b.setAttribute("aria-pressed", String(d === days));
     b.addEventListener("click", () => showRank(tag, box, d));
@@ -813,11 +834,11 @@ async function showTweaks(deck, box, band) {
       (band === "all" ? "" : "in this range ") + "yet. Try another range, or check back after more crawls.", "muted"));
     return;
   }
-  const sorter = el("div", null, "tabs");
+  const sorter = el("div", null, "chips");
   sorter.setAttribute("role", "group");
   sorter.setAttribute("aria-label", "Sort by rank range");
   for (const b of bands) {
-    const button = el("button", b.label, "tab");
+    const button = el("button", b.label, "chip-button");
     button.type = "button";
     button.setAttribute("aria-pressed", String(b.key === band));
     button.addEventListener("click", () => showTweaks(deck, box, b.key));
@@ -943,11 +964,11 @@ function recordWords(a) {
 // Your own Ranked record against each archetype you've faced: type to filter,
 // tap a row to see your latest games against it.
 async function showRecord(tag, box, days) {
-  const tabs = el("div", null, "tabs");
+  const tabs = el("div", null, "chips");
   tabs.setAttribute("role", "group");
   tabs.setAttribute("aria-label", "How far back");
   for (const d of RECORD_DAYS) {
-    const b = el("button", d + " days", "tab");
+    const b = el("button", d + " days", "chip-button");
     b.type = "button";
     b.setAttribute("aria-pressed", String(d === days));
     b.addEventListener("click", () => showRecord(tag, box, d));
@@ -1516,7 +1537,7 @@ async function showOpponentDecks(player, container) {
   const buttons = {};
 
   async function select(mode) {
-    for (const m of MODES) buttons[m].setAttribute("aria-selected", String(m === mode));
+    for (const m of MODES) selectTab(buttons[m], m === mode);
     body.setAttribute("aria-labelledby", buttons[mode].id);
     if (!rendered[mode]) {  // built once per tab; a promise, so fast clicks don't build twice
       const decks = modes[mode] || [];
@@ -1632,7 +1653,7 @@ async function showMeta(top = 1000) {
   }
   const tiers = document.getElementById("meta-bands");
   tiers.replaceChildren(...m.tiers.map((t) => {
-    const button = el("button", t.label, "tab");
+    const button = el("button", t.label, "chip-button");
     button.type = "button";
     button.setAttribute("aria-pressed", String(t.top === m.top));
     button.addEventListener("click", () => showMeta(t.top));
@@ -1657,7 +1678,7 @@ let metaLoaded = false;
 function setPage(key) {
   for (const tab of document.querySelectorAll(".pages [data-page]")) {
     const on = tab.dataset.page === key;
-    tab.setAttribute("aria-selected", String(on));
+    selectTab(tab, on);
     document.getElementById("page-" + tab.dataset.page).hidden = !on;
   }
   storageSet("decklens.page", key);

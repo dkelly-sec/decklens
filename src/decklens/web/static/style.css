@@ -48,6 +48,19 @@
   }
 }
 
+/* Increase Contrast (Windows high contrast, macOS Increase contrast): darker
+   or lighter text and lines, solid borders around every panel. */
+@media (prefers-contrast: more) {
+  :root { --muted: #2c3650; --line: #6b7894; --shadow: none; }
+}
+@media (prefers-contrast: more) and (prefers-color-scheme: dark) {
+  :root { --muted: #d5dbea; --line: #8a96b4; }
+}
+@media (prefers-contrast: more) {
+  section, .record-row, .chip-button, .tabs { border: 1px solid var(--line); }
+  a, .meta-name { text-decoration-thickness: 2px; }
+}
+
 * { box-sizing: border-box; }
 
 body {
@@ -250,11 +263,9 @@ a { color: var(--blue); text-underline-offset: 3px; }
 /* --- matchup ------------------------------------------------------------------ */
 
 .matchup {
-  margin-top: 14px;
-  padding: 14px;
-  border: 1px solid var(--line);
-  border-radius: 12px;
-  background: var(--sunk);
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
 }
 .matchup .label { margin-top: 0; }
 .archetypes { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px 12px; margin: 0 0 8px; font-weight: 600; }
@@ -327,8 +338,6 @@ a { color: var(--blue); text-underline-offset: 3px; }
 .meta-decks .mini-deck { margin-bottom: 6px; }
 .trend { display: block; width: 112px; height: 28px; }
 .trend rect { fill: var(--blue); }
-#meta-bands .tab[aria-pressed="true"] { color: var(--text); background: var(--panel); box-shadow: var(--shadow); }
-#meta-bands[hidden] { display: none; }
 
 .rematch { margin: 12px 0 4px; padding: 12px 14px; border-radius: 12px; background: var(--red-soft); }
 .rematch .label { margin-top: 0; }
@@ -338,8 +347,6 @@ a { color: var(--blue); text-underline-offset: 3px; }
 .result-lost { color: var(--red); }
 .rematch .scout-read { margin-top: 2px; }
 
-.tab-panel .tabs .tab[aria-pressed="true"],
-#meta-bands .tab[aria-pressed="true"] { color: var(--text); background: var(--panel); box-shadow: var(--shadow); }
 
 .tweak-table tbody th { white-space: normal; font-weight: 600; color: var(--text); }
 .tweak-table tr.now th, .tweak-table tr.now td { color: var(--muted); }
@@ -428,6 +435,16 @@ a { color: var(--blue); text-underline-offset: 3px; }
 .tabs.strip::-webkit-scrollbar { display: none; }
 .tabs.strip .tab { flex: 1 0 auto; padding-left: 8px; padding-right: 8px; }
 @media (max-width: 480px) { .tabs.strip .tab { font-size: 0.9375rem; padding-left: 6px; padding-right: 6px; } }
+
+/* Filters (how far back, which ranks): small outlined pills, so they read as
+   "narrow this down" and never get mistaken for the tabs that change the view. */
+.chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 10px 0; }
+.chip-button {
+  padding: 4px 12px; border: 1px solid var(--line); border-radius: 999px;
+  background: transparent; color: var(--muted); font-size: 0.875rem; font-weight: 600;
+}
+.chip-button:hover { filter: none; color: var(--text); border-color: var(--muted); }
+.chip-button[aria-pressed="true"] { color: var(--blue); border-color: var(--blue); background: var(--blue-soft); }
 
 .key-cards { margin: 4px 0 0; padding-left: 20px; font-size: 0.875rem; }
 .key-cards .yours { color: var(--blue); font-weight: 600; }
