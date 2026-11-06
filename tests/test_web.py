@@ -1215,29 +1215,28 @@ def _meta_rows():
     rows = []
     for k in range(400):
         when = now - timedelta(days=k % 7, hours=1)
-        rating_a, rating_b = 1800 + k, 1800 + (k * 7) % 400
-        rows.append((k % 3 == 0, MY_DECK, None, OPP_DECK, None, when, rating_a, rating_b))
-    return [(int(w), *rest) for w, *rest in rows]
+        rank = (50, 500, 5000)[k % 3]          # top 200, top 1,000, outside both
+        rows.append((int(k % 2 == 0), MY_DECK, rank, OPP_DECK, 100, when, None, None))
+    return rows
 
 
-def test_meta_shares_win_rates_days_and_rating_bands(predictor):
+def test_meta_is_the_top_of_the_ladder_by_day(predictor):
     from decklens.web.meta import meta
     from decklens.web.tiers import TierStats
 
     t = TierStats(predictor.archetypes, _meta_rows).table()
     names = predictor.archetypes.names
-    m = meta(t, names)
-    assert [b["key"] for b in m["bands"]] == ["all", "low", "mid", "high"]
-    top = {a["name"]: a for a in m["archetypes"]}
+    m = meta(t, names)                                   # top 1,000 by default
+    assert [x["top"] for x in m["tiers"]] == [200, 1000] and m["top"] == 1000
+    assert m["decks"] == 2 * 267                         # the rank-5000 games are left out
     mine = names[int(predictor.archetypes.assign([MY_DECK])[0])]
-    assert top[mine]["share"] == 0.5 and top[mine]["games"] == 400
-    assert top[mine]["win_rate"] == pytest.approx(266 / 400, abs=0.001)   # side 0 wins 2 in 3
+    top = {a["name"]: a for a in m["archetypes"]}
+    assert top[mine]["share"] == 0.5 and top[mine]["games"] == 267
     assert len(top[mine]["daily"]) == 14 and top[mine]["daily"][-1]["games"] > 0
-    assert sum(d["games"] for d in top[mine]["daily"][:7]) == 0           # nothing a week+ ago
-    high = meta(t, names, "high")
-    assert high["decks"] < m["decks"] and high["band"] == "high"
+    assert sum(d["games"] for d in top[mine]["daily"][:7]) == 0        # nothing a week+ ago
+    assert meta(t, names, 200)["decks"] == 2 * 134
     with pytest.raises(KeyError):
-        meta(t, names, "nope")
+        meta(t, names, 500)
 
 
 def test_meta_route_needs_stored_battles(predictor):
@@ -1247,9 +1246,9 @@ def test_meta_route_needs_stored_battles(predictor):
     assert app.get("/api/meta").status_code == 503
     predictor.tiers = TierStats(predictor.archetypes, _meta_rows)
     try:
-        ok = app.get("/api/meta?band=mid")
-        assert ok.status_code == 200 and ok.json()["band"] == "mid"
-        assert app.get("/api/meta?band=<script>").status_code == 422
+        ok = app.get("/api/meta?top=200")
+        assert ok.status_code == 200 and ok.json()["top"] == 200
+        assert app.get("/api/meta?top=5000").status_code == 422
     finally:
         predictor.tiers = None
 

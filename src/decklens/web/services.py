@@ -208,17 +208,17 @@ def my_record(games: Sequence[tuple], battle_log: list[dict[str, Any]], tag: str
                       if won is not None), key=lambda g: g[0], reverse=True)
     rows: dict[str, list[Any]] = {}
     if decided:
-        for (when, won, _, raw), arch in zip(decided, archetypes.labels([g[2] for g in decided])):
-            row = rows.setdefault(arch, [0, 0, []])
+        for (when, won, deck, raw), arch in zip(decided, archetypes.labels([g[2] for g in decided])):
+            row = rows.setdefault(arch, [0, 0, [], archetypes.family(deck)])
             row[0] += int(won)
             row[1] += 1
             if len(row[2]) < RECORD_RECENT:  # newest first already
                 row[2].append({"time": when.isoformat(), "result": "won" if won else "lost",
                                "deck": _deck(_cards(raw), "ranked")})
     out = []
-    for arch, (wins, n, recent) in sorted(rows.items(), key=lambda kv: -kv[1][1]):
+    for arch, (wins, n, recent, family) in sorted(rows.items(), key=lambda kv: -kv[1][1]):
         lo, hi = wilson_interval(wins, n)
-        out.append({"archetype": arch, "wins": wins, "games": n,
+        out.append({"archetype": arch, "family": family, "wins": wins, "games": n,
                     "rate": round(wins / n, 3), "range": [round(lo, 3), round(hi, 3)],
                     "recent": recent})
     wins = sum(int(g[1]) for g in decided)

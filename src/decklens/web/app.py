@@ -28,6 +28,7 @@ from ..archetypes import ArchetypeModel
 from ..model import LinearMatchupModel, TreeMatchupModel
 from .auth import Auth, User
 from .meta import meta
+from .tiers import TIERS
 from .tweaks import find_tweaks
 from .watch import WatchBoard
 from .security import (
@@ -347,15 +348,12 @@ def create_app(services: Services, *, hsts: bool = False) -> FastAPI:
         return table
 
     @app.get("/api/meta", dependencies=[*signed_in, Depends(limit("meta"))])
-    def meta_route(band: str = Query(default="all", pattern="^(all|low|mid|high)$")
-                   ) -> dict[str, Any]:
+    def meta_route(top: int = Query(default=1000, ge=200, le=1000)) -> dict[str, Any]:
+        if top not in TIERS:
+            raise HTTPException(422, "top must be 200 or 1000")
         table = battle_table()
-        try:
-            return services.cache.get_or_set(
-                ("meta", band, id(table)),
-                lambda: meta(table, services.predictor.archetypes.names, band))
-        except KeyError:
-            raise HTTPException(404, "Not enough rated players for rating bands yet") from None
+        return services.cache.get_or_set(
+            ("meta", top, id(table)), lambda: meta(table, services.predictor.archetypes.names, top))
 
     @app.post("/api/tweaks", dependencies=[*signed_in, Depends(limit("tweaks"))])
     def tweaks_route(body: TweakRequest, model: Predictor = Depends(predictor)) -> dict[str, Any]:

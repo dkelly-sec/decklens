@@ -524,7 +524,7 @@ function miniDeck(deck) {
 
 // Your latest games against one archetype, shown when you open its row.
 function recordDetail(a) {
-  const box = el("div", null, "record-detail");
+  const box = el("div");
   if (!a.recent || !a.recent.length) {
     box.append(el("p", "No game details stored.", "muted"));
     return box;
@@ -537,6 +537,41 @@ function recordDetail(a) {
     box.append(game);
   }
   return box;
+}
+
+function total(variants) {
+  return variants.reduce((n, a) => n + a.games, 0);
+}
+
+// A row you can open: name, wins–losses and win rate; opening it shows detail()
+// underneath (built once). One open row per list.
+function expandRow(list, name, wins, games, range, detail, extraClass) {
+  const item = el("li");
+  const row = el("button", null, "record-row" + (extraClass ? " " + extraClass : ""));
+  row.type = "button";
+  row.setAttribute("aria-expanded", "false");
+  const rate = wins / games;
+  const lean = range ? (range[0] > 0.5 ? " good" : range[1] < 0.5 ? " bad" : "")
+    : (rate >= 0.6 ? " good" : rate <= 0.4 ? " bad" : "");
+  row.append(el("span", name, "row-name"), el("span", wins + "–" + (games - wins), "row-record"),
+    el("span", pct(rate), "row-rate rate" + lean));
+  if (games < 10) row.title = "Few games, so the win rate can swing a lot";
+  let box = null;
+  item.open = (opening, exclusive = true) => {  // a search opens every match at once
+    if (opening && exclusive && list.openItem && list.openItem !== item) list.openItem.open(false);
+    if (opening && !box) {
+      box = el("div", null, "record-detail");
+      box.append(detail());
+      item.append(box);
+    }
+    if (box) box.hidden = !opening;
+    row.setAttribute("aria-expanded", String(opening));
+    if (opening && exclusive) list.openItem = item;
+    else if (list.openItem === item) list.openItem = null;
+  };
+  row.addEventListener("click", () => item.open(row.getAttribute("aria-expanded") !== "true"));
+  item.append(row);
+  return item;
 }
 
 // Words a row can be found by: the archetype, plus every card the opponents played.
@@ -574,45 +609,44 @@ async function showRecord(tag, box, days) {
       " (" + pct(r.wins / r.games) + ").", "detail"));
     const search = el("input", null, "record-search");
     search.type = "search";
-    search.placeholder = "Find an archetype or card, e.g. golem or rocket";
-    search.setAttribute("aria-label", "Find an archetype or card");
+    search.placeholder = "Find a win condition, deck or card, e.g. golem or rocket";
+    search.setAttribute("aria-label", "Find a win condition, deck or card");
     search.maxLength = 40;
-    const list = el("ul", null, "record-list");
     const none = el("p", "Nothing matches that.", "muted");
     none.hidden = true;
-    let open = null;
+    // Win condition first ("Golem"), then the versions of it you've faced ("Golem Pump").
+    const families = new Map();
     for (const a of r.archetypes) {
-      const item = el("li");
-      item.dataset.words = recordWords(a);
-      const row = el("button", null, "record-row");
-      row.type = "button";
-      row.setAttribute("aria-expanded", "false");
-      const lean = a.range[0] > 0.5 ? " good" : a.range[1] < 0.5 ? " bad" : "";
-      row.append(el("span", a.archetype, "row-name"),
-        el("span", a.wins + "–" + (a.games - a.wins), "row-record"),
-        el("span", pct(a.rate), "row-rate rate" + lean));
-      if (a.games < 10) row.title = "Few games: " + pct(a.range[0]) + "–" + pct(a.range[1]) + " likely";
-      let detail = null;
-      row.addEventListener("click", () => {
-        const opening = row.getAttribute("aria-expanded") !== "true";
-        if (open && open !== item) {   // one open row at a time
-          open.querySelector(".record-row").setAttribute("aria-expanded", "false");
-          open.querySelector(".record-detail").hidden = true;
-        }
-        detail = detail || item.appendChild(recordDetail(a));
-        detail.hidden = !opening;
-        row.setAttribute("aria-expanded", String(opening));
-        open = opening ? item : null;
-      });
-      item.append(row);
+      if (!families.has(a.family)) families.set(a.family, []);
+      families.get(a.family).push(a);
+    }
+    const list = el("ul", null, "record-list");
+    const familyItems = [];
+    for (const [family, variants] of [...families].sort((x, y) => total(y[1]) - total(x[1]))) {
+      const wins = variants.reduce((n, a) => n + a.wins, 0);
+      const games = total(variants);
+      const inner = el("ul", null, "record-list variants");
+      for (const a of variants) {
+        const item = expandRow(inner, a.archetype, a.wins, a.games, a.range, () => recordDetail(a));
+        item.dataset.words = recordWords(a) + " " + family.toLowerCase();
+        inner.append(item);
+      }
+      const item = expandRow(list, family, wins, games, null, () => inner, "family-row");
       list.append(item);
+      familyItems.push([item, inner]);
     }
     search.addEventListener("input", () => {
       const words = search.value.trim().toLowerCase().split(/\s+/).filter(Boolean);
       let shown = 0;
-      for (const item of list.children) {
-        item.hidden = !words.every((w) => item.dataset.words.includes(w));
-        if (!item.hidden) shown++;
+      for (const [item, inner] of familyItems) {
+        let any = false;
+        for (const v of inner.children) {
+          v.hidden = !words.every((w) => v.dataset.words.includes(w));
+          any = any || !v.hidden;
+        }
+        item.hidden = !any;
+        if (any) shown++;
+        if (words.length) item.open(any, false);   // searching: show the matching versions
       }
       none.hidden = shown > 0;
     });
@@ -1203,32 +1237,32 @@ function metaTable(m) {
   return wrap;
 }
 
-async function showMeta(band = "all") {
+async function showMeta(top = 1000) {
   const out = document.getElementById("meta-result");
   show(out, el("p", "Loading the meta…", "muted"));
   let m;
   try {
-    m = await api("/api/meta?band=" + encodeURIComponent(band));
+    m = await api("/api/meta?top=" + encodeURIComponent(top));
   } catch (error) {
     show(out, errorBox(error));
     return;
   }
-  const bands = document.getElementById("meta-bands");
-  bands.replaceChildren(...m.bands.map((b) => {
-    const button = el("button", b.label, "tab");
+  const tiers = document.getElementById("meta-bands");
+  tiers.replaceChildren(...m.tiers.map((t) => {
+    const button = el("button", t.label, "tab");
     button.type = "button";
-    button.setAttribute("aria-pressed", String(b.key === m.band));
-    button.addEventListener("click", () => showMeta(b.key));
+    button.setAttribute("aria-pressed", String(t.top === m.top));
+    button.addEventListener("click", () => showMeta(t.top));
     return button;
   }));
-  bands.hidden = m.bands.length < 2;
   if (!m.archetypes.length) {
-    show(out, el("p", "No stored ranked battles in this range yet.", "muted"));
+    show(out, el("p", "No stored battles between two top " + m.top.toLocaleString() +
+      " players yet.", "muted"));
     return;
   }
-  show(out, el("p", plural(m.decks, "deck", "decks") + " from the last " + m.days + " days" +
-    (m.band === "all" ? "" : ", rating " + m.bands.find((b) => b.key === m.band).label) +
-    ". Rating bands split the rated players into thirds.", "hint"), metaTable(m));
+  show(out, el("p", m.decks.toLocaleString() + " decks from the last " + m.days + " days, only " +
+    "from battles where both players were in the global top " + m.top.toLocaleString() +
+    " when they played.", "hint"), metaTable(m));
 }
 
 // --- start -------------------------------------------------------------------

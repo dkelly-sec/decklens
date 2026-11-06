@@ -1,5 +1,6 @@
 """The ranked meta from stored battles: how often each archetype is played and how
-it does, day by day, overall or within a rating (medals) band.
+it does, day by day, at the very top of the ladder: only battles where both
+players were in the global top 1,000 (or top 200) when they played.
 
 Uses the same in-memory battle table as the matchup rows (tiers.py), so it costs
 a few numpy operations per request. Rating bands are cut from the data itself
@@ -15,7 +16,7 @@ from typing import Any
 import numpy as np
 
 from ..model import wilson_interval
-from .tiers import WINDOW_DAYS, BattleTable
+from .tiers import TIERS, WINDOW_DAYS, BattleTable
 
 MIN_RATED_SIDES = 300   # fewer known ratings than this: no bands, just "all"
 TOP_ARCHETYPES = 15
@@ -51,22 +52,20 @@ def in_band(ratings: np.ndarray, band: dict[str, Any]) -> np.ndarray:
     return ok
 
 
-def meta(t: BattleTable, names: list[str], band_key: str = "all",
+def meta(t: BattleTable, names: list[str], top: int = 1000,
          today: date | None = None) -> dict[str, Any]:
-    bands = rating_bands(t)
-    band = next((b for b in bands if b["key"] == band_key), None)
-    if band is None:
-        raise KeyError(band_key)
+    if top not in TIERS:
+        raise KeyError(top)
     today = today or date.today()
     days = WINDOW_DAYS
-    side0, side1 = in_band(t.rating0, band), in_band(t.rating1, band)
+    side0 = side1 = t.worst <= top   # both players inside the tier at the time
     archs = np.concatenate([t.arch0[side0], t.arch1[side1]])
     other = np.concatenate([t.arch1[side0], t.arch0[side1]])
     won = np.concatenate([t.winner[side0] == 0, t.winner[side1] == 1])
     day = np.concatenate([t.days_ago[side0], t.days_ago[side1]])
     total = len(archs)
-    out: dict[str, Any] = {"bands": [{"key": b["key"], "label": b["label"]} for b in bands],
-                           "band": band["key"], "days": days, "decks": int(total),
+    out: dict[str, Any] = {"tiers": [{"top": n, "label": f"Top {n:,}"} for n in TIERS],
+                           "top": top, "days": days, "decks": int(total),
                            "dates": [(today - timedelta(days=d)).isoformat()
                                      for d in range(days - 1, -1, -1)], "archetypes": []}
     if not total:

@@ -49,7 +49,8 @@ def _deck_matrix(vocab: CardVocab, decks: Sequence[Sequence[int]]) -> np.ndarray
 # Hound deck); a second win condition is just another card for k-means to split on.
 # shortcut: hand-kept list matched by the API's English card names; add new win conditions as Supercell releases them.
 WIN_CONDITIONS = (
-    "Golem", "Lava Hound", "Electro Giant", "Goblin Giant", "Rune Giant", "Elixir Golem",
+    "Golem", "Lava Hound", "Electro Giant", "Goblin Giant", "Minion Giant", "Rune Giant",
+    "Elixir Golem",
     "Royal Giant", "Giant", "X-Bow", "Mortar", "Graveyard", "Goblin Barrel", "Hog Rider",
     "Royal Hogs", "Ram Rider", "Battle Ram", "Three Musketeers", "Sparky", "Balloon", "Miner",
     "Goblin Drill", "Skeleton Barrel", "Wall Breakers", "Giant Skeleton", "Royal Recruits",
@@ -293,6 +294,11 @@ class ArchetypeModel:
                     need[g, self.vocab.index[c]] = 1.0
         has = present.astype(float) @ need.T >= need.sum(axis=1)
         return has[:, self.groups]
+
+    def family(self, deck: Sequence[int]) -> str:
+        """The deck's win condition ("X-Bow"), or "Other" without one from the list."""
+        key = _deck_key(deck, self._wincons)
+        return _key_name(self.vocab, key) if key else "Other"
 
     def labels(self, decks: Sequence[Sequence[int]]) -> list[str]:
         """Archetype name for each deck, but never one naming a card the deck lacks:
