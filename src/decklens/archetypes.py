@@ -63,6 +63,61 @@ SHORT_NAMES = {"Hog Rider": "Hog"}
 PUMP = "Elixir Collector"   # players call it pump: "Golem Pump"
 CYCLE_MAX_ELIXIR = 3.2      # cycle decks go by average elixir: "Hog 2.6", "X-Bow 3.0"
 
+SPELL_RANGE = 28  # the game numbers spells 28xxxxxx
+SPLASH = ("Baby Dragon", "Ice Wizard", "Bowler", "Executioner", "Wizard", "Witch",
+          "Electro Dragon", "Valkyrie", "Dark Prince", "Magic Archer")
+
+
+@dataclass(frozen=True)
+class NameRule:
+    """A deck name players actually use. It applies to a deck that has every card in
+    needs (needs[0] is its main win condition), at least one of one_of, none of
+    without, and, with no_other_spells, no spell besides the needed ones."""
+    name: str
+    needs: tuple[str, ...]
+    one_of: tuple[str, ...] = ()
+    without: tuple[str, ...] = ()
+    no_other_spells: bool = False
+
+    def fits(self, cards: set[str], spells: set[str]) -> bool:
+        return (all(c in cards for c in self.needs)
+                and (not self.one_of or any(c in cards for c in self.one_of))
+                and not any(c in cards for c in self.without)
+                and not (self.no_other_spells and spells - set(self.needs)))
+
+
+# Checked in order before the generic "win condition + card" name; the first that
+# fits 80%+ of a group's decks names it. Add players' names here as they come up.
+PLAYER_NAMES = (
+    NameRule("Hog EQ", ("Hog Rider", "Earthquake")),
+    NameRule("Pigs EQ", ("Royal Hogs", "Earthquake")),
+    NameRule("LavaLoon", ("Lava Hound", "Balloon")),
+    NameRule("PEKKA Bridge Spam", ("Battle Ram", "P.E.K.K.A")),
+    NameRule("Bridge Spam", ("Battle Ram",)),
+    NameRule("Hyperbait", ("Goblin Barrel",), no_other_spells=True),
+    NameRule("Splashyard", ("Graveyard",), one_of=SPLASH, without=("Poison", "Freeze")),
+)
+RULES = {r.name: r for r in PLAYER_NAMES}
+
+
+def _deck_names(vocab: CardVocab, deck: Iterable[int]) -> tuple[set[str], set[str]]:
+    """(card names, spell names) of a deck's plain cards."""
+    plain = [c for c in deck if c < FORM_TOKEN["evo"]]
+    return ({vocab.name(c) for c in plain},
+            {vocab.name(c) for c in plain if c // 1_000_000 == SPELL_RANGE})
+
+
+def _player_name(vocab: CardVocab, key: tuple[int, ...], members: Counter) -> NameRule | None:
+    total = sum(members.values())
+    for rule in PLAYER_NAMES:
+        if not key or vocab.name(key[0]) != rule.needs[0] or not total:
+            continue
+        fit = sum(n for deck, n in members.items() if rule.fits(*_deck_names(vocab, deck)))
+        if fit / total >= NAME_SHARE:
+            return rule
+    return None
+
+
 # A card goes in an archetype's name only if nearly all its decks run it, so the
 # name never promises a card the deck you're looking at doesn't have.
 NAME_SHARE = 0.8
@@ -136,13 +191,17 @@ def _signature_name(vocab: CardVocab, share: np.ndarray, global_share: np.ndarra
 
 
 def _archetype_name(vocab: CardVocab, key: tuple[int, ...], share: np.ndarray,
-                    global_share: np.ndarray, avg_elixir: float | None
-                    ) -> tuple[str, tuple[int, ...]]:
+                    global_share: np.ndarray, avg_elixir: float | None,
+                    members: Counter | None = None) -> tuple[str, tuple[int, ...]]:
     """('Giant Graveyard' / 'Golem Pump' / 'X-Bow 3.0' / 'Graveyard Poison', the cards the
     name names);
     signature cards (and no named cards to insist on) without a win condition."""
     if not key:
         return _signature_name(vocab, share, global_share), ()
+    rule = _player_name(vocab, key, members or Counter())
+    if rule is not None:
+        by_name = {vocab.name(c): c for c in vocab.card_ids}
+        return rule.name, tuple(by_name[n] for n in rule.needs if n in by_name)
     head = _key_name(vocab, key)
     core = [vocab.card_ids[i] for i in np.argsort(-share * (share / np.maximum(global_share, _EPS)))
             if share[i] >= NAME_SHARE and vocab.card_ids[i] < FORM_TOKEN["evo"]
@@ -230,7 +289,7 @@ class ArchetypeModel:
         renumber = []
         for g in range(m):
             name, cards = _archetype_name(vocab, group_key[g], _card_share(vocab, merged[g]),
-                                          global_share, _avg_elixir(vocab, merged[g]))
+                                          global_share, _avg_elixir(vocab, merged[g]), merged[g])
             if name not in names:
                 names.append(name)
                 named.append(cards)
@@ -314,7 +373,12 @@ class ArchetypeModel:
         out = []
         for deck, i in zip(decks, self.assign(decks)):
             named = self.named[i] if self.named else ()
-            if all(c in set(deck) for c in named):
+            rule = RULES.get(self.names[i])
+            if rule is not None:
+                ok = rule.fits(*_deck_names(self.vocab, deck))   # "Hyperbait" with a Log isn't
+            else:
+                ok = all(c in set(deck) for c in named)
+            if ok:
                 out.append(self.names[i])
             else:
                 key = _deck_key(deck, self._wincons)

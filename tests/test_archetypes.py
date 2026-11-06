@@ -237,3 +237,53 @@ def test_groups_with_the_same_name_are_pooled_not_numbered(real):
     _, model = real
     assert len(set(model.names)) == len(model.names)
     assert not any(name.endswith(")") for name in model.names)
+
+
+# Real id ranges matter here: spells are 28xxxxxx (Hyperbait means no spell but the Barrel).
+PN = {"Hog Rider": 26000021, "Royal Hogs": 26000059, "Earthquake": 28000014,
+      "Goblin Barrel": 28000004, "Graveyard": 28000010, "Battle Ram": 26000036,
+      "Giant": 26000003, "Sparky": 26000033, "The Log": 28000011, "Barbarian Barrel": 28000015,
+      "Tornado": 28000012, "Arrows": 28000001, "Zap": 28000008, "Rage": 28000002,
+      "Poison": 28000009, "Baby Dragon": 26000015, "Ice Wizard": 26000023, "Princess": 26000026,
+      "Goblin Gang": 26000041, "Dart Goblin": 26000040, "Goblin Hut": 27000001,
+      "Lumberjack": 26000035, "Bandit": 26000046, "Magic Archer": 26000062,
+      "Royal Ghost": 26000050, "Electro Wizard": 26000042, "Mini P.E.K.K.A": 26000018,
+      "Dark Prince": 26000027, "Skeletons": 26000010, "Cannon": 27000000, "Musketeer": 26000014,
+      "Ice Spirit": 26000030, "Valkyrie": 26000011, "Electro Spirit": 26000084, "Knight": 26000000}
+PLAYER_DECKS = {
+    "Hog EQ": ["Hog Rider", "Earthquake", "Skeletons", "Cannon", "Musketeer", "Ice Spirit",
+               "Valkyrie", "Electro Spirit"],
+    "Pigs EQ": ["Royal Hogs", "Earthquake", "Skeletons", "Cannon", "Musketeer", "Ice Spirit",
+                "Valkyrie", "Knight"],
+    "Hyperbait": ["Goblin Barrel", "Princess", "Goblin Gang", "Dart Goblin", "Ice Spirit",
+                  "Knight", "Cannon", "Skeletons"],
+    "Splashyard": ["Graveyard", "Baby Dragon", "Ice Wizard", "Knight", "Barbarian Barrel",
+                   "Tornado", "Goblin Hut", "Valkyrie"],
+    "Bridge Spam": ["Battle Ram", "Lumberjack", "Bandit", "Magic Archer", "Royal Ghost",
+                    "Electro Wizard", "Arrows", "Dark Prince"],
+    "Giant Sparky": ["Giant", "Sparky", "Mini P.E.K.K.A", "Electro Wizard", "Rage", "Zap",
+                     "Goblin Gang", "Dark Prince"],
+}
+
+
+def _pn_deck(names):
+    return tuple(sorted(PN[n] for n in names))
+
+
+def test_names_players_actually_use():
+    start = datetime(2026, 10, 1, tzinfo=timezone.utc)
+    kinds = list(PLAYER_DECKS)
+    rng = np.random.default_rng(2)
+    matchups = [Matchup(f"p{k}", start, _pn_deck(PLAYER_DECKS[kinds[rng.integers(len(kinds))]]),
+                        _pn_deck(PLAYER_DECKS[kinds[rng.integers(len(kinds))]]), 0.0, 0.0, k % 2)
+                for k in range(1200)]
+    vocab = CardVocab.build(matchups, names={i: n for n, i in PN.items()})
+    model = ArchetypeModel.fit(vocab, matchups, 6, 20.0)
+    for kind, cards in PLAYER_DECKS.items():
+        assert model.labels([_pn_deck(cards)]) == [kind]
+    # A Hyperbait list with The Log in it isn't Hyperbait any more: just "Goblin Barrel".
+    with_log = [c if c != "Dart Goblin" else "The Log" for c in PLAYER_DECKS["Hyperbait"]]
+    assert model.labels([_pn_deck(with_log)]) == ["Goblin Barrel"]
+    # Graveyard with Poison is a Poison deck, not Splashyard.
+    poison_yard = [c if c != "Tornado" else "Poison" for c in PLAYER_DECKS["Splashyard"]]
+    assert model.labels([_pn_deck(poison_yard)]) != ["Splashyard"]
