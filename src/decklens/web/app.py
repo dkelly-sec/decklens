@@ -229,10 +229,10 @@ def create_app(services: Services, *, hsts: bool = False) -> FastAPI:
                 log.warning("stored meetings unavailable: %s", type(exc).__name__)
         meetings = rematches(me, them, upstream("battlelog", me), stored)
         if services.predictor is not None:
-            for m in meetings:
-                ids = card_ids(m["deck"]["cards"])
-                m["archetype"] = services.predictor.archetypes.names[
-                    int(services.predictor.archetypes.assign([tuple(ids)])[0])]
+            labels = services.predictor.archetypes.labels(
+                [tuple(card_ids(m["deck"]["cards"])) for m in meetings])
+            for m, label in zip(meetings, labels):
+                m["archetype"] = label
         return {"meetings": meetings}
 
     @app.get("/api/search", dependencies=[*signed_in, Depends(limit("search"))])

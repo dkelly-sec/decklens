@@ -212,3 +212,22 @@ def test_win_condition_pairs_dont_explode_the_archetype_count():
                 for k in range(2000)]
     model = ArchetypeModel.fit(CardVocab.build(matchups, names=names), matchups, 10, 20)
     assert len(model.names) <= len(wincons) + 10  # not one per pair (66 pairs here)
+
+
+def test_a_name_never_names_a_card_the_deck_lacks(real):
+    _, model = real
+    decks = {m.deck_a for m in _real_matchups(400, seed=11)}
+    for deck, label in zip(decks, model.labels(list(decks))):
+        named = [REAL_IDS[w] for w in REAL_IDS if w in label and w not in ("Hog Rider",)]
+        assert all(c in deck for c in named), (label, deck)
+    # Every Graveyard deck in training ran Poison; one without it is just "Graveyard".
+    no_poison = tuple(REAL_IDS[c] for c in ["Graveyard", "Tornado", "Knight", "Baby Dragon",
+                                             "Ice Wizard", "Bowler", "Valkyrie", "The Log"])
+    assert model.labels([no_poison]) == ["Graveyard"]
+    assert model.labels([no_poison])[0] != model.names[model.assign([no_poison])[0]]
+
+
+def test_groups_with_the_same_name_are_pooled_not_numbered(real):
+    _, model = real
+    assert len(set(model.names)) == len(model.names)
+    assert not any(name.endswith(")") for name in model.names)

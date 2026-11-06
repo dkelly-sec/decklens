@@ -206,10 +206,10 @@ def my_record(games: Sequence[tuple], battle_log: list[dict[str, Any]], tag: str
                                         list(them.cards)))
     decided = sorted(((t, won, deck, raw) for t, (won, deck, raw) in seen.items()
                       if won is not None), key=lambda g: g[0], reverse=True)
-    rows: dict[int, list[Any]] = {}
+    rows: dict[str, list[Any]] = {}
     if decided:
-        for (when, won, _, raw), arch in zip(decided, archetypes.assign([g[2] for g in decided])):
-            row = rows.setdefault(int(arch), [0, 0, []])
+        for (when, won, _, raw), arch in zip(decided, archetypes.labels([g[2] for g in decided])):
+            row = rows.setdefault(arch, [0, 0, []])
             row[0] += int(won)
             row[1] += 1
             if len(row[2]) < RECORD_RECENT:  # newest first already
@@ -218,7 +218,7 @@ def my_record(games: Sequence[tuple], battle_log: list[dict[str, Any]], tag: str
     out = []
     for arch, (wins, n, recent) in sorted(rows.items(), key=lambda kv: -kv[1][1]):
         lo, hi = wilson_interval(wins, n)
-        out.append({"archetype": archetypes.names[arch], "wins": wins, "games": n,
+        out.append({"archetype": arch, "wins": wins, "games": n,
                     "rate": round(wins / n, 3), "range": [round(lo, 3), round(hi, 3)],
                     "recent": recent})
     wins = sum(int(g[1]) for g in decided)
@@ -363,8 +363,9 @@ class Predictor:
         model = self.archetypes
         i, j = (int(x) for x in model.assign([tuple(deck_a), tuple(deck_b)]))
         chance, games = model.matchup(i, j)
+        label_a, label_b = model.labels([tuple(deck_a), tuple(deck_b)])
         result: dict[str, Any] = {
-            "archetype_a": model.names[i], "archetype_b": model.names[j],
+            "archetype_a": label_a, "archetype_b": label_b,
             "win_chance": round(chance, 3), "games": games, "mirror": i == j,
         }
         trees = self.model_chance(deck_a, deck_b)

@@ -62,6 +62,10 @@ SHORT_NAMES = {"Hog Rider": "Hog"}
 PUMP = "Elixir Collector"   # players call it pump: "Golem Pump"
 CYCLE_MAX_ELIXIR = 3.2      # cycle decks go by average elixir: "Hog 2.6", "X-Bow 3.0"
 
+# A card goes in an archetype's name only if nearly all its decks run it, so the
+# name never promises a card the deck you're looking at doesn't have.
+NAME_SHARE = 0.8
+
 CORE_SHARE = 0.5      # a card is "core" to a group if at least half its decks run it
 MERGE_JACCARD = 0.6   # groups whose cores overlap this much are one archetype
 
@@ -131,19 +135,22 @@ def _signature_name(vocab: CardVocab, share: np.ndarray, global_share: np.ndarra
 
 
 def _archetype_name(vocab: CardVocab, key: tuple[int, ...], share: np.ndarray,
-                    global_share: np.ndarray, avg_elixir: float | None) -> str:
-    """'Golem Pump', 'X-Bow 3.0', 'Graveyard Poison'; signature cards without a win condition."""
+                    global_share: np.ndarray, avg_elixir: float | None
+                    ) -> tuple[str, tuple[int, ...]]:
+    """('Golem Pump' / 'X-Bow 3.0' / 'Graveyard Poison', the cards the name names);
+    signature cards (and no named cards to insist on) without a win condition."""
     if not key:
-        return _signature_name(vocab, share, global_share)
+        return _signature_name(vocab, share, global_share), ()
     head = _key_name(vocab, key)
-    core = [i for i in np.argsort(-share * (share / np.maximum(global_share, _EPS)))
-            if share[i] >= CORE_SHARE and vocab.card_ids[i] % FORM_TOKEN["evo"] not in key]
-    core_names = [vocab.name(vocab.card_ids[i]) for i in core]
-    if PUMP in core_names:
-        return f"{head} Pump"
+    core = [vocab.card_ids[i] for i in np.argsort(-share * (share / np.maximum(global_share, _EPS)))
+            if share[i] >= NAME_SHARE and vocab.card_ids[i] < FORM_TOKEN["evo"]
+            and vocab.card_ids[i] not in key]
+    pump = next((c for c in core if vocab.name(c) == PUMP), None)
+    if pump is not None:
+        return f"{head} Pump", (*key, pump)
     if avg_elixir is not None and avg_elixir <= CYCLE_MAX_ELIXIR:
-        return f"{head} {avg_elixir:.1f}"
-    return f"{head} {core_names[0]}" if core_names else head
+        return f"{head} {avg_elixir:.1f}", key
+    return (f"{head} {vocab.name(core[0])}", (*key, core[0])) if core else (head, key)
 
 
 @dataclass
@@ -157,6 +164,7 @@ class ArchetypeModel:
     prior_strength: float
     deck_counts: np.ndarray     # how many training decks fell in each archetype
     keys: list[tuple[int, ...]] = field(default_factory=list)  # cluster -> win conditions ([]: old model)
+    named: list[tuple[int, ...]] = field(default_factory=list)  # archetype -> cards its name names
 
     # --- fitting -------------------------------------------------------------
 
@@ -206,15 +214,28 @@ class ArchetypeModel:
         for c in range(k):
             merged[groups[c]].update(members[c])
             group_key[groups[c]] = keys[c]
+        # Groups that come out with the same name are one archetype as far as a player
+        # can tell (say two Elixir Golem groups with no card all their decks share):
+        # pool them rather than show "Elixir Golem (2)".
         names: list[str] = []
+        named: list[tuple[int, ...]] = []
+        renumber = []
         for g in range(m):
-            name = _archetype_name(vocab, group_key[g], _card_share(vocab, merged[g]), global_share,
-                                   _avg_elixir(vocab, merged[g]))
-            names.append(name if name not in names else f"{name} ({g + 1})")  # always unique
-        deck_counts = np.array([sum(merged[g].values()) for g in range(m)], dtype=float)
+            name, cards = _archetype_name(vocab, group_key[g], _card_share(vocab, merged[g]),
+                                          global_share, _avg_elixir(vocab, merged[g]))
+            if name not in names:
+                names.append(name)
+                named.append(cards)
+            renumber.append(names.index(name))
+        pooled: list[Counter] = [Counter() for _ in names]
+        for g, n in enumerate(renumber):
+            pooled[n].update(merged[g])
+        groups = np.array([renumber[g] for g in groups], dtype=int)
+        m = len(names)
+        deck_counts = np.array([sum(pooled[g].values()) for g in range(m)], dtype=float)
 
         model = cls(vocab, centroids, groups, names, np.zeros((m, m)), np.zeros((m, m)),
-                    float(prior_strength), deck_counts, keys)
+                    float(prior_strength), deck_counts, keys, named)
         model._count(train)
         return model
 
@@ -233,14 +254,21 @@ class ArchetypeModel:
         """Nearest archetype for each deck; works for decks never seen in training."""
         if not decks:
             return np.zeros(0, dtype=int)
-        sims = _deck_matrix(self.vocab, decks) @ self.centroids.T
+        X = _deck_matrix(self.vocab, decks)
+        sims = X @ self.centroids.T
         if any(self.keys):
             masks: dict[tuple[int, ...], np.ndarray] = {}
-            for row, deck in enumerate(decks):
+            rows = []
+            for deck in decks:
                 key = _deck_key(deck, self._wincons)
                 if key not in masks:
                     masks[key] = self._allowed(key)
-                sims[row, ~masks[key]] = -np.inf
+                rows.append(masks[key])
+            allowed = np.stack(rows)
+            if self.named:  # "X-Bow Rocket" only for decks with Rocket, when there's a choice
+                honest = allowed & self._has_named(X > 0)
+                allowed = np.where(honest.any(axis=1, keepdims=True), honest, allowed)
+            sims[~allowed] = -np.inf
         return self.groups[np.argmax(sims, axis=1)]
 
     @cached_property
@@ -254,6 +282,31 @@ class ArchetypeModel:
         if not same.any() and key:
             same = np.array([k[:1] == key[:1] for k in self.keys])
         return same if same.any() else np.ones(len(self.keys), dtype=bool)
+
+    def _has_named(self, present: np.ndarray) -> np.ndarray:
+        """(decks x clusters): the cluster's archetype name only names cards the deck
+        has. present is decks x vocab, True where the deck runs that card."""
+        need = np.zeros((len(self.names), len(self.vocab)))
+        for g, cards in enumerate(self.named):
+            for c in cards:
+                if c in self.vocab.index:  # a card too rare for the vocab can't be checked
+                    need[g, self.vocab.index[c]] = 1.0
+        has = present.astype(float) @ need.T >= need.sum(axis=1)
+        return has[:, self.groups]
+
+    def labels(self, decks: Sequence[Sequence[int]]) -> list[str]:
+        """Archetype name for each deck, but never one naming a card the deck lacks:
+        a Skeleton Barrel deck without Suspicious Bush is just "Skeleton Barrel" even
+        if every Skeleton Barrel deck in training ran it."""
+        out = []
+        for deck, i in zip(decks, self.assign(decks)):
+            named = self.named[i] if self.named else ()
+            if all(c in set(deck) for c in named):
+                out.append(self.names[i])
+            else:
+                key = _deck_key(deck, self._wincons)
+                out.append(_key_name(self.vocab, key) if key else self.names[i])
+        return out
 
     def unseen_wincon(self, deck: Sequence[int]) -> str | None:
         """The deck's win condition if no training deck had it (its archetype is then
@@ -331,6 +384,7 @@ class ArchetypeModel:
             "deck_counts": self.deck_counts.astype(int).tolist(),
             "prior_strength": self.prior_strength,
             "keys": [list(k) for k in self.keys],
+            "named": [list(c) for c in self.named],
         })
 
     @classmethod
@@ -345,16 +399,18 @@ class ArchetypeModel:
         groups = np.asarray(data["groups"], dtype=int)
         m = len(data["names"])
         keys = [tuple(int(c) for c in k) for k in data.get("keys", [])]
+        named = [tuple(int(c) for c in k) for k in data.get("named", [])]
         if (centroids.ndim != 2 or centroids.shape[1] != len(vocab)
                 or groups.shape != (centroids.shape[0],) or wins.shape != (m, m)
                 or games.shape != (m, m) or not np.all(np.isfinite(centroids))
                 or (groups < 0).any() or (groups >= m).any()
                 or (wins < 0).any() or (games < 0).any()
-                or (keys and len(keys) != centroids.shape[0])):
+                or (keys and len(keys) != centroids.shape[0])
+                or (named and len(named) != m)):
             raise ValueError("archetype model file is malformed")
         return cls(vocab, centroids, groups, [str(n) for n in data["names"]], wins, games,
                    float(data["prior_strength"]),
-                   np.asarray(data["deck_counts"], dtype=np.float64), keys)
+                   np.asarray(data["deck_counts"], dtype=np.float64), keys, named)
 
     def save(self, path: Path) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
