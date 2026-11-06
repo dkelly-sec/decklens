@@ -210,10 +210,8 @@ def test_tier_rows_include_recent_battles_with_known_or_unknown_ranks(conn):
     assert len(rows) == 2 + int(datetime.now(timezone.utc) - datetime(2026, 10, 30, 1, 15,
                                                                         tzinfo=timezone.utc)
                                 < timedelta(days=14))
-    winner, deck0, rank0, deck1, rank1, when, rating0, rating1 = next(
-        r for r in rows if {r[2], r[4]} == {120, 450})
-    assert len(deck0) == 8 and len(deck1) == 8 and winner in (0, 1)
-    assert when.tzinfo is not None and (rating0, rating1) == (None, None)  # no snapshots
+    winner, deck0, rank0, deck1, rank1, when = next(r for r in rows if {r[2], r[4]} == {120, 450})
+    assert len(deck0) == 8 and len(deck1) == 8 and winner in (0, 1) and when.tzinfo is not None
 
 
 def test_tier_ranks_beyond_500_come_from_the_nearest_leaderboard_snapshot(conn):
@@ -245,13 +243,29 @@ def test_tier_ranks_beyond_500_come_from_the_nearest_leaderboard_snapshot(conn):
     unknown["team"][0]["globalRank"] = 90
     save_battles(conn, parse_battle_log([filled, clamped, unknown])[0])
 
-    rows = load_rows(conn, days=14)
-    ranks = {frozenset((r[2], r[4])) for r in rows}
+    ranks = {frozenset((r[2], r[4])) for r in load_rows(conn, days=14)}
     assert ranks == {frozenset((80, 2400)), frozenset((300, 501)), frozenset((90, None))}
-    # Ratings (medals) come from the nearest snapshot too: #9QJ and #8YY were rated 2000.
-    ratings = {frozenset((r[2], r[4])): {r[6], r[7]} for r in rows}
-    assert ratings[frozenset((80, 2400))] == {None, 2000}
-    assert ratings[frozenset((300, 501))] == {2000, None}
+
+
+def test_profile_ranks_fill_in_beyond_the_leaderboard(conn):
+    from decklens.rankings import RankEntry
+    from decklens.storage import save_battles, save_rank_entries
+    from decklens.web.tiers import load_rows
+
+    when = datetime.now(timezone.utc) - timedelta(days=2)
+    save_rank_entries(conn, [RankEntry(tag="#9QJ", name="P", rating=2100, rank=7853,
+                                       clan_tag=None, clan_name=None)],
+                      when + timedelta(hours=5), "profile")       # read when #9QJ was crawled
+    save_rank_entries(conn, [RankEntry(tag="#8YY", name="Q", rating=2900, rank=3,
+                                       clan_tag=None, clan_name=None)],
+                      when + timedelta(hours=1), "season")        # last season's: never used
+    one = battle(team_tag="#2PP", opp_tag="#9QJ")
+    one["battleTime"] = when.strftime("%Y%m%dT%H%M%S.000Z")
+    two = battle(team_tag="#2PP", opp_tag="#8YY")
+    two["battleTime"] = (when + timedelta(minutes=5)).strftime("%Y%m%dT%H%M%S.000Z")
+    save_battles(conn, parse_battle_log([one, two])[0])
+    ranks = {frozenset((r[2], r[4])) for r in load_rows(conn, days=14)}
+    assert ranks == {frozenset((None, 7853)), frozenset((None,))}
 
 
 def test_country_players_are_searchable_but_get_no_rank(conn):

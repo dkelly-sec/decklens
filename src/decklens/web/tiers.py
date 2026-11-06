@@ -55,12 +55,16 @@ BATTLE_RANK_LIMIT = 500       # the API only puts a rank on battles for the top 
 SNAPSHOT_WINDOW_HOURS = 24    # leaderboard snapshots are taken nightly
 
 
-# Rank at battle time for each side: the battle's own rank, else the nearest
-# leaderboard snapshot (never better than BATTLE_RANK_LIMIT + 1). Written out in
-# full for both sides: no SQL is ever assembled from strings.
+# Rank at battle time for each side: the battle's own rank (top 500), else the
+# nearest snapshot within a day: the global leaderboard (top 1,000) first, then
+# the player's profile read when they were crawled (ranks to about 10,000).
+# Snapshots never beat BATTLE_RANK_LIMIT + 1: no battle rank means outside the top
+# 500 then. Old-season ratings aren't used: early in a season they'd say 2,800
+# when nobody is past 2,200 yet. Written out in full for both sides: no SQL is
+# ever assembled from strings.
 _ROWS = """
     SELECT b.winner_side, p0.card_ids, r0.rank, p1.card_ids, r1.rank, p0.cards, p1.cards,
-           b.battle_time, m0.rating, m1.rating
+           b.battle_time
     FROM battles b
     JOIN battle_players p0 ON p0.battle_id = b.battle_id AND p0.side = 0
     JOIN battle_players p1 ON p1.battle_id = b.battle_id AND p1.side = 1
@@ -69,10 +73,10 @@ _ROWS = """
             SELECT GREATEST(s.rank, %(limit)s + 1)
             FROM player_rank_snapshots s
             WHERE s.tag = p0.player_tag
-              AND s.source = 'leaderboard' AND s.rank IS NOT NULL
+              AND s.source IN ('leaderboard', 'profile') AND s.rank IS NOT NULL
               AND s.observed_at BETWEEN b.battle_time - make_interval(hours => %(hours)s)
                                     AND b.battle_time + make_interval(hours => %(hours)s)
-            ORDER BY abs(extract(epoch FROM s.observed_at - b.battle_time))
+            ORDER BY s.source = 'profile', abs(extract(epoch FROM s.observed_at - b.battle_time))
             LIMIT 1
         )) AS rank
     ) r0
@@ -81,29 +85,13 @@ _ROWS = """
             SELECT GREATEST(s.rank, %(limit)s + 1)
             FROM player_rank_snapshots s
             WHERE s.tag = p1.player_tag
-              AND s.source = 'leaderboard' AND s.rank IS NOT NULL
+              AND s.source IN ('leaderboard', 'profile') AND s.rank IS NOT NULL
               AND s.observed_at BETWEEN b.battle_time - make_interval(hours => %(hours)s)
                                     AND b.battle_time + make_interval(hours => %(hours)s)
-            ORDER BY abs(extract(epoch FROM s.observed_at - b.battle_time))
+            ORDER BY s.source = 'profile', abs(extract(epoch FROM s.observed_at - b.battle_time))
             LIMIT 1
         )) AS rank
     ) r1
-    LEFT JOIN LATERAL (   -- rating (medals) nearest the battle, from any leaderboard
-        SELECT s.rating FROM player_rank_snapshots s
-        WHERE s.tag = p0.player_tag AND s.rating IS NOT NULL
-          AND s.observed_at BETWEEN b.battle_time - make_interval(hours => %(hours)s)
-                                AND b.battle_time + make_interval(hours => %(hours)s)
-        ORDER BY abs(extract(epoch FROM s.observed_at - b.battle_time))
-        LIMIT 1
-    ) m0 ON true
-    LEFT JOIN LATERAL (
-        SELECT s.rating FROM player_rank_snapshots s
-        WHERE s.tag = p1.player_tag AND s.rating IS NOT NULL
-          AND s.observed_at BETWEEN b.battle_time - make_interval(hours => %(hours)s)
-                                AND b.battle_time + make_interval(hours => %(hours)s)
-        ORDER BY abs(extract(epoch FROM s.observed_at - b.battle_time))
-        LIMIT 1
-    ) m1 ON true
     WHERE b.battle_type = 'pathOfLegend'
       AND b.winner_side IS NOT NULL
       AND b.battle_time >= now() - make_interval(days => %(days)s)
@@ -111,14 +99,14 @@ _ROWS = """
 
 
 def load_rows(conn: Any, days: int = WINDOW_DAYS) -> list[tuple]:
-    """(winner side, deck 0, rank 0, deck 1, rank 1, battle time, rating 0, rating 1)
-    for recent decided ranked battles. Ranks and ratings are None when unknown.
-    Decks are card ids then form tokens."""
+    """(winner side, deck 0, rank 0, deck 1, rank 1, battle time) for recent decided
+    ranked battles. A rank is None when it isn't known. Decks are card ids then
+    form tokens."""
     with conn.cursor() as cur:
         cur.execute(_ROWS, {"days": days, "hours": SNAPSHOT_WINDOW_HOURS,
                             "limit": BATTLE_RANK_LIMIT})
-        return [(w, tuple(d0) + form_tokens(c0), r0, tuple(d1) + form_tokens(c1), r1, t, m0, m1)
-                for w, d0, r0, d1, r1, c0, c1, t, m0, m1 in cur.fetchall()]
+        return [(w, tuple(d0) + form_tokens(c0), r0, tuple(d1) + form_tokens(c1), r1, t)
+                for w, d0, r0, d1, r1, c0, c1, t in cur.fetchall()]
 
 
 @dataclass
@@ -133,8 +121,8 @@ class BattleTable:
     decks0: list[tuple[int, ...]]  # each side's deck, for the meta and the tweak finder
     decks1: list[tuple[int, ...]]
     days_ago: np.ndarray      # whole days before the table was built; -1 when unknown
-    rating0: np.ndarray       # rating (medals) at battle time; nan when unknown
-    rating1: np.ndarray
+    rank0: np.ndarray         # each side's rank at battle time; inf when unknown
+    rank1: np.ndarray
     lock0: np.ndarray         # each side's win condition and spells, as an id (see lock_of)
     lock1: np.ndarray
     locks: dict[tuple, int]   # win condition and spells -> id
@@ -173,17 +161,14 @@ def build_table(model: ArchetypeModel, rows: Sequence[tuple]) -> BattleTable:
     for row, r in enumerate(rows):
         cards0[row, [columns[int(c)] for c in r[1]]] = 1
         cards1[row, [columns[int(c)] for c in r[3]]] = 1
-    worst = np.array([max(r[2], r[4]) if r[2] is not None and r[4] is not None else np.inf
-                      for r in rows], dtype=float)
+    ranks = [np.array([r[i] if r[i] is not None else np.inf for r in rows], dtype=float)
+             for i in (2, 4)]
+    worst = np.maximum(ranks[0], ranks[1])
     empty = np.zeros(0, dtype=int)
     now = datetime.now(timezone.utc)
 
-    def at(r: tuple, i: int) -> Any:  # time and ratings: older 5-field rows have none
-        return r[i] if len(r) > i else None
-
-    days_ago = np.array([(now - at(r, 5)).days if at(r, 5) else -1 for r in rows], dtype=int)
-    ratings = [np.array([float(at(r, i)) if at(r, i) is not None else np.nan for r in rows])
-               for i in (6, 7)]
+    days_ago = np.array([(now - r[5]).days if len(r) > 5 and r[5] else -1 for r in rows],
+                        dtype=int)  # older 5-field rows carry no time
     locks: dict[tuple, int] = {}
     wincons = model._wincons
     return BattleTable(
@@ -193,7 +178,7 @@ def build_table(model: ArchetypeModel, rows: Sequence[tuple]) -> BattleTable:
         arch0=model.assign([tuple(r[1]) for r in rows]) if n else empty,
         arch1=model.assign([tuple(r[3]) for r in rows]) if n else empty,
         decks0=[tuple(r[1]) for r in rows], decks1=[tuple(r[3]) for r in rows],
-        days_ago=days_ago, rating0=ratings[0], rating1=ratings[1],
+        days_ago=days_ago, rank0=ranks[0], rank1=ranks[1],
         lock0=_lock_ids([r[1] for r in rows], wincons, locks),
         lock1=_lock_ids([r[3] for r in rows], wincons, locks),
         locks=locks,

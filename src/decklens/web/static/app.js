@@ -434,7 +434,7 @@ function gainCell(c) {
   return td;
 }
 
-// One-card swaps the model rates best against the meta, in each rating band.
+// One-card swaps real players of your deck make, and how they did, by rank range.
 async function showTweaks(deck, box, band) {
   show(box, el("p", "Deck tweaks", "label"),
     el("p", "Looking at stored decks one card away from yours…", "muted"));
@@ -457,9 +457,9 @@ async function showTweaks(deck, box, band) {
   }
   const sorter = el("div", null, "tabs");
   sorter.setAttribute("role", "group");
-  sorter.setAttribute("aria-label", "Sort by rating range");
+  sorter.setAttribute("aria-label", "Sort by rank range");
   for (const b of bands) {
-    const button = el("button", b.key === "all" ? "All ratings" : b.label, "tab");
+    const button = el("button", b.label, "tab");
     button.type = "button";
     button.setAttribute("aria-pressed", String(b.key === band));
     button.addEventListener("click", () => showTweaks(deck, box, b.key));
@@ -470,7 +470,7 @@ async function showTweaks(deck, box, band) {
   table.append(el("thead"), el("tbody"));
   const head = el("tr");
   head.append(el("th", "Swap"));
-  for (const b of bands) head.append(el("th", b.key === "all" ? "All" : b.label));
+  for (const b of bands) head.append(el("th", b.label));
   const now = el("tr", null, "now");
   now.append(el("th", "Your deck now"));
   for (const b of bands) {
@@ -492,8 +492,9 @@ async function showTweaks(deck, box, band) {
   show(box, el("p", "Best swaps for:", "hint"), sorter, wrap,
     el("p", "Real stored Ranked games of decks that share 7 of your 8 cards: the swap is the card " +
       "they play instead of one of yours. Win rates are pulled toward all decks close to yours " +
-      "(6+ of 8 cards) by 20 games, so a lucky 3–0 doesn't top the list. Ranges split rated " +
-      "players into thirds. Swaps need 10+ games in the range you sort by.", "note"));
+      "(6+ of 8 cards) by 20 games, so a lucky 3–0 doesn't top the list. Top 10,000 / 1,000 go " +
+      "by each player's global rank when they played. Swaps need 10+ games in the column you " +
+      "sort by.", "note"));
 }
 
 const RECORD_DAYS = [7, 30, 90];

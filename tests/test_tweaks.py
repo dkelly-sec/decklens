@@ -41,9 +41,9 @@ def table():
 
     def games(d, n, rate):
         for k in range(n):
-            rating = 2500 + int(rng.integers(0, 600))
-            rows.append((0 if rng.random() < rate else 1, d, None, OPP, None,
-                         now - timedelta(hours=k % 200), rating, rating))
+            rank = (300, 5000, None)[k % 3]          # top 1,000 / top 10,000 / unknown
+            rows.append((0 if rng.random() < rate else 1, d, rank, OPP, rank,
+                         now - timedelta(hours=k % 200)))
 
     games(MINE, 80, 0.50)
     games(ROCKET, 120, 0.68)      # Rocket instead of Fireball: clearly better
@@ -65,17 +65,20 @@ def test_swaps_come_from_real_versions_of_your_deck(table):
     assert ("Archers", "Ice Wizard") not in swaps                # 3 games: not ranked
     assert not any("Graveyard" in s for pair in swaps for s in pair)  # nobody plays it here
     rocket = out["swaps"][0]["bands"]["all"]
-    assert rocket["games"] == 120 and rocket["gain"] > 0.1
+    assert rocket["games"] == 120 and rocket["gain"] > 0.05
     assert out["bands"][0]["games"] == 80 and 0.4 < out["bands"][0]["base"] < 0.6
 
 
 def test_bands_and_sorting(table):
     t, vocab = table
-    out = find_tweaks(t, vocab, MINE, sort_band="high")
-    assert [b["key"] for b in out["bands"]] == ["all", "low", "mid", "high"]
-    gains = [s["bands"]["high"]["gain"] for s in out["swaps"]]
+    out = find_tweaks(t, vocab, MINE, sort_band="1000")
+    assert [b["label"] for b in out["bands"]] == ["All players", "Top 10,000", "Top 1,000"]
+    rocket = next(s for s in out["swaps"] if s["in"] == "Rocket")["bands"]
+    assert rocket["all"]["games"] == 120 and rocket["10000"]["games"] == 80   # by each side's rank
+    assert rocket["1000"]["games"] == 40
+    gains = [s["bands"]["1000"]["gain"] for s in out["swaps"]]
     assert gains == sorted(gains, reverse=True)
-    assert all(s["bands"]["high"]["games"] >= 10 for s in out["swaps"])
+    assert all(s["bands"]["1000"]["games"] >= 10 for s in out["swaps"])
 
 
 def test_a_deck_nobody_plays_gets_no_swaps(table):

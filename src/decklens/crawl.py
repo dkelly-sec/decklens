@@ -38,7 +38,7 @@ from .battles import (
     parse_battle_log,
 )
 from .config import ConfigError, load_settings
-from .rankings import RankEntry, parse_leaderboard
+from .rankings import RankEntry, parse_leaderboard, parse_profile_rank
 from .validation import InvalidTagError, normalize_tag
 
 log = logging.getLogger("decklens.crawl")
@@ -53,6 +53,7 @@ class Store(Protocol):
     def save_battles(self, battles: list[Battle]) -> int: ...
     def mark_crawled(self, tag: str) -> None: ...
     def save_seen_players(self, players: list[BattlePlayer], when: datetime) -> int: ...
+    def save_profile_rank(self, entry: RankEntry) -> None: ...
 
 
 @dataclass
@@ -64,6 +65,7 @@ class CrawlStats:
     battles_new: int = 0
     discovered: int = 0
     indexed_players: int = 0  # 20-win challenge / Trophy Road players added to the name index
+    profile_ranks: int = 0    # current global ranks read from profiles (to about 10,000)
     invalid_seeds: int = 0
     skipped_types: dict[str, int] = field(default_factory=dict)
 
@@ -80,8 +82,11 @@ def crawl(
     max_players: int,
     pause: float = 0.2,
     sleep: Callable[[float], None] = time.sleep,
+    profiles: bool = False,
 ) -> CrawlStats:
-    """Visit up to max_players battle logs, best-ranked first. One request per player."""
+    """Visit up to max_players battle logs, best-ranked first. One request per player,
+    two with profiles: the profile's current global rank (battles only carry ranks
+    for the top 500, the leaderboard stops at 1,000) powers the top 10,000 tier."""
     stats = CrawlStats()
     heap: list[tuple[int, int, str]] = []
     queued: set[str] = set()
@@ -130,6 +135,8 @@ def crawl(
         stats.battles_new += store.save_battles(battles)
         stats.indexed_players += _index_side_mode_players(store, entries)
         store.mark_crawled(tag)
+        if profiles:
+            stats.profile_ranks += _profile_rank(client, store, tag, pause, sleep)
 
         for battle in battles:
             if battle.battle_type != RANKED_TYPE:
@@ -145,6 +152,25 @@ def crawl(
                 stats.players_crawled, stats.battles_new, len(heap),
             )
     return stats
+
+
+def _profile_rank(client: ClashRoyaleClient, store: Store, tag: str, pause: float,
+                  sleep: Callable[[float], None]) -> int:
+    """Store the player's current Ranked rank from their profile; 1 if there was one."""
+    sleep(pause)
+    try:
+        entry = parse_profile_rank(client.get_player(tag))
+    except NotFoundError:
+        return 0
+    except ApiError as exc:
+        if exc.status == 403:
+            raise CrawlAborted(str(exc)) from None
+        log.warning("couldn't read %s's profile: %s", tag, exc)  # the battles are saved anyway
+        return 0
+    if entry is None or entry.rank is None:
+        return 0
+    store.save_profile_rank(entry)
+    return 1
 
 
 # --- seeding --------------------------------------------------------------
@@ -316,6 +342,11 @@ class _PgStore:
 
         return save_seen_players(self._conn, players, when)
 
+    def save_profile_rank(self, entry: RankEntry) -> None:
+        from .storage import save_rank_entries
+
+        save_rank_entries(self._conn, [entry], self._now(), "profile")
+
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Seed from the Ranked leaderboard and crawl.")
@@ -330,6 +361,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--season", help="seed from a finished season's leaderboard instead")
     parser.add_argument("--max-players", type=int, default=1500,
                         help="battle logs to fetch this run (one API request each)")
+    parser.add_argument("--no-profiles", action="store_true",
+                        help="skip reading each crawled player's profile rank (halves the "
+                             "requests, but the top 10,000 tier then only knows the top 1,000)")
     parser.add_argument("--recrawl-hours", type=float, default=20,
                         help="also revisit known players not crawled for this long")
     parser.add_argument("--pause", type=float, default=0.2, help="seconds between requests")
@@ -405,13 +439,15 @@ def main(argv: list[str] | None = None) -> int:
                 log.info("%d players due for a crawl", len(seeds))
 
                 stats = crawl(client, _PgStore(conn, now), seeds,
-                              max_players=args.max_players, pause=args.pause)
+                              max_players=args.max_players, pause=args.pause,
+                              profiles=not args.no_profiles)
                 log.info(
                     "done: %d players crawled, %d battles seen, %d new, "
                     "%d new players discovered, %d challenge / Trophy Road players indexed, "
-                    "%d not found, %d failures",
+                    "%d profile ranks, %d not found, %d failures",
                     stats.players_crawled, stats.battles_seen, stats.battles_new,
-                    stats.discovered, stats.indexed_players, stats.not_found, stats.failures,
+                    stats.discovered, stats.indexed_players, stats.profile_ranks,
+                    stats.not_found, stats.failures,
                 )
                 if stats.skipped_types:
                     log.info("skipped battle types: %s", stats.skipped_types)

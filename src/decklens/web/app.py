@@ -97,7 +97,7 @@ class WatchStatus(BaseModel):
 class TweakRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     deck: list[int]
-    band: Literal["all", "low", "mid", "high"] = "all"
+    band: Literal["all", "10000", "1000"] = "all"
 
 
 class PredictRequest(BaseModel):

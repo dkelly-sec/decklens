@@ -262,3 +262,28 @@ def test_challenge_and_trophy_road_opponents_go_into_the_name_index_only():
     assert {t for t, _, _ in store.seen_players} == {"#2PP", "#UUU", "#LLL"}  # Trophy Road too
     assert ("#UUU", "Eatropa Theotôn") in {(t, c) for t, c, _ in store.seen_players}
     assert "#UUU" not in client.calls                                    # not crawled, just indexed
+
+
+def test_profiles_add_current_ranks_beyond_the_leaderboard():
+    from decklens.api_client import NotFoundError
+
+    class WithProfiles(FakeClient):
+        def get_player(self, tag):
+            self.calls.append("profile " + tag)
+            if tag == "#9QJ":
+                raise NotFoundError(404, "gone")
+            rank = {"#2PP": 7853}.get(tag)
+            return {"tag": tag, "name": "P",
+                    "currentPathOfLegendSeasonResult": {"rank": rank, "trophies": 2100}}
+
+    class Store(FakeStore):
+        def save_profile_rank(self, entry):
+            self.ranks = getattr(self, "ranks", []) + [(entry.tag, entry.rank)]
+
+    client = WithProfiles({"#2PP": [ranked_battle("#2PP", "#9QJ", opp_rank=500, minute=1)]})
+    store = Store()
+    stats = crawl(client, store, [(1, "#2PP")], max_players=10, sleep=lambda s: None,
+                  profiles=True)
+    assert client.calls == ["#2PP", "profile #2PP", "#9QJ", "profile #9QJ"]
+    assert store.ranks == [("#2PP", 7853)] and stats.profile_ranks == 1   # no rank, no snapshot
+    assert stats.failures == 0                                            # a missing profile isn't one

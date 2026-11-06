@@ -1,5 +1,7 @@
 """Deck tweak finder: one-card swaps that real players of your deck already make,
-and how those versions actually did, overall and in each rating (medals) band.
+and how those versions actually did, overall and among the top 10,000 and top
+1,000 players (by each player's global rank when they played, so it works the
+same on day one of a season as at the end).
 
 Candidates come only from stored Ranked decks that share 7 of your 8 cards: the
 card they run instead of one of yours is the swap ("Rocket for Fireball", "Evo
@@ -21,8 +23,10 @@ import numpy as np
 from ..battles import FORM_TOKEN, is_form_token
 from ..features import CardVocab
 from ..model import wilson_interval
-from .meta import in_band, rating_bands
 from .tiers import BattleTable
+
+# (key, label, best rank allowed; None = everyone)
+BANDS = (("all", "All players", None), ("10000", "Top 10,000", 10_000), ("1000", "Top 1,000", 1_000))
 
 PULL = 20          # games' worth of the family's win rate added to every number
 MIN_GAMES = 10     # a swap needs this many games in a band to be ranked there
@@ -39,17 +43,18 @@ def _split(deck: Sequence[int]) -> tuple[frozenset[int], dict[int, int]]:
 def find_tweaks(t: BattleTable, vocab: CardVocab, deck: Sequence[int],
                 sort_band: str = "all") -> dict[str, Any]:
     mine, my_forms = _split(deck)
-    bands = rating_bands(t)
-    # Every stored side with its result and rating, both seats together.
+    bands = [{"key": k, "label": label, "top": top} for k, label, top in BANDS]
+    # Every stored side with its result and rank, both seats together.
     sides = []
-    for decks, cards, ratings, won_if in ((t.decks0, t.cards0, t.rating0, 0),
-                                          (t.decks1, t.cards1, t.rating1, 1)):
-        sides.append((decks, t.overlap(cards, list(mine)), ratings, t.winner == won_if))
+    for decks, cards, ranks, won_if in ((t.decks0, t.cards0, t.rank0, 0),
+                                        (t.decks1, t.cards1, t.rank1, 1)):
+        sides.append((decks, t.overlap(cards, list(mine)), ranks, t.winner == won_if))
     result: dict[str, Any] = {"bands": [], "swaps": []}
     swaps: dict[tuple[int, int], dict[str, np.ndarray]] = defaultdict(
         lambda: {"wins": np.zeros(len(bands)), "games": np.zeros(len(bands))})
     you, family = np.zeros((len(bands), 2)), np.zeros((len(bands), 2))
-    band_masks = [[in_band(ratings, b) for b in bands] for _, _, ratings, _ in sides]
+    band_masks = [[np.ones(len(ranks), dtype=bool) if b["top"] is None else ranks <= b["top"]
+                   for b in bands] for _, _, ranks, _ in sides]
     exact = tuple(sorted(mine)) + tuple(sorted(my_forms.values()))
     for (decks, overlap, _, won), masks in zip(sides, band_masks):
         for row in np.flatnonzero(overlap >= len(mine) - 2):
