@@ -229,8 +229,7 @@ def test_a_name_never_names_a_card_the_deck_lacks(real):
     # Every Graveyard deck in training ran Poison; one without it is just "Graveyard".
     no_poison = tuple(REAL_IDS[c] for c in ["Graveyard", "Tornado", "Knight", "Baby Dragon",
                                              "Ice Wizard", "Bowler", "Valkyrie", "The Log"])
-    assert model.labels([no_poison]) == ["Graveyard"]
-    assert model.labels([no_poison])[0] != model.names[model.assign([no_poison])[0]]
+    assert model.labels([no_poison]) == ["Splashyard"]   # what it is: Graveyard with splash
 
 
 def test_groups_with_the_same_name_are_pooled_not_numbered(real):
@@ -257,6 +256,8 @@ PLAYER_DECKS = {
                 "Valkyrie", "Knight"],
     "Hyperbait": ["Goblin Barrel", "Princess", "Goblin Gang", "Dart Goblin", "Ice Spirit",
                   "Knight", "Cannon", "Skeletons"],
+    "Log Bait": ["Goblin Barrel", "The Log", "Princess", "Goblin Gang", "Ice Spirit", "Knight",
+                 "Cannon", "Rage"],
     "Splashyard": ["Graveyard", "Baby Dragon", "Ice Wizard", "Knight", "Barbarian Barrel",
                    "Tornado", "Goblin Hut", "Valkyrie"],
     "Bridge Spam": ["Battle Ram", "Lumberjack", "Bandit", "Magic Archer", "Royal Ghost",
@@ -281,9 +282,12 @@ def test_names_players_actually_use():
     model = ArchetypeModel.fit(vocab, matchups, 6, 20.0)
     for kind, cards in PLAYER_DECKS.items():
         assert model.labels([_pn_deck(cards)]) == [kind]
-    # A Hyperbait list with The Log in it isn't Hyperbait any more: just "Goblin Barrel".
+    # A Hyperbait list with The Log in it isn't Hyperbait any more: it's Log Bait.
     with_log = [c if c != "Dart Goblin" else "The Log" for c in PLAYER_DECKS["Hyperbait"]]
-    assert model.labels([_pn_deck(with_log)]) == ["Goblin Barrel"]
+    assert model.labels([_pn_deck(with_log)]) == ["Log Bait"]
+    # With some other spell instead (no Log), it's neither: just its win condition.
+    with_zap = [c if c != "Dart Goblin" else "Zap" for c in PLAYER_DECKS["Hyperbait"]]
+    assert model.labels([_pn_deck(with_zap)]) == ["Goblin Barrel"]
     # Graveyard with Poison is a Poison deck, not Splashyard.
     poison_yard = [c if c != "Tornado" else "Poison" for c in PLAYER_DECKS["Splashyard"]]
     assert model.labels([_pn_deck(poison_yard)]) != ["Splashyard"]

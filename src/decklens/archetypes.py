@@ -95,6 +95,7 @@ PLAYER_NAMES = (
     NameRule("PEKKA Bridge Spam", ("Battle Ram", "P.E.K.K.A")),
     NameRule("Bridge Spam", ("Battle Ram",)),
     NameRule("Hyperbait", ("Goblin Barrel",), no_other_spells=True),
+    NameRule("Log Bait", ("Goblin Barrel", "The Log")),
     NameRule("Splashyard", ("Graveyard",), one_of=SPLASH, without=("Poison", "Freeze")),
 )
 RULES = {r.name: r for r in PLAYER_NAMES}
@@ -105,6 +106,14 @@ def _deck_names(vocab: CardVocab, deck: Iterable[int]) -> tuple[set[str], set[st
     plain = [c for c in deck if c < FORM_TOKEN["evo"]]
     return ({vocab.name(c) for c in plain},
             {vocab.name(c) for c in plain if c // 1_000_000 == SPELL_RANGE})
+
+
+def _deck_rule(vocab: CardVocab, key: tuple[int, ...], deck: Iterable[int]) -> str | None:
+    """The first players' name that fits this deck itself (Hyperbait, Log Bait...)."""
+    if not key:
+        return None
+    main, cards = vocab.name(key[0]), _deck_names(vocab, deck)
+    return next((r.name for r in PLAYER_NAMES if r.needs[0] == main and r.fits(*cards)), None)
 
 
 def _player_name(vocab: CardVocab, key: tuple[int, ...], members: Counter) -> NameRule | None:
@@ -160,7 +169,7 @@ def _avg_elixir(vocab: CardVocab, member_decks: Counter) -> float | None:
     return total / weight if weight else None
 
 
-def _merge_by_core(cores: list[set[int]], keys: list[tuple[int, ...]]) -> np.ndarray:
+def _merge_by_core(cores: list[set[int]], keys: Sequence[Any]) -> np.ndarray:
     """Group clusters with the same win conditions whose core cards mostly overlap
     (union-find on Jaccard similarity)."""
     parent = list(range(len(cores)))
@@ -232,6 +241,7 @@ class ArchetypeModel:
     deck_counts: np.ndarray     # how many training decks fell in each archetype
     keys: list[tuple[int, ...]] = field(default_factory=list)  # cluster -> win conditions ([]: old model)
     named: list[tuple[int, ...]] = field(default_factory=list)  # archetype -> cards its name names
+    rules: list[str | None] = field(default_factory=list)  # cluster -> players' name its decks fit
 
     # --- fitting -------------------------------------------------------------
 
@@ -243,16 +253,19 @@ class ArchetypeModel:
             counts[m.deck_a] += 1
             counts[m.deck_b] += 1
         wincons = _wincon_ids(vocab)
-        buckets: dict[tuple[int, ...], list[tuple[int, ...]]] = {}
+        # Decks are split by win condition and by the players' name they fit, if any:
+        # Hyperbait and Log Bait share the Goblin Barrel but are different decks.
+        buckets: dict[tuple[tuple[int, ...], str | None], list[tuple[int, ...]]] = {}
         for deck in counts:
-            buckets.setdefault(_deck_key(deck, wincons), []).append(deck)
+            key = _deck_key(deck, wincons)
+            buckets.setdefault((key, _deck_rule(vocab, key, deck)), []).append(deck)
 
         # Every win condition gets at least one archetype, however rare (a Golem
         # deck must never land in a Graveyard group); common ones get more,
         # in proportion to how often they're played.
         total = sum(counts.values())
-        centers, keys, members = [], [], []
-        for key, decks in buckets.items():
+        centers, keys, rules, members = [], [], [], []
+        for (key, rule), decks in buckets.items():
             weight = np.array([counts[d] for d in decks], dtype=float)
             k = max(1, min(len(decks), round(n_clusters * weight.sum() / total)))
             X = _deck_matrix(vocab, decks)
@@ -265,6 +278,7 @@ class ArchetypeModel:
             for c in range(k):
                 members.append(Counter({d: counts[d] for d, lab in zip(decks, labels_) if lab == c}))
                 keys.append(key)
+                rules.append(rule)
         stacked = np.vstack(centers)
         centroids = stacked / np.maximum(np.linalg.norm(stacked, axis=1, keepdims=True), _EPS)
         k = len(members)
@@ -274,7 +288,7 @@ class ArchetypeModel:
         # cards mostly overlap are one archetype: merge them, pooling their games.
         cores = [set(np.flatnonzero(_card_share(vocab, members[c]) >= CORE_SHARE))
                  for c in range(k)]
-        groups = _merge_by_core(cores, keys)
+        groups = _merge_by_core(cores, list(zip(keys, rules)))
         m = int(groups.max()) + 1
         merged: list[Counter] = [Counter() for _ in range(m)]
         group_key: list[tuple[int, ...]] = [()] * m
@@ -302,7 +316,7 @@ class ArchetypeModel:
         deck_counts = np.array([sum(pooled[g].values()) for g in range(m)], dtype=float)
 
         model = cls(vocab, centroids, groups, names, np.zeros((m, m)), np.zeros((m, m)),
-                    float(prior_strength), deck_counts, keys, named)
+                    float(prior_strength), deck_counts, keys, named, rules)
         model._count(train)
         return model
 
@@ -324,13 +338,14 @@ class ArchetypeModel:
         X = _deck_matrix(self.vocab, decks)
         sims = X @ self.centroids.T
         if any(self.keys):
-            masks: dict[tuple[int, ...], np.ndarray] = {}
+            masks: dict[tuple[Any, ...], np.ndarray] = {}
             rows = []
             for deck in decks:
                 key = _deck_key(deck, self._wincons)
-                if key not in masks:
-                    masks[key] = self._allowed(key)
-                rows.append(masks[key])
+                rule = _deck_rule(self.vocab, key, deck) if self.rules else None
+                if (key, rule) not in masks:
+                    masks[(key, rule)] = self._allowed(key, rule)
+                rows.append(masks[(key, rule)])
             allowed = np.stack(rows)
             if self.named:  # "X-Bow Rocket" only for decks with Rocket, when there's a choice
                 honest = allowed & self._has_named(X > 0)
@@ -342,9 +357,14 @@ class ArchetypeModel:
     def _wincons(self) -> list[int]:
         return _wincon_ids(self.vocab)
 
-    def _allowed(self, key: tuple[int, ...]) -> np.ndarray:
-        """Clusters a deck with this key may join: same win conditions, else the
-        same main one, else (a win condition training never saw) any."""
+    def _allowed(self, key: tuple[int, ...], rule: str | None = None) -> np.ndarray:
+        """Clusters a deck with this key may join: same win conditions and players'
+        name, else same win conditions, else the same main one, else (a win
+        condition training never saw) any."""
+        if self.rules:
+            same = np.array([k == key and r == rule for k, r in zip(self.keys, self.rules)])
+            if same.any():
+                return same
         same = np.array([k == key for k in self.keys])
         if not same.any() and key:
             same = np.array([k[:1] == key[:1] for k in self.keys])
@@ -380,9 +400,14 @@ class ArchetypeModel:
                 ok = all(c in set(deck) for c in named)
             if ok:
                 out.append(self.names[i])
-            else:
-                key = _deck_key(deck, self._wincons)
-                out.append(_key_name(self.vocab, key) if key else self.names[i])
+                continue
+            # The group's name doesn't fit this deck: the players' name that does
+            # (Hyperbait with The Log added is Log Bait), else just its win condition.
+            key = _deck_key(deck, self._wincons)
+            cards = _deck_names(self.vocab, deck)
+            fits = next((r.name for r in PLAYER_NAMES
+                         if key and self.vocab.name(key[0]) == r.needs[0] and r.fits(*cards)), None)
+            out.append(fits or (_key_name(self.vocab, key) if key else self.names[i]))
         return out
 
     def unseen_wincon(self, deck: Sequence[int]) -> str | None:
@@ -462,6 +487,7 @@ class ArchetypeModel:
             "prior_strength": self.prior_strength,
             "keys": [list(k) for k in self.keys],
             "named": [list(c) for c in self.named],
+            "rules": self.rules,
         })
 
     @classmethod
@@ -477,17 +503,19 @@ class ArchetypeModel:
         m = len(data["names"])
         keys = [tuple(int(c) for c in k) for k in data.get("keys", [])]
         named = [tuple(int(c) for c in k) for k in data.get("named", [])]
+        rules = [r if r in RULES else None for r in data.get("rules", [])]
         if (centroids.ndim != 2 or centroids.shape[1] != len(vocab)
                 or groups.shape != (centroids.shape[0],) or wins.shape != (m, m)
                 or games.shape != (m, m) or not np.all(np.isfinite(centroids))
                 or (groups < 0).any() or (groups >= m).any()
                 or (wins < 0).any() or (games < 0).any()
                 or (keys and len(keys) != centroids.shape[0])
-                or (named and len(named) != m)):
+                or (named and len(named) != m)
+                or (rules and len(rules) != centroids.shape[0])):
             raise ValueError("archetype model file is malformed")
         return cls(vocab, centroids, groups, [str(n) for n in data["names"]], wins, games,
                    float(data["prior_strength"]),
-                   np.asarray(data["deck_counts"], dtype=np.float64), keys, named)
+                   np.asarray(data["deck_counts"], dtype=np.float64), keys, named, rules)
 
     def save(self, path: Path) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
