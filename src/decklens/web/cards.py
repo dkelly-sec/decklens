@@ -61,6 +61,9 @@ class CardImages:
         self._images = TTLCache(ttl=24 * 3600, max_items=400, clock=clock)
         self._clock = clock
         self._retried_at = -float("inf")
+        # Art the card list points to but the asset host doesn't have (Evo Giant's
+        # evolution art was a 404 on release day): tried again after 10 minutes.
+        self._missing: dict[str, float] = {}  # url -> when to try it again
 
     def catalog(self) -> dict[int, dict[str, str]]:
         """card id -> {"medium": url, "evo": url, "hero": url}, only URLs that pass the checks."""
@@ -90,9 +93,13 @@ class CardImages:
         return self._catalog.get_or_set("catalog", build)
 
     def has_art(self, card_id: int, form: str | None = None) -> bool:
-        """Whether the card list has this exact art (else a plain-card fallback is served)."""
+        """Whether this exact art is available (else a plain-card fallback is served)."""
         urls = self._urls(card_id, form)
-        return bool(urls) and (form if form in ("evo", "hero") else "medium") in urls
+        url = (urls or {}).get(form if form in ("evo", "hero") else "medium")
+        return url is not None and not self._is_missing(url)
+
+    def _is_missing(self, url: str) -> bool:
+        return self._missing.get(url, -float("inf")) > self._clock()
 
     def _urls(self, card_id: int, form: str | None) -> dict[str, str] | None:
         urls = self.catalog().get(card_id)
@@ -108,14 +115,17 @@ class CardImages:
         urls = self._urls(card_id, form)
         if not urls:
             return None
-        url = urls.get(form) if form in ("evo", "hero") and form in urls else urls.get("medium")
-        if url is None:
-            return None
-        try:
-            return self._images.get_or_set(url, lambda: self._fetch(url))
-        except _BadImage as exc:
-            log.warning("rejected card image for %s: %s", card_id, exc)
-            return None
+        wanted = urls.get(form) if form in ("evo", "hero") else None
+        for url in (wanted, urls.get("medium")):  # the plain card if the form's art is missing
+            if url is None or self._is_missing(url):
+                continue
+            try:
+                return self._images.get_or_set(url, lambda: self._fetch(url))
+            except _BadImage as exc:
+                log.warning("rejected card image for %s: %s", card_id, exc)
+                if len(self._missing) < 1000:  # card list URLs only, so this stays small
+                    self._missing[url] = self._clock() + CATALOG_RETRY_SECONDS
+        return None
 
     def _fetch(self, url: str) -> bytes:
         if safe_asset_url(url) is None:  # checked again right before use

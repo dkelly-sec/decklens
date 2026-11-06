@@ -1300,3 +1300,22 @@ def test_my_tags_come_from_the_environment(monkeypatch):
     assert my_tags() == ["#UPL9PJYCP", "#2PP"]
     monkeypatch.delenv("DECKLENS_MY_TAGS")
     assert my_tags() == []
+
+
+def test_missing_evolution_art_falls_back_to_the_plain_card():
+    from decklens.web.cards import CardImages
+
+    class Session(FakeAssetSession):
+        def get(self, url, **kwargs):
+            self.calls.append((url, kwargs))
+            return FakeAssetResponse(status=404) if url == EVO_URL else FakeAssetResponse()
+
+    now, session = [0.0], Session()
+    images = CardImages(CatalogClient(), session=session, clock=lambda: now[0])
+    assert images.image(26000010, form="evo") == PNG              # plain art, not nothing
+    assert session.calls[-1][0] == GOOD_URL and not images.has_art(26000010, "evo")
+    images.image(26000010, form="evo")
+    assert [u for u, _ in session.calls].count(EVO_URL) == 1      # the 404 isn't asked again...
+    now[0] = 601
+    images.image(26000010, form="evo")
+    assert [u for u, _ in session.calls].count(EVO_URL) == 2      # ...until 10 minutes pass
