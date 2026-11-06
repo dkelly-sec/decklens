@@ -238,9 +238,13 @@ def create_app(services: Services, *, hsts: bool = False) -> FastAPI:
         tag = tag_or_400(tag)
         from .search import rank_history
 
+        profile = upstream("player", tag)
+        last = profile.get("lastPathOfLegendSeasonResult")
+        stale = last.get("rank") if isinstance(last, dict) else None  # last season's final rank
         points = [{"time": t.isoformat(), "rank": r, "rating": m}
-                  for t, r, m in stored(lambda conn: rank_history(conn, tag, days))]
-        now = summarise_player(upstream("player", tag))
+                  for t, r, m in stored(lambda conn: rank_history(conn, tag, days))
+                  if stale is None or r != stale]   # snapshots saved before last season's rank was filtered out
+        now = summarise_player(profile)
         if now.get("rank"):
             points.append({"time": datetime.now(timezone.utc).isoformat(), "rank": now["rank"],
                            "rating": now.get("rating")})

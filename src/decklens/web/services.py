@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from typing import Any, Callable, Sequence
 
 from ..archetypes import ArchetypeModel
+from ..rankings import current_season_result
 from ..battles import (
     CHALLENGE_GAME_MODE, EVO_SLOT, FORM_TOKEN, WILD_SLOT, Battle, active_form, form_token,
     form_tokens, is_form_token, is_trophy_road, opt_int, parse_battle_log, parse_battle_time,
@@ -141,8 +142,7 @@ def _deck(cards: list[dict[str, Any]], mode: str | None = None) -> dict[str, Any
 
 def summarise_player(profile: dict[str, Any]) -> dict[str, Any]:
     clan = profile.get("clan") if isinstance(profile.get("clan"), dict) else {}
-    ranked = profile.get("currentPathOfLegendSeasonResult")
-    ranked = ranked if isinstance(ranked, dict) else {}
+    ranked = current_season_result(profile)  # last season's rank left out
     deck = _cards(profile.get("currentDeck"))  # 7 from the API means a hidden Hero
     return {
         "tag": normalize_tag(profile.get("tag")),

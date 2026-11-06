@@ -1,4 +1,4 @@
-from decklens.rankings import parse_leaderboard, parse_profile_rank
+from decklens.rankings import current_season_result, parse_leaderboard, parse_profile_rank
 
 
 def test_leaderboard_entries_are_parsed():
@@ -43,3 +43,23 @@ def test_profile_without_ranked_result():
     entry = parse_profile_rank({"tag": "#2PP", "name": "Me"})
     assert entry.rating is None and entry.rank is None
     assert parse_profile_rank({"tag": "bad tag"}) is None
+
+
+def test_last_seasons_rank_is_not_this_seasons():
+    # Early in a season the API repeats last season's final result as "current".
+    profile = {
+        "tag": "#2PP", "name": "Me",
+        "currentPathOfLegendSeasonResult": {"leagueNumber": 10, "trophies": 2410, "rank": 7853},
+        "lastPathOfLegendSeasonResult": {"leagueNumber": 10, "trophies": 2410, "rank": 7853},
+    }
+    entry = parse_profile_rank(profile)
+    assert entry.rating is None and entry.rank is None
+    assert current_season_result(profile) == {"leagueNumber": 10}
+
+    from decklens.web.services import summarise_player
+    s = summarise_player(profile)
+    assert s.get("rank") is None and s.get("rating") is None
+
+    # A real new rank (different from last season's) is kept.
+    profile["currentPathOfLegendSeasonResult"] = {"leagueNumber": 10, "trophies": 2100, "rank": 9100}
+    assert parse_profile_rank(profile).rank == 9100

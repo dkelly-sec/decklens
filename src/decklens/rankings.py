@@ -59,6 +59,26 @@ def parse_leaderboard(items: Iterable[dict[str, Any]]) -> list[RankEntry]:
     return entries
 
 
+def current_season_result(profile: dict[str, Any]) -> dict[str, Any]:
+    """The profile's current-season Ranked result, without last season's numbers.
+
+    Early in a season the API keeps showing last season's final rank and rating
+    in currentPathOfLegendSeasonResult until the player has a new one. When it
+    matches lastPathOfLegendSeasonResult, it's last season's: drop the rank and
+    rating (the league stays)."""
+    current = profile.get("currentPathOfLegendSeasonResult")
+    current = dict(current) if isinstance(current, dict) else {}
+    last = profile.get("lastPathOfLegendSeasonResult")
+    last = last if isinstance(last, dict) else {}
+    rank, last_rank = _first_int(current, "rank"), _first_int(last, "rank")
+    if rank is not None and rank == last_rank and (
+            _first_int(current, "trophies", "rating") == _first_int(last, "trophies", "rating")):
+        current.pop("rank", None)
+        current.pop("trophies", None)
+        current.pop("rating", None)
+    return current
+
+
 def parse_profile_rank(profile: dict[str, Any]) -> RankEntry | None:
     """Current-season Ranked result from a player profile, if present."""
     if not isinstance(profile, dict):
@@ -67,8 +87,7 @@ def parse_profile_rank(profile: dict[str, Any]) -> RankEntry | None:
         tag = normalize_tag(profile.get("tag"))
     except InvalidTagError:
         return None
-    result = profile.get("currentPathOfLegendSeasonResult")
-    result = result if isinstance(result, dict) else {}
+    result = current_season_result(profile)
     clan = profile.get("clan") if isinstance(profile.get("clan"), dict) else {}
     return RankEntry(
         tag=tag,
