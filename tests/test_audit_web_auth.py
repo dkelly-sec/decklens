@@ -33,7 +33,6 @@ def _no_login_site(base_url):
                       raise_server_exceptions=False)
 
 
-@pytest.mark.xfail(strict=True, reason="2026-11-07-web-auth F1: open defect; remove this mark in the fix")
 def test_rebound_hostname_cannot_use_the_no_login_api():
     site = _no_login_site(REBIND)
     assert site.get("/api/players/%232PP").status_code != 200

@@ -103,6 +103,41 @@ class SameOriginMiddleware:
         await self.app(scope, receive, send)
 
 
+LOCAL_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
+
+
+def request_hostname(host_header: str) -> str:
+    """The hostname part of a Host header, lowercased, without port or IPv6 brackets."""
+    host = host_header.strip().lower()
+    if host.startswith("["):  # [::1]:8000
+        end = host.find("]")
+        return host[1:end] if end > 0 else ""
+    return host.split(":", 1)[0]
+
+
+class HostAllowlistMiddleware:
+    """Answers only requests addressed to this site's own hostnames (DNS rebinding guard).
+
+    A hostile page can point its own hostname at 127.0.0.1. The browser then sends
+    that hostname as Host and as Origin, so the same-origin check alone would pass;
+    refusing unknown Host headers stops the page from using this server at all.
+    """
+
+    def __init__(self, app: ASGIApp, *, hosts: frozenset[str]):
+        self.app, self.hosts = app, frozenset(h.lower() for h in hosts)
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        host = next((v.decode("latin-1") for k, v in scope.get("headers", [])
+                     if k.lower() == b"host"), "")
+        if request_hostname(host) not in self.hosts:
+            await _send_json(send, 400, b'{"detail":"Unknown host"}')
+            return
+        await self.app(scope, receive, send)
+
+
 class BodySizeLimitMiddleware:
     """Reject request bodies over max_bytes with 413, whether or not they declare a length."""
 

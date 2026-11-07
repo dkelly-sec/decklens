@@ -336,6 +336,45 @@ def test_get_requests_are_not_affected():
     assert client.get("/api/health", headers={"origin": "https://evil.example"}).status_code == 200
 
 
+# --- DNS rebinding: only this site's own hostnames are answered -----------------------------
+
+
+@pytest.mark.parametrize("host", ["rebind.attacker.example:8000", "127.0.0.1.evil.example",
+                                  "evil.example", "[::2]:8000", ""])
+def test_unknown_hosts_are_refused_even_for_the_login_page(host):
+    auth, _ = make_auth([user()])
+    client = TestClient(create_app(Services(client=FakeClient(), auth=auth)),
+                        raise_server_exceptions=False)
+    origin = f"http://{host}"
+    for response in (client.get("/login", headers={"host": host}),
+                     client.post("/api/login", json={"username": "david", "password": PASSWORD},
+                                 headers={"host": host, "origin": origin})):
+        assert response.status_code == 400
+        assert "content-security-policy" in response.headers
+
+
+@pytest.mark.parametrize("host", ["127.0.0.1:8000", "LOCALHOST:8000", "[::1]:8000", "localhost"])
+def test_this_computers_names_are_answered(host):
+    client = TestClient(create_app(Services(client=FakeClient())))
+    assert client.get("/api/health", headers={"host": host}).status_code == 200
+
+
+def test_public_hostname_comes_from_decklens_hosts(monkeypatch):
+    from decklens.config import ConfigError
+    from decklens.web.app import _hosts_from_env
+
+    monkeypatch.delenv("DECKLENS_HOSTS", raising=False)
+    assert "decklens.example" not in _hosts_from_env(https=False)
+    with pytest.raises(ConfigError, match="DECKLENS_HOSTS"):
+        _hosts_from_env(https=True)   # a public site must say which name it answers to
+    monkeypatch.setenv("DECKLENS_HOSTS", " DeckLens.Example , ")
+    hosts = _hosts_from_env(https=True)
+    assert "decklens.example" in hosts and "127.0.0.1" in hosts
+    client = TestClient(create_app(Services(client=FakeClient()), hosts=hosts),
+                        base_url="https://decklens.example")
+    assert client.get("/api/health").status_code == 200
+
+
 # --- configuration ---------------------------------------------------------------------
 
 

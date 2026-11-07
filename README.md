@@ -169,6 +169,7 @@ How it's secured:
 - Errors are generic; there are no API docs or schema endpoints and no server banner.
 - **Logins:** passwords hashed with scrypt (N=2^17, r=8, p=1, random salt, constant-time check; unknown usernames take the same time). Sessions are HMAC-signed cookies, HttpOnly and SameSite=Lax, Secure with the `__Host-` prefix over HTTPS, valid 30 days and revocable per user. Five wrong passwords lock a username for 15 minutes (any username, so lockouts don't reveal which exist), on top of 10 login attempts per minute per client. Failed logins are logged without the attempted username or password.
 - **Cross-site requests:** every POST must come from this site's own origin (checked on the Origin header), with SameSite cookies as a second layer.
+- **DNS rebinding:** the site only answers requests addressed to its own hostnames (127.0.0.1, localhost, plus `DECKLENS_HOSTS` when deployed), so a web page that points its own name at your computer gets 400, even with `DECKLENS_LOGIN=off`.
 - The website's database role can read logins but not create or change them, so a compromised web app can't give itself an account.
 - The server binds to 127.0.0.1 only. Putting it on a network comes with HTTPS in the deployment step.
 

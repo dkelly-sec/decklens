@@ -56,6 +56,7 @@ Living document: update it as features are added. Last reviewed: week 7 (logins)
 | Username discovery | Same message and same timing for unknown users and wrong passwords (dummy hash check); lockouts apply to any username | Done |
 | Session theft or forgery | HMAC-signed cookie, HttpOnly (scripts can't read it), Secure and `__Host-` over HTTPS, 30-day expiry, per-user revocation on password change or logout-all | Done |
 | Cross-site request forgery | Origin (or Referer) must match the site on every POST; SameSite=Lax cookies | Done |
+| DNS rebinding (a web page pointing its own hostname at 127.0.0.1) | Host header must be one of this computer's names or `DECKLENS_HOSTS` (required with HTTPS); anything else gets 400 before routing | Done (audit 2026-11-07, web-auth F1) |
 | Compromised web app creating accounts | The web role can only SELECT from web_users; tested that INSERT, UPDATE and DELETE are refused | Done |
 | Passwords or usernames leaking into logs | Failed logins logged with client IP only; passwords read with getpass in the account tool | Done |
 | Overloading or abusing the upstream API | Crawler request budget, minimum pause between requests, backoff on 429, stops on 403 or repeated failures | Done |

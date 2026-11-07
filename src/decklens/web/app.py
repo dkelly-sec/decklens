@@ -32,8 +32,8 @@ from .tiers import TIERS
 from .tweaks import find_tweaks
 from .watch import WatchBoard
 from .security import (
-    BodySizeLimitMiddleware, RateLimiter, SameOriginMiddleware, SecurityHeadersMiddleware,
-    TTLCache,
+    LOCAL_HOSTS, BodySizeLimitMiddleware, HostAllowlistMiddleware, RateLimiter,
+    SameOriginMiddleware, SecurityHeadersMiddleware, TTLCache,
 )
 from .services import (
     CLAN_SEARCH_LIMIT, Predictor, battle_mix, card_ids, last_opponent, live_clan_lookup,
@@ -112,11 +112,14 @@ class PredictRequest(BaseModel):
     deck_b: list[int]
 
 
-def create_app(services: Services, *, hsts: bool = False) -> FastAPI:
+def create_app(services: Services, *, hsts: bool = False,
+               hosts: frozenset[str] | None = None) -> FastAPI:
+    """hosts: hostnames this site answers to (this computer's own names by default)."""
     # No interactive docs or schema in production: less surface, nothing to probe.
     app = FastAPI(title="DeckLens", docs_url=None, redoc_url=None, openapi_url=None)
     app.add_middleware(BodySizeLimitMiddleware, max_bytes=4096)
     app.add_middleware(SameOriginMiddleware)
+    app.add_middleware(HostAllowlistMiddleware, hosts=LOCAL_HOSTS if hosts is None else hosts)
     app.add_middleware(SecurityHeadersMiddleware, hsts=hsts)
     app.state.services = services  # the desktop app reaches the watch board through this
     auth = services.auth
@@ -574,6 +577,19 @@ def _auth_from_env(search_db: Callable[[], Any] | None, https: bool) -> Auth | N
     return Auth(database_user_loader(search_db), secret, secure_cookie=https)
 
 
+def _hosts_from_env(https: bool) -> frozenset[str]:
+    """This computer's names, plus the public hostname(s) in DECKLENS_HOSTS."""
+    from ..config import ConfigError
+    from .security import request_hostname
+
+    extra = {request_hostname(h) for h in os.environ.get("DECKLENS_HOSTS", "").split(",")}
+    extra.discard("")
+    if https and not extra:
+        raise ConfigError("DECKLENS_HTTPS=1 needs the site's hostname: set "
+                          "DECKLENS_HOSTS=decklens.example.com in .env")
+    return LOCAL_HOSTS | extra
+
+
 def create_app_from_env() -> FastAPI:
     from ..config import load_settings
 
@@ -611,7 +627,8 @@ def create_app_from_env() -> FastAPI:
     from .cards import CardImages
 
     https = os.environ.get("DECKLENS_HTTPS") == "1"
+    hosts = _hosts_from_env(https)
     auth = _auth_from_env(search_db, https)
     client = ClashRoyaleClient(settings.api_token, timeout=settings.request_timeout)
     return create_app(Services(client=client, predictor=predictor, search_db=search_db,
-                               images=CardImages(client), auth=auth), hsts=https)
+                               images=CardImages(client), auth=auth), hsts=https, hosts=hosts)
