@@ -11,7 +11,7 @@ requires-python = ">=3.11"
 dependencies = [
     "requests>=2.34.2",
     "python-dotenv>=1.2.4",
-    "psycopg[binary]>=3.3.6",
+    "psycopg[binary]>=3.3.7",
     "numpy>=2.4.6",
     "scikit-learn>=1.9.1",
     "fastapi>=0.162.0",
@@ -21,7 +21,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = [
-    "pytest>=9.1.1",
+    "pytest>=9.2.0",
     "bandit>=1.9.4",
     "pip-audit>=2.10.1",
     "pre-commit>=4.7.0",
@@ -30,7 +30,7 @@ dev = [
 # Screen watcher (python -m decklens.watcher), on the PC showing the mirrored phone.
 watcher = [
     "mss>=10.2.0",                  # screen capture
-    "rapidocr-onnxruntime>=1.2.3",  # offline text recognition (ONNX models bundled)
+    "rapidocr-onnxruntime>=1.4.4",  # offline text recognition (ONNX models bundled)
 ]
 
 [tool.setuptools.packages.find]
