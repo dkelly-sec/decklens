@@ -5,7 +5,7 @@ async function logIn(event) {
   event.preventDefault();
   const message = document.getElementById("login-message");
   const button = document.querySelector("#login-form button");
-  message.className = "result muted";
+  message.className = "result loading";
   message.textContent = "Logging in…";
   button.disabled = true;
   try {

@@ -5,25 +5,32 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Log in · DeckLens</title>
   <link rel="icon" href="/favicon.ico">
+  <link rel="preload" href="/static/barlow-condensed-700.woff2" as="font" type="font/woff2" crossorigin>
   <link rel="stylesheet" href="/static/style.css">
   <script src="/static/login.js" defer></script>
 </head>
-<body>
-  <header>
-    <h1>DeckLens</h1>
-    <p class="tagline">Matchup scouting for Clash Royale</p>
+<body class="login-page">
+  <header class="topbar">
+    <div class="topbar-inner">
+      <p class="wordmark"><span class="mark" aria-hidden="true"><i></i><i></i></span>DeckLens</p>
+    </div>
   </header>
 
   <main>
     <section aria-labelledby="login-heading" class="login">
-      <h2 id="login-heading">Log in</h2>
+      <h1 id="login-heading">Log in</h1>
+      <p class="lede">Scout your Clash Royale opponents: their deck, what to play around, and your odds.</p>
       <form id="login-form" autocomplete="on">
-        <label for="username">Username</label>
-        <input id="username" name="username" autocomplete="username" autocapitalize="none"
-               spellcheck="false" maxlength="32" required>
-        <label for="password">Password</label>
-        <input id="password" name="password" type="password" autocomplete="current-password"
-               maxlength="128" required>
+        <div class="field">
+          <label for="username">Username</label>
+          <input id="username" name="username" autocomplete="username" autocapitalize="none"
+                 spellcheck="false" maxlength="32" required>
+        </div>
+        <div class="field">
+          <label for="password">Password</label>
+          <input id="password" name="password" type="password" autocomplete="current-password"
+                 maxlength="128" required>
+        </div>
         <button type="submit">Log in</button>
       </form>
       <p id="login-message" class="result" aria-live="polite"></p>

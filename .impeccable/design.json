@@ -1,0 +1,126 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-11-08T08:30:00Z",
+  "title": "Design System: DeckLens",
+  "extensions": {
+    "colorMeta": {
+      "team-blue": { "role": "primary", "displayName": "Team Blue (you)", "canonical": "#1d4ed8", "tonalRamp": ["#0b1d55", "#112b7d", "#1739a6", "#1d4ed8", "#4a72e2", "#7f9bec", "#b3c4f5", "#dfe7fb"] },
+      "team-red": { "role": "primary", "displayName": "Team Red (them)", "canonical": "#c21f2c", "tonalRamp": ["#4a0b10", "#701119", "#991722", "#c21f2c", "#d6505a", "#e3828a", "#efb3b8", "#f8e0e2"] },
+      "live": { "role": "secondary", "displayName": "Live Yellow", "canonical": "#f5c400", "tonalRamp": ["#4d3d00", "#7a6100", "#a88600", "#d6ab00", "#f5c400", "#ffd23f", "#ffe384", "#fff3c9"] },
+      "elixir": { "role": "secondary", "displayName": "Elixir Purple", "canonical": "#8f2bbd", "tonalRamp": ["#2e0d3d", "#4b1563", "#6a1f8a", "#8f2bbd", "#a855d0", "#c07fde", "#d9b0ec", "#f0e0f8"] },
+      "ground": { "role": "neutral", "displayName": "Studio White ground", "canonical": "#eef0f5" },
+      "ground-dark": { "role": "neutral", "displayName": "Broadcast Ink ground", "canonical": "#0a0e18" },
+      "band": { "role": "neutral", "displayName": "Band", "canonical": "#ffffff" },
+      "band-dark": { "role": "neutral", "displayName": "Band (ink)", "canonical": "#111727" },
+      "edge": { "role": "neutral", "displayName": "Control Edge", "canonical": "#747e96" },
+      "text": { "role": "neutral", "displayName": "Ink Text", "canonical": "#0c1222" }
+    },
+    "typographyMeta": {
+      "score": { "displayName": "Score", "purpose": "Odds numerals in the score bug." },
+      "display": { "displayName": "Display", "purpose": "Player names in the VS bar; names keep their own case." },
+      "headline": { "displayName": "Headline", "purpose": "Page headings, uppercase." },
+      "title": { "displayName": "Title", "purpose": "Section labels and primary buttons, uppercase." },
+      "body": { "displayName": "Body", "purpose": "Running text." },
+      "label": { "displayName": "Label", "purpose": "Quiet buttons, filters, disclosures, the watcher bug." },
+      "fact": { "displayName": "Fact", "purpose": "Player and deck facts, notes." },
+      "caption": { "displayName": "Caption", "purpose": "Table counts and ranges, card levels, footer." }
+    },
+    "shadows": [],
+    "motion": [
+      { "name": "ease-out", "value": "cubic-bezier(0.16, 1, 0.3, 1)", "purpose": "The VS bar landing and the odds bar filling (700ms)." },
+      { "name": "vs-land", "value": "520ms slide 24px from each edge; VS mark pops at 220ms", "purpose": "The one authored moment, when an opponent is found. Off under Reduce Motion." }
+    ],
+    "breakpoints": [
+      { "name": "phone", "value": "480px" },
+      { "name": "board-two-column", "value": "1000px" },
+      { "name": "second-monitor", "value": "1600px (root font 17px)" }
+    ]
+  },
+  "components": [
+    {
+      "name": "Primary Button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "The main action: a solid team-colour band. Blue for you, red on Scout.",
+      "html": "<button class=\"ds-btn-primary\">Look up</button>",
+      "css": ".ds-btn-primary { padding: 8px 18px; border: 0; border-radius: 0; background: var(--blue, #1d4ed8); color: #fff; font: 700 1.125rem/1 'Barlow Condensed', 'Arial Narrow', sans-serif; text-transform: uppercase; letter-spacing: 0.05em; cursor: pointer; transition: background-color 120ms ease-out; } .ds-btn-primary:hover { background: color-mix(in srgb, var(--blue, #1d4ed8) 86%, #000); } .ds-btn-primary:focus-visible { outline: 3px solid var(--focus, #0c1222); outline-offset: 2px; }"
+    },
+    {
+      "name": "Quiet Button",
+      "kind": "button",
+      "refersTo": "button-quiet",
+      "description": "Secondary actions: display caps with a 1px edge.",
+      "html": "<button class=\"ds-btn-quiet\">Wrong player?</button>",
+      "css": ".ds-btn-quiet { padding: 4px 10px; min-height: 36px; border: 0; border-radius: 0; background: transparent; color: var(--text, #0c1222); box-shadow: inset 0 0 0 1px var(--edge, #747e96); font: 700 0.9375rem/1 'Barlow Condensed', 'Arial Narrow', sans-serif; text-transform: uppercase; letter-spacing: 0.05em; cursor: pointer; } .ds-btn-quiet:hover { box-shadow: inset 0 0 0 2px var(--text, #0c1222); } .ds-btn-quiet:focus-visible { outline: 3px solid var(--focus, #0c1222); outline-offset: 2px; }"
+    },
+    {
+      "name": "Text Field",
+      "kind": "input",
+      "refersTo": "input",
+      "description": "Squared field with an inset edge; label above.",
+      "html": "<label class=\"ds-label\" for=\"ds-name\">Their name</label><input class=\"ds-input\" id=\"ds-name\" placeholder=\"Close is fine\">",
+      "css": ".ds-label { display: block; margin-bottom: 4px; font-weight: 600; font-size: 0.9375rem; } .ds-input { padding: 8px 12px; border: 0; border-radius: 0; box-shadow: inset 0 0 0 1px var(--edge, #747e96); background: var(--band, #fff); color: var(--text, #0c1222); font: 1rem/1.5 system-ui, sans-serif; } .ds-input:hover { box-shadow: inset 0 0 0 1px var(--text, #0c1222); } .ds-input:focus-visible { outline: 3px solid var(--focus, #0c1222); outline-offset: 0; }"
+    },
+    {
+      "name": "Page Tabs",
+      "kind": "nav",
+      "description": "Top-bar pages: muted caps, the selected one with a 4px yellow underline.",
+      "html": "<nav class=\"ds-tabs\"><button class=\"ds-tab\">You</button><button class=\"ds-tab\" aria-selected=\"true\">Scout</button><button class=\"ds-tab\">Meta</button></nav>",
+      "css": ".ds-tabs { display: flex; } .ds-tab { position: relative; padding: 16px 20px; border: 0; background: none; color: var(--muted, #485270); font: 700 1.25rem/1 'Barlow Condensed', 'Arial Narrow', sans-serif; text-transform: uppercase; letter-spacing: 0.04em; cursor: pointer; } .ds-tab:hover, .ds-tab[aria-selected=\"true\"] { color: var(--text, #0c1222); } .ds-tab[aria-selected=\"true\"]::after { content: \"\"; position: absolute; left: 10px; right: 10px; bottom: 0; height: 4px; background: var(--live, #f5c400); } .ds-tab:focus-visible { outline: 3px solid var(--focus, #0c1222); outline-offset: 2px; }"
+    },
+    {
+      "name": "Certainty Tag",
+      "kind": "chip",
+      "refersTo": "tag-sure",
+      "description": "How sure the opponent pick is: yellow fill when auto-picked, outline when a best guess.",
+      "html": "<span class=\"ds-tag ds-tag-sure\">Auto-picked</span> <span class=\"ds-tag ds-tag-doubt\">Best guess</span>",
+      "css": ".ds-tag { display: inline-block; padding: 3px 7px; font: 700 0.875rem/1 'Barlow Condensed', 'Arial Narrow', sans-serif; text-transform: uppercase; letter-spacing: 0.06em; } .ds-tag-sure { background: var(--live, #f5c400); color: var(--on-live, #0c1222); } .ds-tag-doubt { background: var(--red, #c21f2c); color: #fff; box-shadow: inset 0 0 0 2px #fff; }"
+    },
+    {
+      "name": "VS Bar",
+      "kind": "custom",
+      "description": "Signature: your blue band and their red band leaning into each other, a squared VS mark between.",
+      "html": "<div class=\"ds-vs\"><div class=\"ds-vs-you\"><b>DaHveed</b><small>3.5 avg elixir</small></div><span class=\"ds-vs-mark\">VS</span><div class=\"ds-vs-them\"><b>Max</b><small>Persian Warrior · rating 2890</small></div></div>",
+      "css": ".ds-vs { display: grid; grid-template-columns: 1fr auto 1fr; min-height: 96px; color: #fff; } .ds-vs b { font: 700 2.5rem/1 'Barlow Condensed', 'Arial Narrow', sans-serif; } .ds-vs small { font-size: 0.9375rem; } .ds-vs-you, .ds-vs-them { display: flex; flex-direction: column; justify-content: center; gap: 4px; padding: 12px 28px; } .ds-vs-you { background: var(--blue, #1d4ed8); clip-path: polygon(0 0, 100% 0, calc(100% - 18px) 100%, 0 100%); padding-right: 36px; } .ds-vs-them { background: var(--red, #c21f2c); clip-path: polygon(18px 0, 100% 0, 100% 100%, 0 100%); padding-left: 36px; align-items: flex-end; text-align: right; } .ds-vs-mark { align-self: center; margin: 0 -10px; z-index: 1; padding: 6px 12px; background: var(--text, #0c1222); color: var(--band, #fff); font: 700 1.75rem/1 'Barlow Condensed', 'Arial Narrow', sans-serif; }"
+    },
+    {
+      "name": "Score Bug",
+      "kind": "custom",
+      "description": "Signature: the odds as one bar filled blue exactly to your win chance on red, numbers riding on top.",
+      "html": "<div class=\"ds-odds\"><p class=\"ds-odds-head\">Odds <span>167 games</span></p><div class=\"ds-odds-bar\" style=\"--p: 77%\"><span class=\"ds-you\">77%<small>you</small></span><span class=\"ds-them\">23%<small>them</small></span></div></div>",
+      "css": ".ds-odds { background: var(--band, #fff); } .ds-odds-head { display: flex; justify-content: space-between; margin: 0; padding: 10px 14px 8px; font: 700 1.125rem/1.1 'Barlow Condensed', 'Arial Narrow', sans-serif; text-transform: uppercase; letter-spacing: 0.04em; } .ds-odds-head span { color: var(--muted, #485270); font-size: 0.9375rem; } .ds-odds-bar { --p: 50%; display: flex; justify-content: space-between; align-items: flex-end; background: linear-gradient(var(--blue, #1d4ed8), var(--blue, #1d4ed8)) 0 0 / var(--p) 100% no-repeat, var(--red, #c21f2c); transition: background-size 700ms cubic-bezier(0.16, 1, 0.3, 1); color: #fff; font-family: 'Barlow Condensed', 'Arial Narrow', sans-serif; font-weight: 700; line-height: 0.9; } .ds-odds-bar > span { display: flex; align-items: baseline; gap: 6px; padding: 12px 14px; white-space: nowrap; } .ds-you { font-size: 4rem; } .ds-them { font-size: 2.5rem; } .ds-odds-bar small { font-size: 1rem; text-transform: uppercase; letter-spacing: 0.06em; }"
+    }
+  ],
+  "narrative": {
+    "northStar": "The Broadcast of Your Own Match",
+    "overview": "DeckLens is dressed like the graphics package on a match broadcast: two teams in solid colour bands, a VS mark between them, a score bug that says how the match is going, and hot yellow for whatever is live or needs watching. It runs full-screen on a second monitor while you play, so everything that matters mid-match has to be read in one glance from arm's length: who they are, their deck, what to play around, your odds.\n\nIt's flat and squared. Depth comes from bands of colour and from rules, never from soft cards or shadows. Names, numbers, labels and controls use one condensed display face in caps. Running text uses the system sans. Studio white (light) and broadcast ink (dark) are both first-class themes, and on the second monitor dark is the usual one.",
+    "keyCharacteristics": [
+      "Blue is always you, red is always them, on every surface.",
+      "Hot yellow means live or watch out (the watcher's live state, an auto-picked opponent, the Play around label, the selected page). Nothing else uses it.",
+      "Solid bands with angled clip-path ends; squared corners everywhere.",
+      "Big condensed numerals for anything you read at a glance: names, odds, win rates, elixir.",
+      "One authored motion: the VS bar landing when an opponent is found."
+    ],
+    "rules": [
+      { "name": "The Team Colour Rule", "body": "Blue means you and red means them, with no exceptions. Never use blue or red decoratively, and never for good or bad in general. A win rate turns blue because it favours you.", "section": "colors" },
+      { "name": "The One Signal Rule", "body": "Yellow is reserved for live or watch out. If something isn't live, isn't an auto-pick and isn't a threat to play around, it isn't yellow.", "section": "colors" },
+      { "name": "The Honest Bar Rule", "body": "A bar that shows odds or a win rate is filled exactly to its value. When a number won't fit in a narrow side, the label overflows onto the other colour; the bar never widens to make room.", "section": "colors" },
+      { "name": "The Names Are Data Rule", "body": "Player and clan names are never uppercased, truncated mid-glyph or styled by content. They're shown in bdi with ellipsis overflow, because they can be emoji, right-to-left text or any script.", "section": "typography" },
+      { "name": "The Flat Broadcast Rule", "body": "Nothing floats. If a surface needs to stand out, give it a band colour, a team colour or a rule, never a drop shadow or blur.", "section": "elevation" }
+    ],
+    "dos": [
+      "Do put you in blue and them in red on every new surface, including charts and share images.",
+      "Do fill every proportional bar exactly to its value (The Honest Bar Rule).",
+      "Do set glance numbers (odds, rates, elixir, names) in the display face, big.",
+      "Do show calm, missing-setup states as one plain line plus one next step, keeping developer setup text behind a Setup disclosure for whoever runs DeckLens locally.",
+      "Do keep every colour pair at WCAG AA in both themes, and keep the increased-contrast overrides."
+    ],
+    "donts": [
+      "Don't use drop shadows, blurs, gradients as decoration, or rounded cards.",
+      "Don't use yellow for anything that isn't live or watch out.",
+      "Don't put coloured side stripes on cards or list items. Ownership is a top rule, selection is an outline.",
+      "Don't add eyebrow or kicker labels above headings.",
+      "Don't load fonts, scripts or images from other hosts. The CSP allows only the site itself."
+    ]
+  }
+}

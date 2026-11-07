@@ -10,80 +10,84 @@
   <script src="/static/app.js" defer></script>
 </head>
 <body>
-  <header>
-    <div class="title-row">
-      <h1>DeckLens</h1>
-      <div id="account" class="account" hidden>
-        <span id="account-name"></span>
-        <button id="logout-button" type="button" class="link-button">Log out</button>
-        <button id="quit-button" type="button" class="link-button" hidden>Quit</button>
-      </div>
-    </div>
-    <p class="tagline">Matchup scouting for Clash Royale: Ranked and the 20-win challenge</p>
-  </header>
-
-  <nav class="pages" aria-label="Pages">
-    <div class="tabs" role="tablist">
-      <button type="button" class="tab" role="tab" id="page-tab-you" aria-controls="page-you" data-page="you">You</button>
-      <button type="button" class="tab" role="tab" id="page-tab-scout" aria-controls="page-scout" data-page="scout">Scout</button>
-      <button type="button" class="tab" role="tab" id="page-tab-meta" aria-controls="page-meta" data-page="meta">Meta</button>
-    </div>
-  </nav>
-
-  <main>
-    <div id="page-you" class="page" role="tabpanel" aria-labelledby="page-tab-you">
-    <section aria-labelledby="me-heading" class="side-you">
-      <h2 id="me-heading">You</h2>
-      <form id="me-form" autocomplete="off">
-        <label for="me-tag">Your name or player tag</label>
-        <div class="row">
-          <input id="me-tag" name="tag" placeholder="Your name, or #2PPGJQ8V" maxlength="40" required>
-          <button type="submit">Look up</button>
+  <header class="topbar">
+    <div class="topbar-inner">
+      <p class="wordmark"><span class="mark" aria-hidden="true"><i></i><i></i></span>DeckLens</p>
+      <nav class="pages" aria-label="Pages">
+        <div class="tabs" role="tablist">
+          <button type="button" class="tab" role="tab" id="page-tab-you" aria-controls="page-you" data-page="you">You</button>
+          <button type="button" class="tab" role="tab" id="page-tab-scout" aria-controls="page-scout" data-page="scout">Scout</button>
+          <button type="button" class="tab" role="tab" id="page-tab-meta" aria-controls="page-meta" data-page="meta">Meta</button>
         </div>
-      </form>
-      <div id="me-result" class="result" aria-live="polite"></div>
-    </section>
-
-    </div>
-
-    <div id="page-scout" class="page" role="tabpanel" aria-labelledby="page-tab-scout" hidden>
-    <section aria-labelledby="last-heading" class="side-them">
-      <h2 id="last-heading">Last opponent</h2>
-      <p class="hint">Your most recent Ranked, Trophy Road or 20-win challenge opponent, their deck, and how the matchup tends to go.</p>
-      <button id="last-button" type="button">Scout my last opponent</button>
-      <div id="last-result" class="result" aria-live="polite"></div>
-    </section>
-
-    <section aria-labelledby="find-heading" class="side-them">
-      <h2 id="find-heading">Find an opponent</h2>
-      <label class="toggle"><input type="checkbox" id="auto-scout"> Auto-scout
-        <span class="hint">(finds whoever the screen watcher sees on your mirrored phone)</span></label>
-      <div class="auto-row">
-        <p id="auto-status" class="hint" aria-live="polite" hidden></p>
-        <button id="rescan-button" type="button" class="link-button" hidden
+      </nav>
+      <div class="bug" id="watch-bug" hidden>
+        <p id="auto-status" class="bug-status" aria-live="polite"></p>
+        <button id="rescan-button" type="button" class="quiet" hidden
                 title="Read the opponent's name and clan off the battle screen again">Read again</button>
       </div>
-      <form id="find-form" autocomplete="off">
-        <label for="find-name">Opponent's name <span class="hint">(the letters you can see; close is fine)</span></label>
-        <input id="find-name" name="name" placeholder="dipo" maxlength="40">
-        <label for="find-clan">Their clan <span class="hint">(optional, but typing both is most accurate)</span></label>
-        <div class="row">
-          <input id="find-clan" name="clan" placeholder="Persian Warrior" maxlength="40">
-          <button type="submit">Search</button>
-        </div>
-      </form>
-      <div id="find-result" class="result" aria-live="polite"></div>
-    </section>
+      <div id="account" class="account" hidden>
+        <span id="account-name"></span>
+        <button id="logout-button" type="button" class="quiet">Log out</button>
+        <button id="quit-button" type="button" class="quiet" hidden>Quit</button>
+      </div>
+    </div>
+  </header>
+
+  <main>
+    <div id="page-you" class="page page-you" role="tabpanel" aria-labelledby="page-tab-you">
+      <section aria-labelledby="me-heading" class="you-lookup">
+        <h1 id="me-heading">You</h1>
+        <form id="me-form" autocomplete="off">
+          <label for="me-tag">Your name or player tag</label>
+          <div class="row">
+            <input id="me-tag" name="tag" placeholder="Name, or #2PPGJQ8V" maxlength="40" required>
+            <button type="submit">Look up</button>
+          </div>
+        </form>
+      </section>
+      <div id="me-result" class="result"></div>
     </div>
 
-    <div id="page-meta" class="page" role="tabpanel" aria-labelledby="page-tab-meta" hidden>
-    <section aria-labelledby="meta-heading">
-      <h2 id="meta-heading">Ranked meta</h2>
-      <p class="hint">What the very top of the ladder is playing over the last 14 days, and how
-        each archetype does against the others (mirrors left out).</p>
-      <div id="meta-bands" class="chips" role="group" aria-label="How high on the ladder"></div>
-      <div id="meta-result" class="result" aria-live="polite"></div>
-    </section>
+    <div id="page-scout" class="page page-scout" role="tabpanel" aria-labelledby="page-tab-scout" hidden>
+      <section id="board" class="board" aria-labelledby="board-heading">
+        <h1 id="board-heading" class="visually-hidden">Your opponent</h1>
+        <p id="board-said" class="visually-hidden" aria-live="polite"></p>
+        <div class="board-strip">
+          <div id="board-tools" class="board-tools"></div>
+          <label class="switch"><input type="checkbox" id="auto-scout" role="switch">
+            <span>Auto-scout from your phone</span></label>
+        </div>
+        <div id="board-body"></div>
+      </section>
+
+      <section class="finder" aria-labelledby="find-heading">
+        <div class="finder-head">
+          <h2 id="find-heading">Find an opponent</h2>
+        </div>
+        <form id="find-form" autocomplete="off">
+          <div class="field">
+            <label for="find-name">Their name</label>
+            <input id="find-name" name="name" placeholder="Close is fine" maxlength="40">
+          </div>
+          <div class="field">
+            <label for="find-clan">Their clan</label>
+            <input id="find-clan" name="clan" placeholder="Optional, but more accurate" maxlength="40">
+          </div>
+          <button type="submit">Search</button>
+        </form>
+        <div id="find-result" class="result"></div>
+      </section>
+    </div>
+
+    <div id="page-meta" class="page page-meta" role="tabpanel" aria-labelledby="page-tab-meta" hidden>
+      <section aria-labelledby="meta-heading">
+        <div class="section-head">
+          <h1 id="meta-heading">Ranked meta</h1>
+          <p class="aside">Last 14 days · mirrors left out</p>
+        </div>
+        <div id="meta-bands" class="filters" role="group" aria-label="How high on the ladder"></div>
+        <div id="meta-result" class="result"></div>
+      </section>
     </div>
   </main>
 

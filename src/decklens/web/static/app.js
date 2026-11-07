@@ -1,10 +1,10 @@
 // DeckLens front end.
 // Safety rule: data from the server is only ever put on the page with
-// textContent (via el()), never innerHTML, so a player named "<script>..."
+// textContent (via el()), never as HTML, so a player named "<script>..."
 // shows up as plain text. The Content Security Policy blocks inline script too.
 "use strict";
 
-const state = { me: null };
+const state = { me: null, local: false };  // local: logins off or the desktop app
 
 // --- small helpers -----------------------------------------------------------
 
@@ -29,9 +29,9 @@ document.addEventListener("keydown", (event) => {
   target.click();
 });
 
-// "Loading…" text with a turning ring, announced politely to screen readers.
+// "Loading…" words with a sweeping bar, announced politely to screen readers.
 function loadingText(text) {
-  const p = el("p", text, "muted loading");
+  const p = el("p", text, "loading");
   p.setAttribute("role", "status");
   return p;
 }
@@ -44,7 +44,20 @@ function el(tag, text, className) {
 }
 
 function show(container, ...children) {
-  container.replaceChildren(...children);
+  container.replaceChildren(...children.filter(Boolean));
+}
+
+function action(text, onClick, className = "quiet") {
+  const b = el("button", text, className);
+  b.type = "button";
+  b.addEventListener("click", onClick);
+  return b;
+}
+
+function disclosure(summary, ...children) {
+  const box = el("details");
+  box.append(el("summary", summary), ...children);
+  return box;
 }
 
 function pct(x) {
@@ -60,19 +73,24 @@ function storageSet(key, value) {
 }
 
 async function api(path, options) {
-  const response = await fetch(path, options);
+  let response;
+  try {
+    response = await fetch(path, options);
+  } catch {
+    throw Object.assign(new Error("Can't reach DeckLens. Check it's still running."), { status: 0 });
+  }
   if (response.status === 401) {  // session expired or logged out elsewhere
     window.location.replace("/login");
-    throw new Error("Please log in");
+    throw Object.assign(new Error("Please log in"), { status: 401 });
   }
   let body = null;
   try { body = await response.json(); } catch { /* not JSON */ }
   if (!response.ok) {
-    let message = "Something went wrong";
+    let message = "The server couldn't do that (error " + response.status + ")";
     if (body && typeof body.detail === "string") message = body.detail;
     else if (response.status === 422) message = "That input isn't valid";
-    else if (response.status === 429) message = "Too many requests, wait a moment";
-    throw new Error(message);
+    else if (response.status === 429) message = "Too many requests: wait a moment";
+    throw Object.assign(new Error(message), { status: response.status });
   }
   return body;
 }
@@ -81,11 +99,38 @@ function tagPath(tag) {
   return encodeURIComponent(tag.trim());
 }
 
-function errorBox(error) {
-  return el("p", error.message, "error");
+// Something didn't work: say what, and offer the one thing to do about it.
+// A feature this server isn't set up for is a calm state, not an error.
+const SETUP_WORDS = /set up|WEB_DATABASE_URL|run python|Needs stored|model yet/i;
+
+// next: an optional action for the not-set-up state (where to go instead).
+function errorBox(error, retry, next) {
+  if (error.status === 503 && SETUP_WORDS.test(error.message)) {
+    const box = el("div", null, "message calm");
+    const what = /model/i.test(error.message) ? "a trained matchup model" : "DeckLens's battle database";
+    const p = el("p", "This needs " + what + ", which isn't connected on this server yet.");
+    box.append(p);
+    if (next) box.append(next);
+    // Only whoever runs DeckLens can fix it: the setup step is for them, not every visitor.
+    if (state.local) box.append(disclosure("Setup", el("p", error.message, "setup")));
+    return box;
+  }
+  const box = el("div", null, "message problem");
+  box.setAttribute("role", "alert");
+  box.append(el("p", error.message));
+  if (retry) box.append(action("Try again", retry));
+  return box;
 }
 
-// --- rendering ---------------------------------------------------------------
+function calm(text, why, ...actions) {
+  const box = el("div", null, "message calm");
+  const p = el("p", text);
+  if (why) p.append(el("span", why, "why"));
+  box.append(p, ...actions);
+  return box;
+}
+
+// --- cards and decks ---------------------------------------------------------
 
 const FORM_LABELS = { evo: "Evo", hero: "Hero", either: "Evo or Hero" };
 
@@ -99,7 +144,7 @@ function cardTile(card) {
   if (card.hidden) {
     // The API leaves out a Hero in the Hero slot: show the gap honestly.
     tile.append(el("span", "?", "card-placeholder"), el("span", card.name, "card-name"),
-      el("span", "The game's API doesn't show this card", "card-facts"));
+      el("span", "Hidden by the game's API", "card-facts"));
     return tile;
   }
 
@@ -137,47 +182,48 @@ function plural(n, one, many) {
   return n + " " + (n === 1 ? one : many);
 }
 
-// side: "yours" or "theirs" (colours the deck blue or red). Their decks also
-// get a read of the spells and buildings to play around.
-function deckView(deck, side) {
+function fact(value, words) {
+  const span = el("span");
+  span.append(el("b", value), words);
+  return span;
+}
+
+// side: "yours" or "theirs" (a blue or red edge). options.read: false leaves
+// out the spells and buildings to play around (the board shows them beside it).
+function deckView(deck, side, options = {}) {
   const box = el("div", null, "deck-box" + (side ? " " + side : ""));
-  const s = deck.summary || {};
-  const facts = [];
-  if (s.avg_elixir !== null && s.avg_elixir !== undefined) facts.push("Average elixir " + s.avg_elixir);
-  if (s.cycle !== null && s.cycle !== undefined) facts.push("4-card cycle " + s.cycle);
-  if (s.evolutions) facts.push(plural(s.evolutions, "evolution", "evolutions"));
-  if (s.heroes) facts.push(plural(s.heroes, "hero", "heroes"));
-  if (s.either) facts.push(s.either + " evo or hero");
-  if (s.fixed_levels) facts.push("Levels set by the challenge");
-  else if (s.maxed !== null && s.maxed !== undefined) facts.push(s.maxed + "/" + s.levels_known + " cards maxed");
-  if (facts.length) box.append(el("p", facts.join(" · "), "deck-facts"));
   const list = el("ul", null, "deck");
   for (const card of deck.cards) list.append(cardTile(card));
   box.append(list);
-  if (knownIds(deck).length >= 8) box.append(copyDeckButton(knownIds(deck)));
-  if (side === "theirs") {
-    const read = scoutRead(deck.cards);
+  const s = deck.summary || {};
+  const facts = el("p", null, "deck-facts");
+  if (s.avg_elixir !== null && s.avg_elixir !== undefined) facts.append(fact(s.avg_elixir, "avg elixir"));
+  if (s.cycle !== null && s.cycle !== undefined) facts.append(fact(s.cycle, "4-card cycle"));
+  if (s.evolutions) facts.append(fact(s.evolutions, s.evolutions === 1 ? "evolution" : "evolutions"));
+  if (s.heroes) facts.append(fact(s.heroes, s.heroes === 1 ? "hero" : "heroes"));
+  if (s.either) facts.append(fact(s.either, "evo or hero"));
+  if (s.fixed_levels) facts.append(el("span", "Levels set by the challenge"));
+  else if (s.maxed !== null && s.maxed !== undefined) facts.append(fact(s.maxed + "/" + s.levels_known, "maxed"));
+  if (facts.childElementCount) box.append(facts);
+  if (side === "theirs" && options.read !== false) {
+    const read = playAround(deck.cards);
     if (read) box.append(read);
   }
-  if (s.hidden) {
-    box.append(el("p", "One card is hidden: the Clash Royale API leaves out a Hero in the " +
-      "Hero slot, so elixir figures use the other seven.", "detail"));
-  }
-  if (s.either) {
-    box.append(el("p", "\"Evo or Hero\": the Wild slot card has both unlocked, and the API " +
-      "doesn't say which one was active.", "detail"));
-  }
+  if (s.hidden) box.append(el("p", "One card is hidden by the game's API; elixir counts the other seven.", "note"));
+  if (s.either) box.append(el("p", "Evo or Hero: the API doesn't say which one was active.", "note"));
   return box;
 }
 
 const READ_KINDS = [["spell", "Spells"], ["building", "Buildings"]];
 
-function scoutRead(cards) {
+// What to play around: their spells and buildings, cheapest first.
+function playAround(cards) {
   const rows = [];
   for (const [kind, title] of READ_KINDS) {
-    const these = cards.filter((c) => c.kind === kind);
+    const these = cards.filter((c) => c.kind === kind)
+      .sort((a, b) => (a.elixir || 0) - (b.elixir || 0));
     if (!these.length) continue;
-    const row = el("p");
+    const row = el("div", null, "row-of");
     row.append(el("span", title, "what"));
     for (const c of these) {
       const chip = el("span", null, "chip");
@@ -188,8 +234,8 @@ function scoutRead(cards) {
     rows.push(row);
   }
   if (!rows.length) return null;
-  const box = el("div", null, "scout-read");
-  box.append(...rows);
+  const box = el("div", null, "play-around");
+  box.append(el("p", "Play around", "label"), ...rows);
   return box;
 }
 
@@ -201,16 +247,11 @@ const FORM_TOKEN = { evo: 1000000000, hero: 2000000000 };
 // link itself, and a copy button. ids: card ids in slot order, then form tokens.
 function copyDeckButton(ids) {
   const wrap = el("div", null, "copy-deck");
-  const button = el("button", "Copy to game", "link-button");
-  button.type = "button";
+  const button = action("Copy to game", null);
   button.setAttribute("aria-expanded", "false");
   const panel = el("div", null, "copy-panel");
   panel.hidden = true;
-  button.addEventListener("click", async () => {
-    const opening = panel.hidden;
-    panel.hidden = !opening;
-    button.setAttribute("aria-expanded", String(opening));
-    if (!opening || panel.childElementCount) return;
+  async function load() {
     show(panel, loadingText("Making the link…"));
     try {
       const r = await api("/api/deck-link", {
@@ -218,9 +259,7 @@ function copyDeckButton(ids) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ deck: ids }),
       });
-      const copy = el("button", "Copy link", "link-button");
-      copy.type = "button";
-      copy.addEventListener("click", async () => {
+      const copy = action("Copy link", async () => {
         try {
           await navigator.clipboard.writeText(r.url);
           copy.textContent = "Copied";
@@ -234,11 +273,16 @@ function copyDeckButton(ids) {
       open.rel = "noopener noreferrer";
       const actions = el("p", null, "copy-actions");
       actions.append(copy, open);
-      show(panel, qrCode(r.qr), el("p", "Scan with your phone's camera to open this deck in " +
-        "Clash Royale.", "hint"), actions);
+      show(panel, qrCode(r.qr), el("p", "Scan with your phone's camera to open it in Clash Royale.", "note"), actions);
     } catch (error) {
-      show(panel, errorBox(error));
+      show(panel, errorBox(error, load));
     }
+  }
+  button.addEventListener("click", () => {
+    const opening = panel.hidden;
+    panel.hidden = !opening;
+    button.setAttribute("aria-expanded", String(opening));
+    if (opening && !panel.childElementCount) load();
   });
   wrap.append(button, panel);
   return wrap;
@@ -273,25 +317,33 @@ function seenText(minutes) {
   return "seen " + Math.round(minutes / 1440) + " days ago";
 }
 
-// Names and clans go in <bdi> so right-to-left text (Arabic, Hebrew) stays
-// inside its own part and can't reorder the tag and numbers around it.
+// The facts about a player, each its own text node. Names and clans go in
+// <bdi> so right-to-left text can't reorder the tag and numbers around it.
+function playerFacts(player, options = {}) {
+  const facts = [];
+  if (options.withTag !== false && player.tag) facts.push(el("span", player.tag));
+  if (player.clan) facts.push(el("bdi", player.clan));
+  else if (options.showNoClan) facts.push(el("span", "no clan"));
+  if (player.rank) facts.push(el("span", "rank #" + player.rank.toLocaleString()));
+  if (player.rating) facts.push(el("span", "rating " + player.rating));
+  else if (player.league) facts.push(el("span", "league " + player.league));
+  if (player.trophies) facts.push(el("span", player.trophies.toLocaleString() + " trophies"));
+  if (player.last_seen_minutes !== null && player.last_seen_minutes !== undefined) {
+    facts.push(el("span", seenText(player.last_seen_minutes), player.last_seen_minutes < 2 ? "online" : undefined));
+  }
+  return facts;
+}
+
 function playerLine(player, options = {}) {
   const line = el("p", null, "player");
   line.append(el("bdi", player.name || "Unknown", "name"));
   const facts = el("span", null, "facts");
-  const add = (node, className) => facts.append(typeof node === "string" ? el("span", node, className) : node);
-  add(player.tag);
-  if (player.clan) add(el("bdi", player.clan));
-  else if (options.showNoClan) add("no clan");
-  if (player.rank) add("rank #" + player.rank);
-  if (player.rating) add("rating " + player.rating);
-  if (player.trophies) add(player.trophies.toLocaleString() + " trophies");
-  if (player.last_seen_minutes !== null && player.last_seen_minutes !== undefined) {
-    add(seenText(player.last_seen_minutes), player.last_seen_minutes < 2 ? "online" : undefined);
-  }
-  line.append(facts);  // every part is a text node: still never HTML
+  facts.append(...playerFacts(player, options));
+  line.append(facts);
   return line;
 }
+
+// --- matchups -----------------------------------------------------------------
 
 const COLUMN_NAMES = { 200: "Top 200", 1000: "Top 1,000" };
 const LEVEL_NAMES = {
@@ -305,13 +357,21 @@ function columnName(tier) {
   return tier === null ? "All players" : COLUMN_NAMES[tier] || "Top " + tier.toLocaleString();
 }
 
+// A thin blue/red bar: blue fills your win rate (the score bug in small).
+function winBar(rate) {
+  const bar = el("span", null, "bar" + (rate === null ? " none" : ""));
+  bar.setAttribute("aria-hidden", "true");
+  if (rate !== null) bar.style.setProperty("--p", (rate * 100).toFixed(1) + "%");
+  return bar;
+}
+
 function recordCell(cell) {
   const td = el("td", null, "record");
   if (cell.mirror) {
     td.append(el("span", "Mirror", "rate"), el("span", plural(cell.games, "game", "games"), "games"));
   } else if (cell.games) {
     const lean = cell.range[0] > 0.5 ? " good" : cell.range[1] < 0.5 ? " bad" : "";
-    td.append(el("span", pct(cell.rate), "rate" + lean));
+    td.append(el("span", pct(cell.rate), "rate" + lean), winBar(cell.rate));
     const games = el("span", plural(cell.games, "game", "games"), "games");
     if (cell.games < 30) games.append(el("span", " (few)", "few"));
     td.append(games, el("span", pct(cell.range[0]) + "–" + pct(cell.range[1]), "range"));
@@ -324,10 +384,10 @@ function recordCell(cell) {
 // Rows: how closely decks must match. Columns: skill tier. Cells: your win rate.
 function breakdownTable(b) {
   const wrap = el("div", null, "table-wrap");
-  const table = el("table", null, "tiers");
+  const table = el("table", null, "tiers matchup-record");
   table.append(el("thead"), el("tbody"));
   const head = el("tr");
-  head.append(el("th", "Match"));
+  head.append(el("th", "Decks alike"));
   for (const cell of b.levels[0].cells) head.append(el("th", columnName(cell.tier)));
   table.tHead.append(head);
   for (const level of b.levels) {
@@ -342,10 +402,10 @@ function breakdownTable(b) {
 
 // Without the database, only the archetype record from training is available.
 function recordOnly(m) {
-  const table = el("table", null, "tiers");
+  const table = el("table", null, "tiers matchup-record");
   table.append(el("thead"), el("tbody"));
   const head = el("tr");
-  head.append(el("th", "Match"), el("th", "All stored battles"));
+  head.append(el("th", "Decks alike"), el("th", "All stored battles"));
   table.tHead.append(head);
   const tr = el("tr");
   tr.append(el("th", LEVEL_NAMES.archetype));
@@ -359,71 +419,68 @@ function recordOnly(m) {
   return table;
 }
 
-// Your win chance as a tug of war: blue pushes from the left, red from the right.
-function tugBar(m) {
+// The odds as a score bug: blue fills the bar by your win chance.
+function oddsBug(m) {
   const you = m.mirror ? 0.5 : m.win_chance;
-  const tug = el("div", null, "tug" + (m.mirror ? " mirror" : ""));
-  const numbers = el("div", null, "tug-numbers");
+  const box = el("div", null, "odds" + (m.mirror ? " mirror" : ""));
+  const numbers = el("div", null, "odds-numbers");
   numbers.setAttribute("aria-hidden", "true");  // the sentence below says the same
   const a = el("span", pct(you), "you");
   a.append(el("small", "you"));
   const b = el("span", pct(1 - you), "them");
   b.append(el("small", "them"));
   numbers.append(a, b);
-  const bar = el("div", null, "tug-bar");
-  bar.setAttribute("aria-hidden", "true");
-  tug.append(numbers, bar);
-  // Start level and slide to the result, so the eye catches which way it leans.
-  requestAnimationFrame(() => requestAnimationFrame(() => bar.style.setProperty("--p", (you * 100).toFixed(1) + "%")));
-  return tug;
-}
-
-// decks: { mine, theirs } when both are known, for the share image.
-function matchupBox(m, label, mode, decks) {
-  const box = el("div", null, "matchup");
-  box.append(el("p", label || "Matchup", "label"));
   const names = el("p", null, "archetypes");
   names.append(el("span", m.archetype_a, "a"), el("span", m.archetype_b, "b"));
-  box.append(names, tugBar(m));
-  let why = "";
-  if (m.based_on) {
-    why = " From " + plural(m.based_on.games, "game", "games") + " between " + m.based_on.words +
-      " (same win conditions, spells, Evos and Heroes), pulled toward " +
-      (m.estimate === "model" ? "the model's" : "the archetype") + " estimate of " +
-      pct(m.estimate_chance) + " by how few games there are.";
-  }
-  box.append(el("p", m.mirror ? "Mirror match: a coin flip on decks."
-    : "Your deck wins about " + pct(m.win_chance) + " of games like this." + why, "chance"));
+  const said = m.mirror ? "Mirror match: a coin flip on decks."
+    : "Your deck wins about " + pct(you) + " of games like this.";
+  const head = el("div", null, "odds-head");
+  head.append(el("p", "Odds", "label"));
+  if (m.based_on) head.append(el("span", plural(m.based_on.games, "game", "games"), "basis"));
+  else if (m.mirror) head.append(el("span", "Mirror match", "basis"));
+  box.append(head, el("p", said, "visually-hidden"), numbers, names);
+  // Blue fills exactly your win chance, sliding from level to the result.
+  requestAnimationFrame(() => requestAnimationFrame(() => {
+    numbers.style.setProperty("--p", (you * 100).toFixed(1) + "%");
+  }));
+  return box;
+}
+
+// Everything behind the odds: the record table, notes, the cards that decide
+// it, and the share image. decks: { mine, theirs } for the share image.
+function matchupDetail(m, mode, decks) {
+  const box = el("div", null, "matchup");
+  box.append(el("p", "How the matchup has gone", "label"));
   if (m.breakdown) {
-    box.append(breakdownTable(m.breakdown));
-    box.append(el("p", "Your win rate, from ranked games in the last " + m.breakdown.window_days +
-      " days. Exact: both decks card for card. 7+ / 6+ of 8: each deck shares at least that " +
-      "many cards with yours and theirs. Archetype: same deck styles. Below Exact, both decks " +
-      "also keep the same win condition and spells (Rocket instead of Fireball is a different " +
-      "matchup). Top 200 / 1,000 only " +
-      "count games where both players were in that bracket (ranks beyond 500 come from " +
-      "that day's leaderboard).", "detail"));
+    box.append(breakdownTable(m.breakdown), disclosure("How to read this",
+      el("p", "Your win rate in Ranked games over the last " + m.breakdown.window_days + " days. " +
+        "Exact: both decks card for card. 7+ / 6+ of 8: each deck shares at least that many cards " +
+        "with yours and theirs, keeping the same win condition and spells. Archetype: same deck " +
+        "styles. Top 200 / 1,000 count only games where both players were in that bracket.", "note")));
   } else if (m.record || m.mirror) {
     box.append(recordOnly(m));
   }
-  if (m.note) box.append(el("p", m.note, "note"));
-  if (mode === "challenge") {
-    box.append(el("p", "These numbers come from Ranked games (challenge games aren't collected), " +
-      "so treat them as a rough guide for the challenge.", "note"));
-  } else if (mode === "trophy") {
-    box.append(el("p", "These numbers come from Ranked games (Trophy Road games aren't collected), " +
-      "so treat them as a rough guide. Card levels matter more on Trophy Road.", "note"));
+  const about = [];
+  if (m.based_on) {
+    about.push(el("p", "Odds come from " + plural(m.based_on.games, "game", "games") + " between " +
+      m.based_on.words + ", pulled toward " + (m.estimate === "model" ? "the model's" : "the archetype") +
+      " estimate of " + pct(m.estimate_chance) + " while there are few.", "note"));
+  }
+  if (m.note) about.push(el("p", m.note, "note"));
+  if (about.length) box.append(disclosure("About these odds", ...about));
+  if (mode === "challenge" || mode === "trophy") {
+    box.append(el("p", "From Ranked games, so a rough guide for " +
+      (mode === "challenge" ? "the challenge." : "Trophy Road, where card levels matter more."), "note"));
   }
   if (m.key_cards && m.key_cards.length) {
     const cards = el("ul", null, "key-cards");
     for (const k of m.key_cards) {
-      const where = k.deck === "yours" ? "in your deck" : "in their deck";
-      const effect = k.effect > 0 ? "helps you" : "helps them";
       const item = el("li");
-      item.append(el("span", k.card, k.effect > 0 ? "yours" : "theirs"), " (" + where + ") " + effect);
+      item.append(el("span", k.card, k.effect > 0 ? "yours" : "theirs"),
+        k.effect > 0 ? " in your deck helps you" : " in their deck helps them");
       cards.append(item);
     }
-    box.append(el("p", "Cards that matter most:", "detail"), cards);
+    box.append(el("p", "Cards that decide it", "label"), cards);
   }
   if (decks && decks.mine && decks.theirs) box.append(shareButton(m, decks.mine, decks.theirs));
   return box;
@@ -431,8 +488,9 @@ function matchupBox(m, label, mode, decks) {
 
 // --- share image ----------------------------------------------------------------
 
-const SHARE = { w: 1080, h: 1440, bg: "#131a2b", panel: "#1b2439", text: "#edf0f7",
-  muted: "#a3adc8", blue: "#5b95ff", red: "#ff6168", elixir: "#d968ff" };
+const SHARE = { w: 1080, h: 1440, bg: "#0a0e18", panel: "#111727", text: "#f1f4fb",
+  muted: "#a7b1cc", blue: "#2f62e8", blueText: "#7aa2ff", red: "#d62f3b", redText: "#ff7a82",
+  elixir: "#9b2fc9" };
 
 function loadImage(src) {
   return new Promise((resolve) => {
@@ -448,18 +506,16 @@ function cardSrc(card) {
   return "/cards/" + encodeURIComponent(card.id) + ".png" + form;
 }
 
-// One deck: 4 x 2 cards on a tinted panel, with its archetype above.
+// One deck: 4 x 2 cards on a band in its team colour, with its archetype above.
 async function drawDeck(ctx, deck, x, y, colour, title) {
   const C = SHARE, cw = 180, ch = 216, gap = 16;
   ctx.fillStyle = colour;
+  ctx.fillRect(x - 16, y, 4 * cw + 3 * gap + 32, 60);
+  ctx.fillStyle = "#fff";
   ctx.font = "700 44px 'Barlow Condensed', sans-serif";
-  ctx.fillText(title, x, y + 40);
+  ctx.fillText(title.toUpperCase(), x, y + 45);
   ctx.fillStyle = C.panel;
-  ctx.beginPath();
-  ctx.roundRect(x - 16, y + 60, 4 * cw + 3 * gap + 32, 2 * ch + gap + 32, 24);
-  ctx.fill();
-  ctx.fillStyle = colour;
-  ctx.fillRect(x - 16, y + 60, 8, 2 * ch + gap + 32);
+  ctx.fillRect(x - 16, y + 60, 4 * cw + 3 * gap + 32, 2 * ch + gap + 32);
   const images = await Promise.all(deck.cards.map((c) => (c.id ? loadImage(cardSrc(c)) : null)));
   deck.cards.slice(0, 8).forEach((card, i) => {
     const cx = x + (i % 4) * (cw + gap), cy = y + 76 + Math.floor(i / 4) * (ch + gap);
@@ -499,26 +555,21 @@ async function shareCanvas(m, mine, theirs) {
   ctx.fillRect(0, 0, C.w, C.h);
   const left = (C.w - (4 * 180 + 3 * 16)) / 2;   // the decks sit centred
   await drawDeck(ctx, mine, left, 30, C.blue, m.archetype_a);
-  // The verdict between the decks: the tug of war.
+  // The verdict between the decks: the odds and the split bar.
   const you = m.mirror ? 0.5 : m.win_chance, top = 590;
   ctx.font = "700 120px 'Barlow Condensed', sans-serif";
-  ctx.fillStyle = C.blue;
+  ctx.fillStyle = C.blueText;
   ctx.fillText(pct(you), 60, top + 100);
-  ctx.fillStyle = C.red;
+  ctx.fillStyle = C.redText;
   ctx.textAlign = "right";
   ctx.fillText(pct(1 - you), C.w - 60, top + 100);
   ctx.textAlign = "left";
   ctx.fillStyle = C.red;
-  ctx.beginPath();
-  ctx.roundRect(60, top + 124, C.w - 120, 28, 14);
-  ctx.fill();
-  ctx.save();
-  ctx.clip();
+  ctx.fillRect(60, top + 124, C.w - 120, 28);
   ctx.fillStyle = C.blue;
   ctx.fillRect(60, top + 124, (C.w - 120) * you, 28);
-  ctx.restore();
-  ctx.fillStyle = C.bg;
-  ctx.fillRect(C.w / 2 - 2, top + 118, 4, 40);
+  ctx.fillStyle = C.text;
+  ctx.fillRect(C.w / 2 - 2, top + 116, 4, 44);
   await drawDeck(ctx, theirs, left, top + 180, C.red, m.archetype_b);
   ctx.fillStyle = C.muted;
   ctx.font = "500 26px system-ui, sans-serif";
@@ -532,12 +583,13 @@ async function shareCanvas(m, mine, theirs) {
 
 function shareButton(m, mine, theirs) {
   const wrap = el("div", null, "share");
-  const button = el("button", "Share image", "link-button");
-  button.type = "button";
+  const button = action("Share image", null);
+  button.setAttribute("aria-expanded", "false");
   const panel = el("div", null, "share-panel");
   panel.hidden = true;
   button.addEventListener("click", async () => {
     panel.hidden = !panel.hidden;
+    button.setAttribute("aria-expanded", String(!panel.hidden));
     if (panel.hidden || panel.childElementCount) return;
     show(panel, loadingText("Drawing…"));
     const canvas = await shareCanvas(m, mine, theirs);
@@ -546,13 +598,11 @@ function shareButton(m, mine, theirs) {
     canvas.setAttribute("aria-label", "Share image: " + m.archetype_a + " vs " + m.archetype_b +
       ", " + pct(m.win_chance) + " to " + pct(1 - m.win_chance));
     const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/png"));
-    const save = el("a", "Download PNG", "link-button");
+    const save = el("a", "Download PNG", "quiet");
     save.href = URL.createObjectURL(blob);
     save.download = "decklens-" + (m.archetype_a + "-vs-" + m.archetype_b).toLowerCase()
       .replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") + ".png";
-    const copy = el("button", "Copy image", "link-button");
-    copy.type = "button";
-    copy.addEventListener("click", async () => {
+    const copy = action("Copy image", async () => {
       try {
         await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
         copy.textContent = "Copied";
@@ -587,21 +637,43 @@ async function showMe(tag) {
     state.me = me;
     state.myDecks = undefined;  // your Trophy Road / challenge decks: fetched again for this player
     storageSet("decklens.myTag", me.tag);
-    show(out, playerLine(me), ...youTabs(me));
+    show(out, youView(me));
   } catch (error) {
     state.me = null;
     state.myDecks = undefined;
-    show(out, errorBox(error));
+    show(out, errorBox(error, () => showMe(tag)));
   }
+  if (board.key === null) boardIdle();  // the board's blue side is you
+  else refreshYouSide();
 }
 
-// Deck, record and tweaks share one spot, so the page stays short. A tab is
-// built the first time it's opened; the last one you used is remembered.
-const YOU_TABS = [["deck", "Deck"], ["today", "Today"], ["record", "Record"], ["rank", "Rank"],
-  ["tweaks", "Tweaks"]];
+// Wide screens: you and your deck on the left, today / record / rank / tweaks
+// on the right. Narrow screens stack them.
+function youView(me) {
+  const grid = el("div", null, "you-grid");
+  const left = el("div");
+  const head = el("div", null, "you-head");
+  head.append(el("bdi", me.name || "You", "name"));
+  const facts = el("span", null, "facts");
+  facts.append(...playerFacts(me));
+  head.append(facts);
+  const deck = el("div", null, "you-deck");
+  deck.append(el("p", "Current deck", "label"), me.deck.cards.length ? deckView(me.deck, "yours")
+    : el("p", "No current deck in your profile.", "muted"));
+  if (me.deck.cards.length && knownIds(me.deck).length >= 8) deck.append(copyDeckButton(knownIds(me.deck)));
+  left.append(head, deck);
+  const right = el("div");
+  right.append(...youTabs(me));
+  grid.append(left, right);
+  return grid;
+}
+
+// Today, record, rank and tweaks share one spot. A tab is built the first time
+// it's opened; the last one you used is remembered.
+const YOU_TABS = [["today", "Today"], ["record", "Record"], ["rank", "Rank"], ["tweaks", "Tweaks"]];
 
 function youTabs(me) {
-  const bar = el("div", null, "tabs strip");
+  const bar = el("div", null, "subtabs");
   bar.setAttribute("role", "tablist");
   bar.setAttribute("aria-label", "About you");
   const panel = el("div", null, "tab-panel");
@@ -612,10 +684,7 @@ function youTabs(me) {
 
   function build(key) {
     const box = el("div");
-    if (key === "deck") {
-      box.append(me.deck.cards.length ? deckView(me.deck, "yours")
-        : el("p", "No current deck in your profile.", "muted"));
-    } else if (key === "record") {
+    if (key === "record") {
       showRecord(me.tag, box, 30);
     } else if (key === "today") {
       showSession(me.tag, box);
@@ -635,7 +704,6 @@ function youTabs(me) {
     built[key] = built[key] || build(key);
     panel.replaceChildren(built[key]);
     storageSet("decklens.youTab", key);
-    if (buttons[key].scrollIntoView) buttons[key].scrollIntoView({ block: "nearest", inline: "nearest" });
   }
 
   for (const [key, label] of YOU_TABS) {
@@ -649,18 +717,17 @@ function youTabs(me) {
     bar.append(b);
   }
   const saved = storageGet("decklens.youTab");
-  select(YOU_TABS.some(([k]) => k === saved) ? saved : "deck");
+  select(YOU_TABS.some(([k]) => k === saved) ? saved : "today");
   return [bar, panel];
 }
 
 // --- today's session ------------------------------------------------------------
 
 function refreshButton(onClick) {
-  const b = el("button", "Refresh", "link-button");
-  b.type = "button";
-  b.addEventListener("click", onClick);
-  return b;
+  return action("Refresh", onClick);
 }
+
+const STREAK_WORDS = { won: ["Won", "Last game: won"], lost: ["Lost", "Last game: lost"], draw: ["Drew", "Last game: a draw"] };
 
 async function showSession(tag, box) {
   show(box, loadingText("Reading your battle log…"));
@@ -668,33 +735,31 @@ async function showSession(tag, box) {
   try {
     s = await api("/api/players/" + tagPath(tag) + "/session");
   } catch (error) {
-    show(box, errorBox(error), refreshButton(() => showSession(tag, box)));
+    show(box, errorBox(error, () => showSession(tag, box)));
     return;
   }
   if (!s.games) {
-    show(box, el("p", "No Ranked games in your recent battle log.", "muted"),
-      refreshButton(() => showSession(tag, box)));
+    show(box, calm("No Ranked games in your recent battle log.", null,
+      refreshButton(() => showSession(tag, box))));
     return;
   }
-  const head = el("div", null, "session-head");
   const score = el("p", null, "session-score");
+  score.setAttribute("aria-label", s.wins + " wins, " + s.losses + " losses");
   score.append(el("span", String(s.wins), "result-won"), el("span", "–"),
     el("span", String(s.losses), "result-lost"));
-  head.append(score, el("p", pct(s.wins / Math.max(1, s.wins + s.losses)) + " won, " +
+  const parts = [score, el("p", pct(s.wins / Math.max(1, s.wins + s.losses)) + " won · " +
     plural(s.games, "game", "games") + " since " + new Date(s.started).toLocaleTimeString([],
-      { hour: "numeric", minute: "2-digit" }), "detail"));
-  const parts = [head];
+      { hour: "numeric", minute: "2-digit" }), "detail")];
   // Oldest on the left, like reading the session from the start.
   const strip = el("ol", null, "session-strip");
   strip.setAttribute("aria-label", "Results, oldest first");
   for (const r of [...s.results].reverse()) {
-    const dot = el("li", r === "won" ? "W" : r === "lost" ? "L" : "D", "dot-" + r);
-    strip.append(dot);
+    strip.append(el("li", r === "won" ? "W" : r === "lost" ? "L" : "D", "dot-" + r));
   }
   parts.push(strip);
   const st = s.streak;
-  parts.push(el("p", (st.result === "won" ? "Won " : st.result === "lost" ? "Lost " : "Drew ") +
-    st.games + " in a row.", "detail"));
+  const words = STREAK_WORDS[st.result] || STREAK_WORDS.draw;
+  parts.push(el("p", st.games === 1 ? words[1] + "." : words[0] + " " + st.games + " in a row.", "detail"));
   if (s.rank && s.rank.now) {
     const r = s.rank;
     let text = "Rank now #" + r.now.toLocaleString();
@@ -717,9 +782,21 @@ async function showSession(tag, box) {
 
 const RANK_DAYS = [7, 30, 90];
 
+function filterRow(label, options, chosen, onPick) {
+  const row = el("div", null, "filters");
+  row.setAttribute("role", "group");
+  row.setAttribute("aria-label", label);
+  for (const [value, text] of options) {
+    const b = action(text, () => onPick(value), "filter");
+    b.setAttribute("aria-pressed", String(value === chosen));
+    row.append(b);
+  }
+  return row;
+}
+
 // Rank over time, best (lowest number) at the top.
 function rankChart(points) {
-  const W = 600, H = 180, PAD = 8;
+  const W = 600, H = 200, PAD = 8;
   const times = points.map((p) => new Date(p.time).getTime());
   const ranks = points.map((p) => p.rank);
   const t0 = Math.min(...times), t1 = Math.max(...times);
@@ -735,49 +812,43 @@ function rankChart(points) {
     class: "rank-line", "vector-effect": "non-scaling-stroke" }));
   chart.append(svg("circle", { cx: x(times[times.length - 1]), cy: y(ranks[ranks.length - 1]), r: 4,
     class: "rank-now" }));
-  return chart;
+  return { chart, best, worst };
 }
 
 async function showRank(tag, box, days) {
-  const tabs = el("div", null, "chips");
-  tabs.setAttribute("role", "group");
-  tabs.setAttribute("aria-label", "How far back");
-  for (const d of RANK_DAYS) {
-    const b = el("button", d + " days", "chip-button");
-    b.type = "button";
-    b.setAttribute("aria-pressed", String(d === days));
-    b.addEventListener("click", () => showRank(tag, box, d));
-    tabs.append(b);
-  }
-  show(box, tabs, loadingText("Loading your rank…"));
+  const filters = filterRow("How far back", RANK_DAYS.map((d) => [d, d + " days"]), days,
+    (d) => showRank(tag, box, d));
+  show(box, filters, loadingText("Loading your rank…"));
   let h;
   try {
     h = await api("/api/players/" + tagPath(tag) + "/rank-history?days=" + days);
   } catch (error) {
-    show(box, tabs, errorBox(error));
+    show(box, filters, errorBox(error, () => showRank(tag, box, days)));
     return;
   }
   const pts = h.points;
   if (!pts.length) {
-    show(box, tabs, el("p", "No rank yet this season (you need a global rank, about the top " +
-      "10,000).", "muted"));
+    show(box, filters, calm("No rank yet this season.", " A global rank starts at about the top 10,000."));
     return;
   }
   const now = pts[pts.length - 1].rank;
-  const best = Math.min(...pts.map((p) => p.rank));
   const head = el("p", null, "session-score");
   head.append(el("span", "#" + now.toLocaleString()));
-  const parts = [tabs, head, el("p", "Best #" + best.toLocaleString() + " in the last " + days +
-    " days. Higher on the chart is better.", "detail")];
+  const parts = [filters, head];
   if (pts.length > 1) {
-    const chart = el("div", null, "rank-wrap");
-    chart.append(rankChart(pts));
+    const { chart, best, worst } = rankChart(pts);
+    const wrap = el("div", null, "rank-wrap");
+    const scale = el("div", null, "rank-scale");
+    scale.setAttribute("aria-hidden", "true");
+    scale.append(el("span", "#" + best.toLocaleString()), el("span", "#" + worst.toLocaleString()));
     const axis = el("p", null, "rank-axis");
     axis.append(el("span", new Date(pts[0].time).toLocaleDateString()), el("span", "now"));
-    parts.push(chart, axis);
+    wrap.append(scale, chart, axis);
+    parts.push(wrap);
   } else {
-    parts.push(el("p", "One reading so far: the graph fills in as your games are collected " +
-      "(every 15 minutes while the app is open, with DECKLENS_MY_TAGS set).", "note"));
+    parts.push(calm("One reading so far.", " The graph fills in as your games are collected."),
+      disclosure("Setup", el("p", "Rank readings are saved every 15 minutes while DeckLens is open, " +
+        "for the tags listed in DECKLENS_MY_TAGS.", "setup")));
   }
   show(box, ...parts);
 }
@@ -815,8 +886,7 @@ function gainCell(c) {
 
 // One-card swaps real players of your deck make, and how they did, by rank range.
 async function showTweaks(deck, box, band) {
-  show(box, el("p", "Deck tweaks", "label"),
-    loadingText("Looking at stored decks one card away from yours…"));
+  show(box, loadingText("Looking at decks one card away from yours…"));
   let t;
   try {
     t = await api("/api/tweaks", {
@@ -825,25 +895,17 @@ async function showTweaks(deck, box, band) {
       body: JSON.stringify({ deck: knownIds(deck), band }),
     });
   } catch (error) {
-    show(box, errorBox(error));
+    show(box, errorBox(error, () => showTweaks(deck, box, band)));
     return;
   }
   const bands = t.bands.filter((b) => b.base !== undefined);
   if (!t.swaps.length || !bands.length) {
-    show(box, el("p", "No version of your deck with one card different has 10+ stored games " +
-      (band === "all" ? "" : "in this range ") + "yet. Try another range, or check back after more crawls.", "muted"));
+    show(box, calm("No one-card swaps of your deck with 10+ stored games" +
+      (band === "all" ? "" : " in this range") + " yet.", " Try another range, or check back after more crawls."));
     return;
   }
-  const sorter = el("div", null, "chips");
-  sorter.setAttribute("role", "group");
-  sorter.setAttribute("aria-label", "Sort by rank range");
-  for (const b of bands) {
-    const button = el("button", b.label, "chip-button");
-    button.type = "button";
-    button.setAttribute("aria-pressed", String(b.key === band));
-    button.addEventListener("click", () => showTweaks(deck, box, b.key));
-    sorter.append(button);
-  }
+  const sorter = filterRow("Sort by rank range", bands.map((b) => [b.key, b.label]), band,
+    (key) => showTweaks(deck, box, key));
   const wrap = el("div", null, "table-wrap");
   const table = el("table", null, "tiers tweak-table");
   table.append(el("thead"), el("tbody"));
@@ -869,12 +931,11 @@ async function showTweaks(deck, box, band) {
     table.tBodies[0].append(tr);
   }
   wrap.append(table);
-  show(box, el("p", "Best swaps for:", "hint"), sorter, wrap,
-    el("p", "Real stored Ranked games of decks that share 7 of your 8 cards: the swap is the card " +
-      "they play instead of one of yours. Win rates are pulled toward all decks close to yours " +
-      "(6+ of 8 cards) by 20 games, so a lucky 3–0 doesn't top the list. Top 10,000 / 1,000 go " +
-      "by each player's global rank when they played. Swaps need 10+ games in the column you " +
-      "sort by.", "note"));
+  show(box, sorter, wrap, disclosure("How swaps are scored",
+    el("p", "Stored Ranked games of decks sharing 7 of your 8 cards: the swap is the card they play " +
+      "instead of one of yours. Win rates are pulled toward all decks close to yours (6+ of 8) by " +
+      "20 games, so a lucky 3–0 doesn't top the list. Rank ranges use each player's global rank when " +
+      "they played; swaps need 10+ games in the range you sort by.", "note")));
 }
 
 const RECORD_DAYS = [7, 30, 90];
@@ -892,8 +953,8 @@ function miniDeck(deck) {
       img.src = "/cards/" + encodeURIComponent(card.id) + ".png" + form;
       img.alt = card.name + (FORM_LABELS[card.form] ? " (" + FORM_LABELS[card.form] + ")" : "");
       img.title = img.alt;
-      img.width = 36;
-      img.height = 43;
+      img.width = 40;
+      img.height = 48;
       img.loading = "lazy";
       img.addEventListener("error", () => img.replaceWith(el("span", card.name, "mini-name")));
       item.append(img);
@@ -962,35 +1023,27 @@ function recordWords(a) {
 }
 
 // Your own Ranked record against each archetype you've faced: type to filter,
-// tap a row to see your latest games against it.
+// open a row to see your latest games against it.
 async function showRecord(tag, box, days) {
-  const tabs = el("div", null, "chips");
-  tabs.setAttribute("role", "group");
-  tabs.setAttribute("aria-label", "How far back");
-  for (const d of RECORD_DAYS) {
-    const b = el("button", d + " days", "chip-button");
-    b.type = "button";
-    b.setAttribute("aria-pressed", String(d === days));
-    b.addEventListener("click", () => showRecord(tag, box, d));
-    tabs.append(b);
-  }
-  show(box, tabs, loadingText("Loading your games…"));
+  const filters = filterRow("How far back", RECORD_DAYS.map((d) => [d, d + " days"]), days,
+    (d) => showRecord(tag, box, d));
+  show(box, filters, loadingText("Loading your games…"));
   let r;
   try {
     r = await api("/api/players/" + tagPath(tag) + "/record?days=" + days);
   } catch (error) {
-    show(box, tabs, errorBox(error));
+    show(box, filters, errorBox(error, () => showRecord(tag, box, days)));
     return;
   }
-  const parts = [tabs];
+  const parts = [filters];
   if (!r.games) {
-    parts.push(el("p", "No Ranked games in this window yet.", "muted"));
+    parts.push(calm("No Ranked games in this window yet."));
   } else {
     parts.push(el("p", "Ranked: " + r.wins + " wins from " + plural(r.games, "game", "games") +
       " (" + pct(r.wins / r.games) + ").", "detail"));
     const search = el("input", null, "record-search");
     search.type = "search";
-    search.placeholder = "Find a win condition, deck or card, e.g. golem or rocket";
+    search.placeholder = "Find a win condition or card, e.g. golem";
     search.setAttribute("aria-label", "Find a win condition, deck or card");
     search.maxLength = 40;
     const none = el("p", "Nothing matches that.", "muted");
@@ -1034,9 +1087,9 @@ async function showRecord(tag, box, days) {
     parts.push(search, list, none);
   }
   if (!r.stored) {
-    parts.push(el("p", "Only your last ~25 battles are counted. To keep a longer record, add your " +
-      "tag to DECKLENS_MY_TAGS in .env: your games are then saved every 15 minutes while the app " +
-      "is open, and with each scheduled crawl.", "note"));
+    parts.push(disclosure("Keep a longer record", el("p", "Only your last ~25 battles count right now. " +
+      "Add your tag to DECKLENS_MY_TAGS in .env and your games are saved every 15 minutes while " +
+      "DeckLens is open, and with each scheduled crawl.", "setup")));
   }
   show(box, ...parts);
 }
@@ -1060,7 +1113,7 @@ async function lookUpMe(event) {
   const tag = asTag(text);
   if (text.trim().startsWith("#")) {
     if (tag) await showMe(tag);
-    else show(out, el("p", "That isn't a valid player tag.", "error"));
+    else show(out, errorBox(new Error("That isn't a valid player tag: tags use only 0289PYLQGRJCUV.")));
     return;
   }
   show(out, loadingText("Searching…"));
@@ -1072,45 +1125,347 @@ async function lookUpMe(event) {
     searchError = error;
   }
   if (!results.length && !tag) {
-    show(out, searchError ? errorBox(searchError) : el("p", "No players found with that name. " +
-      "DeckLens only knows players it has seen in ranked games, so try your tag instead " +
-      "(it's under your name on your profile).", "muted"));
+    show(out, searchError ? errorBox(searchError, lookUpMe) : calm("No one by that name yet.",
+      " Try your player tag: it's under your name in your profile."));
     return;
   }
   const list = el("ul", null, "results");
   if (tag) list.append(pickButton(el("p", "Use player tag " + tag, "player"), () => showMe(tag)));
   for (const r of results) list.append(pickButton(playerLine(r), () => showMe(r.tag)));
-  show(out, el("p", "Tap yourself:", "hint"), list);
+  show(out, el("p", "Which one is you?", "label"), list);
 }
 
-// --- last opponent -----------------------------------------------------------
+// --- the battle board -----------------------------------------------------------
+// The top of Scout: a versus bar (you in blue, them in red), their deck, what to
+// play around and the odds. Every way of finding an opponent ends here.
 
-function lastOpponentParts(opp) {
-  const parts = [
-    playerLine(opp),
-    el("p", (MODE_NAMES[opp.mode] || "Battle") + " · You " + opp.your_result + " this one.", "detail"),
-    el("p", "Their deck", "label"),
-    deckView(opp.deck, "theirs"),
-  ];
-  if (opp.matchup) {
-    parts.push(matchupBox(opp.matchup, "Your deck vs theirs", opp.mode,
-      { mine: opp.your_deck, theirs: opp.deck }));
+const board = { token: 0, key: null };
+
+function boardSay(text) {
+  document.getElementById("board-said").textContent = text;
+}
+
+// tools: what sits on the strip above the VS bar (game modes, Wrong player?).
+function setBoard(...children) {
+  show(document.getElementById("board-body"), ...children);
+  show(document.getElementById("board-tools"));
+}
+
+function setTools(...nodes) {
+  show(document.getElementById("board-tools"), ...nodes);
+}
+
+// tag: { text, kind } on their side: "sure" (yellow), "doubt" (outlined) or plain.
+function youSide() {
+  const you = el("div", null, "vs-side vs-you");
+  you.append(el("bdi", state.me ? state.me.name || "You" : "You", "vs-name"));
+  const facts = el("div", null, "vs-facts");
+  if (state.me) {
+    const s = state.me.deck && state.me.deck.summary;
+    if (s && s.avg_elixir !== null && s.avg_elixir !== undefined) facts.append(el("span", s.avg_elixir + " avg elixir"));
+    facts.append(...playerFacts(state.me, { withTag: false }));
+    you.append(facts);
+  } else {
+    you.append(action("Set your tag", goToYou, "quiet on-band"));
+  }
+  return you;
+}
+
+// Looked up after the board was drawn: put you on it.
+function refreshYouSide() {
+  const old = document.querySelector("#board-body .vs-you");
+  if (old) old.replaceWith(youSide());
+}
+
+function vsBar(them, tag, lands) {
+  const bar = el("div", null, "vs" + (lands ? " lands" : ""));
+  const you = youSide();
+  const mark = el("span", "VS", "vs-mark");
+  mark.setAttribute("aria-hidden", "true");
+  const side = el("div", null, "vs-side vs-them" + (them ? "" : " unknown"));
+  if (tag) side.append(el("span", tag.text, "tag " + (tag.kind || "")));
+  side.append(el("bdi", them ? them.name || "Name unreadable" : "No opponent yet", "vs-name"));
+  if (them) {
+    const facts = el("div", null, "vs-facts");
+    facts.append(...playerFacts(them));
+    side.append(facts);
+  }
+  bar.append(you, mark, side);
+  return bar;
+}
+
+// The other candidates are in the list under the form: one click away.
+function wrongPlayer() {
+  const listed = document.querySelectorAll("#find-result .result-button").length > 1;
+  return action(listed ? "Wrong player?" : "Find someone else", () => {
+    const target = listed ? document.getElementById("find-result") : document.getElementById("find-name");
+    target.scrollIntoView({ block: "start" });
+    if (!listed) target.focus();
+  }, "quiet wrong-player");
+}
+
+function goToYou() {
+  setPage("you");
+  document.getElementById("me-tag").focus();
+}
+
+function findByName() {
+  document.getElementById("find-name").focus();
+}
+
+// Nobody on the board yet: what DeckLens is doing, and the ways to start.
+function boardIdle() {
+  board.token++;
+  board.key = null;
+  const watching = document.getElementById("auto-scout").checked;
+  const idle = el("div", null, "board-idle");
+  if (!state.me) {
+    idle.append(el("p", "Set your player tag to scout", "big"),
+      el("p", "Your tag finds your last opponent and works out the odds.", "muted"));
+    const row = el("div", null, "board-actions");
+    row.append(action("Go to You", goToYou, "primary"), action("Find by name", findByName));
+    idle.append(row);
+  } else {
+    if (watching) idle.append(el("p", "Watching your phone for a battle", "big"));
+    else idle.append(el("p", "Switch on auto-scout to find them as a battle starts.", "muted"));
+    const row = el("div", null, "board-actions");
+    row.append(action("Scout last opponent", scoutLast, "primary them"), action("Find by name", findByName));
+    idle.append(row);
+  }
+  setBoard(vsBar(null, null, false), idle);
+}
+
+function boardFinding(read) {
+  board.token++;
+  board.key = "read:" + (read.name || "") + "|" + (read.clan || "");
+  setBoard(vsBar({ name: read.name || "Name unreadable", clan: read.clan, rating: read.rating },
+    { text: "Read from your phone", kind: "doubt" }, true), loadingText("Finding them…"));
+  boardSay("In a battle. Looking for " + (read.name || "their clan") + ".");
+}
+
+// The read didn't match anyone: say so, and offer to read it again.
+function boardNotFound(read, count) {
+  const them = { name: read.name || "Name unreadable", clan: read.clan, rating: read.rating };
+  const who = read.name ? "“" + read.name + "”" : "anyone in “" + read.clan + "”";
+  const actions = [action("Read again", rescanOpponent, "primary them")];
+  if (count) actions.push(action("Pick from the list", () => document.getElementById("find-result").scrollIntoView()));
+  else actions.push(action("Search by hand", findByName));
+  setBoard(vsBar(them, { text: "Not found", kind: "doubt" }, false),
+    calm("Couldn't find " + who + (count ? " for sure." : "."),
+      count ? " Closest matches are below." : " If the name was misread, read it again.", ...actions));
+  boardSay("Couldn't find " + who + ".");
+}
+
+function boardUnreadable() {
+  board.token++;
+  board.key = "unreadable";
+  const text = state.me ? "Their deck shows here when the battle ends."
+    : "Set your player tag on You, and their deck shows here after the battle.";
+  setBoard(vsBar({ name: "Name unreadable" }, { text: "Can't read their name", kind: "doubt" }, true),
+    calm(text, " The name uses letters the screen reader doesn't know, like Arabic or emoji."));
+  boardSay("In a battle, but their name can't be read.");
+}
+
+function newestPlay(decks) {
+  return decks.reduce((best, d) => (String(d.last_played) > best ? String(d.last_played) : best), "");
+}
+
+// The odds for their deck: needs your deck too.
+async function predict(mine, theirs) {
+  if (!mine || knownIds(mine.deck).length < 7 || knownIds(theirs).length < 7) return null;
+  try {
+    return {
+      m: await api("/api/predict", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ deck_a: knownIds(mine.deck), deck_b: knownIds(theirs) }),
+      }),
+    };
+  } catch (error) {
+    return { error };
+  }
+}
+
+function oddsPanel(result, mine) {
+  if (!mine) {
+    return calm("Odds need your deck.", " Set your player tag on You.", action("Go to You", goToYou));
+  }
+  if (!result) return calm("Not enough of the decks is known for odds.");
+  if (result.error) return errorBox(result.error);
+  return oddsBug(result.m);
+}
+
+// Their deck large on the left; play around, odds, history and Copy to game
+// on the right; your deck and the matchup detail under the fold.
+function boardBody(deck, sub, mode, mine, result, history, extra) {
+  const grid = el("div", null, "board-grid");
+  const left = el("div");
+  const label = el("p", "Their deck", "label");
+  if (sub) label.append(el("span", sub, "sub"));
+  left.append(label, deckView(deck, "theirs", { read: false }));
+  const side = el("div", null, "board-side");
+  const read = playAround(deck.cards);
+  if (read) side.append(read);
+  side.append(oddsPanel(result, mine));
+  if (history) side.append(history);
+  const actions = el("div", null, "board-actions");
+  if (knownIds(deck).length >= 8) actions.append(copyDeckButton(knownIds(deck)));
+  if (extra) actions.append(...extra);
+  side.append(actions);
+  grid.append(left, side);
+  const parts = [grid];
+  if (mine) {
+    const more = el("div", null, "board-more two");
+    const yours = el("div");
+    yours.append(el("p", mine.label, "label"), deckView(mine.deck, "yours"));
+    more.append(yours);
+    if (result && result.m) more.append(matchupDetail(result.m, mode, { mine: mine.deck, theirs: deck }));
+    parts.push(more);
   }
   return parts;
 }
 
-async function scoutLast() {
-  const out = document.getElementById("last-result");
-  if (!state.me) {
-    show(out, el("p", "Look yourself up first.", "error"));
+// "Played before": your earlier games against this player, filled in when it arrives.
+async function fillHistory(player, slot) {
+  if (!state.me || !player.tag || player.tag === state.me.tag) return;
+  let found;
+  try {
+    found = await api("/api/players/" + tagPath(state.me.tag) + "/vs/" + tagPath(player.tag));
+  } catch {
+    return;  // optional extra: the board works without it
+  }
+  if (!found.meetings.length) return;
+  const wins = found.meetings.filter((m) => m.result === "won").length;
+  const losses = found.meetings.filter((m) => m.result === "lost").length;
+  const last = found.meetings[0];
+  const line = el("p", null, "history");
+  const score = el("span", null, "score");
+  score.append(el("span", String(wins), "result-won"), el("span", "–"), el("span", String(losses), "result-lost"));
+  line.append(score, el("span", "Last: " + RESULT_WORDS[last.result].toLowerCase() + " " + last.crowns[0] +
+    "–" + last.crowns[1] + ", " + ago(last.time), "muted"));
+  const games = el("div");
+  for (const m of found.meetings) {
+    const row = el("p", null, "meeting");
+    row.append(el("span", RESULT_WORDS[m.result] + " " + m.crowns[0] + "–" + m.crowns[1], "result-" + m.result),
+      el("span", ago(m.time) + (MODE_NAMES[m.mode] ? ", " + MODE_NAMES[m.mode] : "") +
+        (m.archetype ? ", they played " + m.archetype : ""), "muted"));
+    games.append(row);
+  }
+  slot.append(el("p", "Played before", "label"), line, disclosure(plural(found.meetings.length, "game", "games"), games));
+}
+
+// Open a player on the board: their decks by game mode, newest first.
+async function openOpponent(player, how = {}) {
+  const token = ++board.token;
+  const lands = board.key !== player.tag;
+  board.key = player.tag;
+  const head = vsBar(player, how.tag, lands);
+  setBoard(head, loadingText("Loading their decks…"));
+  boardSay("Your opponent: " + (player.name || player.tag) + (player.clan ? ", " + player.clan : "") + ".");
+  const history = el("div");
+  fillHistory(player, history);
+  let result;
+  try {
+    result = await api("/api/players/" + tagPath(player.tag) + "/decks");
+  } catch (error) {
+    if (token === board.token) setBoard(head, errorBox(error, () => openOpponent(player, how)));
     return;
   }
-  show(out, loadingText("Checking your battle log…"));
+  if (token !== board.token) return;
+  const modes = result.modes || {};
+  const played = MODES.filter((m) => (modes[m] || []).length)
+    .sort((a, b) => newestPlay(modes[b]).localeCompare(newestPlay(modes[a])));
+  if (!played.length) {
+    setBoard(head, calm(emptyMessage("ranked", result.recent_modes)));
+    return;
+  }
+  const body = el("div");
+  let chosen = null;
+  const tabs = el("div", null, "subtabs board-modes");
+  tabs.setAttribute("role", "tablist");
+  tabs.setAttribute("aria-label", "Game mode");
+  body.setAttribute("role", "tabpanel");
+  body.id = "board-mode-panel";
+  const buttons = {};
+  async function select(mode) {
+    chosen = mode;
+    for (const m of played) selectTab(buttons[m], m === mode);
+    body.setAttribute("aria-labelledby", buttons[mode].id);
+    show(body, loadingText("Working out the odds…"));
+    const decks = modes[mode];
+    const mine = await myDeckFor(mode);
+    const odds = await predict(mine, decks[0].deck);
+    if (token !== board.token || chosen !== mode) return;
+    const d = decks[0];
+    const sub = plural(d.games, "game", "games") + ", " + d.wins + " won" +
+      (d.last_played ? ", last " + new Date(d.last_played).toLocaleDateString() : "");
+    const parts = boardBody(d.deck, sub, mode, mine, odds, history);
+    if (decks.length > 1) {
+      const others = el("div");
+      for (const other of decks.slice(1)) {
+        const when = other.last_played ? ", last " + new Date(other.last_played).toLocaleDateString() : "";
+        const label = el("p", "Also played", "label");
+        label.append(el("span", plural(other.games, "game", "games") + ", " + other.wins + " won" + when, "sub"));
+        const o = await predict(mine, other.deck);
+        others.append(label, deckView(other.deck, "theirs"));
+        if (o && o.m) others.append(oddsBug(o.m));
+      }
+      const more = el("div", null, "board-more");
+      more.append(disclosure("Other decks they played (" + (decks.length - 1) + ")", others));
+      parts.push(more);
+    }
+    if (token === board.token && chosen === mode) show(body, ...parts);
+  }
+  for (const mode of played) {
+    const games = modes[mode].reduce((n, d) => n + d.games, 0);
+    const b = el("button", MODE_NAMES[mode], "tab");
+    b.append(el("span", String(games), "n"));
+    b.type = "button";
+    b.id = "board-mode-" + mode;
+    b.setAttribute("role", "tab");
+    b.setAttribute("aria-controls", body.id);
+    b.addEventListener("click", () => select(mode));
+    buttons[mode] = b;
+    tabs.append(b);
+  }
+  setBoard(head, body);
+  setTools(played.length > 1 ? tabs : null, wrongPlayer());
+  await select(played[0]);
+}
+
+// Your last battle's opponent, straight from your battle log.
+function showLastOpponent(opp, tag) {
+  board.token++;
+  const lands = board.key !== opp.tag;
+  board.key = opp.tag;
+  const head = vsBar(opp, tag, lands);
+  const mine = opp.your_deck ? { deck: opp.your_deck, label: "Your deck that battle" } : null;
+  const result = opp.matchup ? { m: opp.matchup } : null;
+  const recent = action("Their recent decks", () => openOpponent(opp, { tag: { text: "Last opponent" } }));
+  const history = el("div");
+  fillHistory(opp, history);
+  setBoard(head, ...boardBody(opp.deck, MODE_NAMES[opp.mode] || "Battle", opp.mode,
+    state.me ? mine : null, result, history, [recent]));
+  setTools(wrongPlayer());
+  boardSay("Last opponent: " + (opp.name || opp.tag) + ". You " + opp.your_result + ".");
+}
+
+const RESULT_TAGS = { won: "you won", lost: "you lost", draw: "a draw" };
+
+async function scoutLast() {
+  if (!state.me) {
+    boardIdle();
+    return;
+  }
+  const token = ++board.token;
+  board.key = null;
+  setBoard(vsBar(null, null, false), loadingText("Checking your battle log…"));
   try {
     const opp = await api("/api/players/" + tagPath(state.me.tag) + "/last-opponent");
-    show(out, ...lastOpponentParts(opp));
+    if (token !== board.token) return;
+    showLastOpponent(opp, { text: "Last battle · " + (RESULT_TAGS[opp.your_result] || opp.your_result) });
   } catch (error) {
-    show(out, errorBox(error));
+    if (token === board.token) setBoard(vsBar(null, null, false), errorBox(error, scoutLast));
   }
 }
 
@@ -1120,7 +1475,7 @@ function resultList(players) {
   const list = el("ul", null, "results");
   for (const r of players) {
     const item = el("li");
-    const button = el("button", null, "result-button" + (r.active ? " active" : ""));
+    const button = el("button", null, "result-button");
     button.type = "button";
     // Sure it's them: online right now, or in the clan read off the screen with
     // a name like the one read (name_match is null when no name was given).
@@ -1129,11 +1484,25 @@ function resultList(players) {
     button.dataset.active = String(Boolean(r.active));
     button.dataset.clanMatch = String(Boolean(r.clan_match));
     button.append(playerLine(r, { showNoClan: "clan" in r }));
-    button.addEventListener("click", () => showOpponentDecks(r, item));
+    button.addEventListener("click", () => pickPlayer(r, button));
     item.append(button);
     list.append(item);
   }
   return list;
+}
+
+function pickPlayer(player, button) {
+  for (const b of document.querySelectorAll("#find-result .result-button")) {
+    b.classList.remove("picked");
+    const old = b.querySelector(".pick-tag");
+    if (old) old.remove();
+  }
+  button.classList.add("picked");
+  const badge = button.dataset.badge;
+  if (badge) button.prepend(el("span", badge, "pick-tag"));
+  openOpponent(player, { tag: badge ? { text: badge, kind: badge === "Auto-picked" ? "sure" : "doubt" } : null });
+  // Picked by hand further down the page: bring the board into view (once).
+  if (!button.dataset.auto) document.getElementById("board").scrollIntoView({ block: "start" });
 }
 
 // Asks the game directly (not our index): recently active members of clans
@@ -1145,35 +1514,34 @@ async function liveClanParts(clan, name) {
   try {
     const found = await api("/api/clan-lookup?" + params.toString());
     if (!found.clans_found) {
-      return [el("p", "The game has no clan called \u201c" + clan + "\u201d. Check the spelling.", "muted")];
+      return [calm("The game has no clan called “" + clan + "”.", " Check the spelling.")];
     }
     if (!found.players.length) {
-      return [el("p", "Nobody" + (name ? " with a name like that" : "") + " in " +
-        plural(found.clans_checked.length, "clan", "clans") + " called \u201c" + clan + "\u201d.", "muted")];
+      return [calm("Nobody" + (name ? " with a name like that" : "") + " in " +
+        plural(found.clans_checked.length, "clan", "clans") + " called “" + clan + "”.")];
     }
     const note = found.players.some((p) => p.active)
-      ? "Your opponent is probably near the top: they're playing right now."
-      : "Nobody here has been online in the last 15 minutes. It may be a different clan with the same name.";
-    return [el("p", "Checked " + plural(found.clans_checked.length, "clan", "clans") +
-      " called \u201c" + clan + "\u201d in the game" + (name ? ", best name match first" : "") +
-      ", then most recently online. " + note, "hint"), resultList(found.players)];
+      ? "Whoever is online now is probably them."
+      : "Nobody here was online in the last 15 minutes: it may be another clan with this name.";
+    return [el("p", "Checked " + plural(found.clans_checked.length, "clan", "clans") + " in the game. " + note,
+      "detail"), resultList(found.players)];
   } catch (error) {
-    return [errorBox(error)];
+    return [errorBox(error, () => liveClanLookup(clan, name, document.getElementById("find-result")))];
   }
 }
 
 async function liveClanLookup(clan, name, out) {
-  show(out, loadingText("Checking clans named \u201c" + clan + "\u201d in the game…"));
+  show(out, loadingText("Checking clans named “" + clan + "” in the game…"));
   show(out, ...(await liveClanParts(clan, name)));
 }
 
-const NOT_KNOWN_NO_CLAN = "They're probably not in DeckLens yet, and without a clan the game " +
-  "can't be asked (it only searches by clan). After the battle, \u201cScout my last opponent\u201d shows their deck.";
+const NOT_KNOWN_NO_CLAN = " Without a clan the game can't be searched; after the battle, " +
+  "Scout last opponent shows their deck.";
 
 // Auto-scout picks the player for you: the first confident match (in the clan
 // that was read, or online right now), else the top result with a similar name
-// as a best guess, else nobody.
-// Results are already sorted best-first. You can still tap someone else.
+// as a best guess, else nobody. Results are already sorted best-first. You can
+// still pick someone else. Returns whether anyone was picked.
 function autoOpen(out, allowGuess = true) {
   const buttons = [...out.querySelectorAll(".result-button")];
   let pick;
@@ -1188,23 +1556,25 @@ function autoOpen(out, allowGuess = true) {
     const inClan = buttons.filter((b) => b.dataset.clanMatch === "true");
     pick = buttons.find((b) => b.dataset.active === "true") || (inClan.length === 1 ? inClan[0] : null);
   }
-  if (!pick) return;
-  const sure = pick.dataset.confident === "true";
-  for (const b of buttons) b.classList.remove("auto-picked");
-  pick.classList.add("auto-picked");
-  pick.prepend(el("span", sure ? "Auto-picked" : "Best guess", "pick-badge"));
+  if (!pick) return false;
+  pick.dataset.badge = pick.dataset.confident === "true" ? "Auto-picked" : "Best guess";
+  pick.dataset.auto = "1";
   pick.click();
-  if (pick.scrollIntoView) pick.scrollIntoView({ behavior: "smooth", block: "start" });
+  delete pick.dataset.auto;
+  return true;
 }
 
+// Searches, lists the players found under the form, and (auto) opens the best
+// one on the board. Returns { picked, count }.
 async function findOpponent(event, options = {}) {
   if (event) event.preventDefault();
   const out = document.getElementById("find-result");
   const name = document.getElementById("find-name").value.trim();
   const clan = document.getElementById("find-clan").value.trim();
+  const done = (picked) => ({ picked, count: out.querySelectorAll(".result-button").length });
   if (!name && !clan) {
-    show(out, el("p", "Type some of their name, their clan, or both.", "error"));
-    return;
+    show(out, errorBox(new Error("Type some of their name, their clan, or both.")));
+    return done(false);
   }
   // The screen watcher saw no clan under their name: that's a clue, so
   // players without a clan come first. (An empty box you left blank isn't.)
@@ -1224,56 +1594,46 @@ async function findOpponent(event, options = {}) {
     results = (await api(path)).results;
   } catch (error) {
     if (clan.length < 3) {
-      show(out, errorBox(error));
-      return;
+      show(out, errorBox(error, () => findOpponent(null, options)));
+      return done(false);
     }
   }
   const canGoLive = clan.length >= 3;
+  const pick = () => (options.auto ? autoOpen(out, !options.nameUnread) : false);
   if (!results.length) {
     if (canGoLive) {
       await liveClanLookup(clan, name, out);  // not in our index: ask the game
-      if (options.auto) autoOpen(out, !options.nameUnread);
-    } else if (noClan) {
-      show(out, el("p", "No players found. " + NOT_KNOWN_NO_CLAN, "muted"));
-    } else {
-      show(out, el("p", "No players found. If their name is emoji or a language you can't type, " +
-        "search by their clan instead.", "muted"));
+      return done(pick());
     }
-    return;
+    show(out, calm("No players found.", noClan ? NOT_KNOWN_NO_CLAN
+      : " If their name is emoji or a language you can't type, search by their clan."));
+    return done(false);
   }
   if (noClan) {
     if (results.some((r) => r.clan_match)) {
-      show(out, el("p", "They have no clan, so players without one come first. Tap the right player:", "hint"),
+      show(out, el("p", "No clan, so players without one come first. Pick your opponent:", "label"),
         resultList(results));
-      if (options.auto) autoOpen(out, !options.nameUnread);
-    } else {
-      // Everyone here has a clan, so none of them is likely to be the
-      // opponent: list them, but don't open one as if it were.
-      show(out, el("p", "Nobody DeckLens knows without a clan has a name like that. " + NOT_KNOWN_NO_CLAN, "hint"),
-        el("p", "Closest names (all in clans, so probably not them):", "hint"), resultList(results));
+      return done(pick());
     }
-    return;
+    // Everyone here has a clan, so none of them is likely to be the
+    // opponent: list them, but don't open one as if it were.
+    show(out, calm("Nobody DeckLens knows without a clan has a name like that.", NOT_KNOWN_NO_CLAN),
+      el("p", "Closest names (all in clans, so probably not them)", "label"), resultList(results));
+    return done(false);
   }
   const inClan = (r) => r.clan_match && r.name_match !== false;
   if (canGoLive && !results.some(inClan)) {
     // Nobody we know is in that clan (with that name): check the game first,
     // keep what we found underneath in case the clan or name was misread.
-    show(out, el("p", "Nobody DeckLens knows " + (name ? "with that name " : "") +
-      "is in that clan. Checking the game…", "muted loading"));
+    show(out, loadingText("Nobody DeckLens knows is in that clan. Checking the game…"));
     const live = await liveClanParts(clan, name);
-    show(out, ...live, el("p", "Other players DeckLens knows with a similar name or clan:", "hint"), resultList(results));
-    if (options.auto) autoOpen(out, !options.nameUnread);
-    return;
+    show(out, ...live, el("p", "Others DeckLens knows with a similar name or clan", "label"), resultList(results));
+    return done(pick());
   }
-  const parts = [el("p", "Tap the right player:", "hint"), resultList(results)];
-  if (canGoLive) {
-    const live = el("button", "Not here? Check the clan live", "link-button");
-    live.type = "button";
-    live.addEventListener("click", () => liveClanLookup(clan, name, out));
-    parts.push(live);
-  }
+  const parts = [el("p", "Pick your opponent", "label"), resultList(results)];
+  if (canGoLive) parts.push(action("Not here? Check the clan live", () => liveClanLookup(clan, name, out)));
   show(out, ...parts);
-  if (options.auto) autoOpen(out, !options.nameUnread);
+  return done(pick());
 }
 
 // --- auto-scout (screen watcher) -------------------------------------------
@@ -1289,24 +1649,17 @@ function lastOpponentNow() {
 // The watcher saw a battle but couldn't read anything in the opponent's corner
 // (a script the text reader doesn't know, like Arabic). Remember who your last
 // opponent was before this battle, so the new one can be spotted afterwards.
-function battleUnreadable(out) {
-  if (!state.me) {
-    auto.afterBattle = null;
-    show(out, el("p", "In a battle, but their name can't be read (letters the screen reader doesn't " +
-      "know, like Arabic, or emoji). Look yourself up under You, and DeckLens will show their deck " +
-      "after the battle.", "hint"));
-    return;
-  }
-  auto.afterBattle = { before: lastOpponentNow().then((o) => o.time, () => null) };
-  show(out, el("p", "In a battle, but their name can't be read (letters the screen reader doesn't " +
-    "know, like Arabic, or emoji). Their deck will show here when the battle ends.", "hint"));
+function battleUnreadable() {
+  auto.afterBattle = state.me ? { before: lastOpponentNow().then((o) => o.time, () => null) } : null;
+  boardUnreadable();
 }
 
-async function showAfterBattle(out) {
+async function showAfterBattle() {
   const token = ++auto.afterToken;
   const before = await auto.afterBattle.before;
   auto.afterBattle = null;
-  show(out, loadingText("Battle over. Getting your opponent from your battle log…"));
+  setBoard(vsBar({ name: "Name unreadable" }, { text: "Battle over", kind: "doubt" }, false),
+    loadingText("Getting your opponent from your battle log…"));
   for (let attempt = 0; attempt < AFTER_BATTLE_TRIES; attempt++) {
     if (attempt) await new Promise((r) => setTimeout(r, AFTER_BATTLE_WAIT_MS));
     if (token !== auto.afterToken) return;  // a newer battle took over
@@ -1315,45 +1668,51 @@ async function showAfterBattle(out) {
       opp = await lastOpponentNow();
     } catch { /* not in the log yet, or offline for a moment */ }
     if (opp && opp.time !== before) {
-      const more = el("button", "See their recent decks", "link-button");
-      more.type = "button";
-      const holder = el("div");
-      more.addEventListener("click", () => showOpponentDecks(opp, holder));
-      show(out, el("p", "Your opponent (their name couldn't be read during the battle):", "hint"),
-        ...lastOpponentParts(opp), more, holder);
+      showLastOpponent(opp, { text: "From your battle log" });
       return;
     }
   }
   if (token === auto.afterToken) {
-    show(out, el("p", "Your battle log hasn't updated yet. Try \u201cScout my last opponent\u201d in a minute.", "muted"));
+    setBoard(vsBar(null, null, false), calm("Your battle log hasn't updated yet.", " Try again in a minute.",
+      action("Scout last opponent", scoutLast, "primary them")));
   }
 }
 
-// One line saying whether the screen watcher can see your phone, and why not.
+// Whether the screen watcher can see your phone: [kind, chip, short line, full sentence].
 const WATCHER_STATES = {
-  connected: ["on", (d) => "Connected to " + (d || "your phone screen")],
-  screen_only: ["warn", (d) => "Connected to " + (d || "your phone screen") +
-    ", but keep that window visible: it can't be read behind other windows"],
-  starting: ["idle", () => "Starting the screen reader…"],
-  no_window: ["off", () => "Not connected: open your phone screen in Phone Link (or mirror your iPad to 5KPlayer)"],
-  minimised: ["off", (d) => "Not connected: " + (d || "the mirror window") + " is minimised (it can sit behind other windows)"],
-  unavailable: ["off", (d) => "Not connected: " + (d || "the screen watcher can't run")],
+  connected: ["on", "Live", (d) => d || "Your phone", (d) => "Connected to " + (d || "your phone screen")],
+  screen_only: ["warn", "Keep visible", (d) => d || "Your phone",
+    (d) => "Connected to " + (d || "your phone screen") + ", but keep that window visible: it can't be read behind other windows"],
+  starting: ["idle", "Starting", () => "Screen reader", () => "Starting the screen reader"],
+  no_window: ["off", "Not connected", () => "Open Phone Link",
+    () => "Not connected: open your phone screen in Phone Link (or mirror your iPad to 5KPlayer)"],
+  minimised: ["off", "Not connected", (d) => (d || "Mirror") + " minimised",
+    (d) => "Not connected: " + (d || "the mirror window") + " is minimised (it can sit behind other windows)"],
+  unavailable: ["off", "Not connected", () => "Watcher unavailable",
+    (d) => "Not connected: " + (d || "the screen watcher can't run")],
 };
+const WATCHER_OFF = ["off", "Not connected", () => "Watcher not running",
+  () => "Not connected: the screen watcher isn't running"];
 
 function showWatcherStatus(watcher, latest) {
   const status = document.getElementById("auto-status");
-  const [kind, text] = watcher && WATCHER_STATES[watcher.state]
-    ? [WATCHER_STATES[watcher.state][0], WATCHER_STATES[watcher.state][1](watcher.detail)]
-    : ["off", "Not connected: the screen watcher isn't running"];
-  let line = text;
+  const [kind, chip, short, long] = (watcher && WATCHER_STATES[watcher.state]) || WATCHER_OFF;
+  const detail = watcher ? watcher.detail : null;
+  let line = short(detail);
+  let sentence = long(detail);
   if (kind === "on" || kind === "warn") {
-    if (latest && latest.kind === "unreadable") line += " · in a battle: their name can't be read";
+    let now = "waiting for a battle";
+    if (latest && latest.kind === "unreadable") now = "name unreadable";
     else if (latest && latest.kind !== "ended") {
-      line += " · last opponent: " + (latest.name || "name unreadable") +
-        (latest.clan ? " (" + latest.clan + ")" : "") + (latest.rating ? ", rated " + latest.rating : "");
-    } else line += " · waiting for a battle";
+      now = "read " + (latest.name || "name unreadable") + (latest.clan ? " (" + latest.clan + ")" : "");
+    }
+    line += " · " + now;
+    sentence += ". " + now[0].toUpperCase() + now.slice(1) + ".";
   }
-  show(status, el("span", null, "status-dot " + kind), el("span", line));
+  const what = el("span", line, "what");
+  status.title = sentence;
+  status.setAttribute("aria-label", sentence);
+  show(status, el("span", chip, "state " + kind), what);
   document.getElementById("rescan-button").hidden = !(kind === "on" || kind === "warn");
 }
 
@@ -1362,7 +1721,7 @@ function showWatcherStatus(watcher, latest) {
 async function rescanOpponent() {
   const button = document.getElementById("rescan-button");
   button.disabled = true;
-  button.textContent = "Reading\u2026";
+  button.textContent = "Reading…";
   try {
     await api("/api/watch/rescan", { method: "POST" });
   } catch (error) {
@@ -1387,53 +1746,47 @@ async function pollWatcher() {
   const fresh = auto.lastId === null ? latest.age_seconds < 60 : latest.id !== auto.lastId;
   auto.lastId = latest.id;
   if (!fresh) return;
-  const out = document.getElementById("find-result");
-  if (latest.kind !== "ended") setPage("scout");   // a battle started: show the opponent
-  if (latest.kind === "unreadable") {
-    if (out.scrollIntoView) out.scrollIntoView({ behavior: "smooth", block: "start" });
-    battleUnreadable(out);
+  if (latest.kind === "ended") {
+    if (auto.afterBattle) await showAfterBattle();
     return;
   }
-  if (latest.kind === "ended") {
-    if (auto.afterBattle) await showAfterBattle(out);
+  // A battle started: show the board, at the top.
+  setPage("scout");
+  window.scrollTo(0, 0);
+  if (latest.kind === "unreadable") {
+    battleUnreadable();
     return;
   }
   auto.afterBattle = null;  // this battle's opponent was read
   document.getElementById("find-name").value = latest.name || "";
   document.getElementById("find-clan").value = latest.clan || "";
-  const results = document.getElementById("find-result");
-  if (results.scrollIntoView) results.scrollIntoView({ behavior: "smooth", block: "start" });
-  const rated = latest.rating ? " They're rated " + latest.rating + "." : "";
-  if (!latest.name) {
-    // Fancy letters or symbols OCR can't read. Search the clan, but only open
-    // someone we're sure of: a guess from the clan alone is usually wrong.
-    await findOpponent(null, { auto: true, nameUnread: true, rating: latest.rating });
-    results.prepend(el("p", "Couldn't read their name (fancy letters or symbols), so this searched " +
-      "their clan instead." + rated + " If nobody's marked, \u201cScout my last opponent\u201d " +
-      "shows their deck after the battle.", "hint"));
-    return;
-  }
-  await findOpponent(null, { auto: true, noClan: !latest.clan, rating: latest.rating });
+  boardFinding(latest);
+  const token = board.token;
+  // No name (fancy letters or symbols): search the clan, but only open
+  // someone we're sure of: a guess from the clan alone is usually wrong.
+  const found = await findOpponent(null, { auto: true, nameUnread: !latest.name,
+    noClan: Boolean(latest.name && !latest.clan), rating: latest.rating });
+  if (!found.picked && token === board.token) boardNotFound(latest, found.count);
 }
 
 function setAutoScout(on) {
   storageSet("decklens.autoScout", on ? "1" : "0");
   const status = document.getElementById("auto-status");
-  status.hidden = !on;
+  document.getElementById("watch-bug").hidden = !on;
   document.getElementById("rescan-button").hidden = true;  // shown once the watcher is connected
   clearInterval(auto.timer);
   auto.timer = null;
   auto.lastId = null;
   if (on) {
-    show(status, el("span", null, "status-dot idle"), el("span", "Checking the screen watcher…"));
+    show(status, el("span", "Starting", "state idle"), el("span", "Checking the screen watcher", "what"));
     pollWatcher();
     auto.timer = setInterval(pollWatcher, 2000);
   }
+  if (board.key === null) boardIdle();
 }
 
 const MODE_NAMES = { ranked: "Ranked", trophy: "Trophy Road", challenge: "20-win challenge" };
 const MODES = ["ranked", "trophy", "challenge"];
-let tabCounter = 0;
 
 function emptyMessage(mode, recent) {
   const entries = Object.entries(recent || {});
@@ -1442,7 +1795,7 @@ function emptyMessage(mode, recent) {
   const list = entries.map(([name, n]) => name + " " + n).join(", ");
   const name = MODE_NAMES[mode];
   if (recent[name]) return "Their recent " + name + " battles couldn't be read (" + list + ").";
-  return "No " + name + " games in their last " + total + " battles. Recently they've played: " + list + ".";
+  return "No Ranked, Trophy Road or challenge games in their last " + total + " battles. Recently: " + list + ".";
 }
 
 // Which of your decks to compare against: your current deck for Ranked; for
@@ -1451,9 +1804,8 @@ function emptyMessage(mode, recent) {
 const MY_MODE_LABELS = { trophy: "Trophy Road", challenge: "challenge" };
 
 async function myDeckFor(mode) {
-  if (mode === "ranked" || !state.me) {
-    return state.me ? { deck: state.me.deck, label: "Your current deck vs this one" } : null;
-  }
+  if (!state.me) return null;
+  if (mode === "ranked") return { deck: state.me.deck, label: "Your current deck" };
   if (state.myDecks === undefined) {  // your own log, fetched once
     state.myDecks = api("/api/players/" + tagPath(state.me.tag) + "/decks")
       .then((mine) => mine.modes || {}).catch(() => ({}));
@@ -1461,37 +1813,8 @@ async function myDeckFor(mode) {
   const decks = ((await state.myDecks)[mode] || []).slice();
   decks.sort((a, b) => String(b.last_played).localeCompare(String(a.last_played)));
   const name = MY_MODE_LABELS[mode] || "matching";
-  if (decks.length) return { deck: decks[0].deck, label: "Your latest " + name + " deck vs this one" };
-  return { deck: state.me.deck, label: "Your current deck vs this one (no recent " + name + " deck of yours found)" };
-}
-
-async function matchupFor(mine, deck, mode) {
-  if (!mine || knownIds(mine.deck).length < 7 || knownIds(deck).length < 7) return [];
-  try {
-    const m = await api("/api/predict", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ deck_a: knownIds(mine.deck), deck_b: knownIds(deck) }),
-    });
-    return [matchupBox(m, mine.label, mode, { mine: mine.deck, theirs: deck })];
-  } catch (error) {
-    return [errorBox(error)];
-  }
-}
-
-async function deckList(decks, mode) {
-  const mine = await myDeckFor(mode);
-  // All matchups at once rather than one after another: the tab opens sooner.
-  const matchups = await Promise.all(decks.map((d) => matchupFor(mine, d.deck, mode)));
-  return decks.flatMap((d, i) => {
-    const when = d.last_played ? ", last on " + new Date(d.last_played).toLocaleDateString() : "";
-    return [el("p", "Played " + plural(d.games, "time", "times") + " (" + d.wins + " wins" + when + ")", "label"),
-      deckView(d.deck, "theirs"), ...matchups[i]];
-  });
-}
-
-function newestPlay(decks) {
-  return decks.reduce((best, d) => (String(d.last_played) > best ? String(d.last_played) : best), "");
+  if (decks.length) return { deck: decks[0].deck, label: "Your latest " + name + " deck" };
+  return { deck: state.me.deck, label: "Your current deck (no recent " + name + " deck found)" };
 }
 
 function ago(iso) {
@@ -1502,89 +1825,6 @@ function ago(iso) {
 }
 
 const RESULT_WORDS = { won: "Won", lost: "Lost", draw: "Draw" };
-
-// "You've played them before": earlier games against this player, newest first.
-async function rematchBox(player) {
-  if (!state.me || !player.tag || player.tag === state.me.tag) return null;
-  let found;
-  try {
-    found = await api("/api/players/" + tagPath(state.me.tag) + "/vs/" + tagPath(player.tag));
-  } catch {
-    return null;  // optional extra: the decks below still load
-  }
-  if (!found.meetings.length) return null;
-  const box = el("div", null, "rematch");
-  box.append(el("p", "You've played them before", "label"));
-  for (const m of found.meetings) {
-    const line = el("p", null, "meeting");
-    line.append(el("span", RESULT_WORDS[m.result] + " " + m.crowns[0] + "–" + m.crowns[1],
-      "result-" + m.result));
-    line.append(el("span", ago(m.time) + (MODE_NAMES[m.mode] ? ", " + MODE_NAMES[m.mode] : "") +
-      (m.archetype ? ", they played " + m.archetype : ""), "muted"));
-    box.append(line);
-    const read = scoutRead(m.deck.cards);
-    if (read) box.append(read);
-  }
-  return box;
-}
-
-async function showOpponentDecks(player, container) {
-  const panel = el("div", null, "decks-panel");
-  panel.append(loadingText("Loading their recent decks…"));
-  const old = container.querySelector(".decks-panel");
-  if (old) old.remove();
-  container.append(panel);
-  const rematch = rematchBox(player);  // in parallel with their decks
-  let result;
-  try {
-    result = await api("/api/players/" + tagPath(player.tag) + "/decks");
-  } catch (error) {
-    show(panel, errorBox(error));
-    return;
-  }
-  const modes = result.modes || {};
-
-  // One tab per mode. Opens on whichever mode they played most recently.
-  const id = "decks-" + (++tabCounter);
-  const tabs = el("div", null, "tabs");
-  tabs.setAttribute("role", "tablist");
-  tabs.setAttribute("aria-label", "Game mode");
-  const body = el("div", null, "tab-panel");
-  body.setAttribute("role", "tabpanel");
-  body.id = id + "-panel";
-  const rendered = {};
-  const buttons = {};
-
-  async function select(mode) {
-    for (const m of MODES) selectTab(buttons[m], m === mode);
-    body.setAttribute("aria-labelledby", buttons[mode].id);
-    if (!rendered[mode]) {  // built once per tab; a promise, so fast clicks don't build twice
-      const decks = modes[mode] || [];
-      rendered[mode] = decks.length ? deckList(decks, mode)
-        : Promise.resolve([el("p", emptyMessage(mode, result.recent_modes), "muted")]);
-    }
-    show(body, loadingText("Loading matchups…"));
-    const nodes = await rendered[mode];
-    if (buttons[mode].getAttribute("aria-selected") === "true") show(body, ...nodes);
-  }
-
-  for (const mode of MODES) {
-    const games = (modes[mode] || []).reduce((n, d) => n + d.games, 0);
-    const button = el("button", MODE_NAMES[mode] + " · " + plural(games, "game", "games"), "tab");
-    button.type = "button";
-    button.id = id + "-" + mode;
-    button.setAttribute("role", "tab");
-    button.setAttribute("aria-controls", body.id);
-    button.addEventListener("click", () => select(mode));
-    buttons[mode] = button;
-    tabs.append(button);
-  }
-  show(panel, tabs, body);
-  const before = await rematch;
-  if (before) panel.prepend(before);
-  const first = MODES.slice().sort((a, b) => newestPlay(modes[b] || []).localeCompare(newestPlay(modes[a] || [])))[0];
-  await select(first);
-}
 
 // --- ranked meta ---------------------------------------------------------------
 
@@ -1599,7 +1839,7 @@ function trendBars(daily) {
     ? ", from " + pct(first.share) + " to " + pct(last.share) : ""));
   daily.forEach((d, i) => {
     const h = d.share ? Math.max(1, (d.share / top) * H) : 0;
-    if (h) chart.append(svg("rect", { x: i * (W + GAP), y: H - h, width: W, height: h, rx: 1 }));
+    if (h) chart.append(svg("rect", { x: i * (W + GAP), y: H - h, width: W, height: h }));
   });
   return chart;
 }
@@ -1639,7 +1879,7 @@ function metaTable(m) {
     const trend = el("td");
     trend.append(trendBars(a.daily));
     tr.append(trend);
-    // Tap the archetype: its most played decks, card by card.
+    // Open the archetype: its most played decks, card by card.
     const detail = el("tr", null, "meta-decks");
     detail.hidden = true;
     const cell = el("td");
@@ -1667,25 +1907,21 @@ async function showMeta(top = 1000) {
   try {
     m = await api("/api/meta?top=" + encodeURIComponent(top));
   } catch (error) {
-    show(out, errorBox(error));
+    show(out, errorBox(error, () => showMeta(top), action("Go to Scout", () => setPage("scout"))));
     return;
   }
   const tiers = document.getElementById("meta-bands");
   tiers.replaceChildren(...m.tiers.map((t) => {
-    const button = el("button", t.label, "chip-button");
-    button.type = "button";
+    const button = action(t.label, () => showMeta(t.top), "filter");
     button.setAttribute("aria-pressed", String(t.top === m.top));
-    button.addEventListener("click", () => showMeta(t.top));
     return button;
   }));
   if (!m.archetypes.length) {
-    show(out, el("p", "No stored battles between two top " + m.top.toLocaleString() +
-      " players yet.", "muted"));
+    show(out, calm("No stored battles between two top " + m.top.toLocaleString() + " players yet."));
     return;
   }
-  show(out, el("p", m.decks.toLocaleString() + " decks from the last " + m.days + " days, only " +
-    "from battles where both players were in the global top " + m.top.toLocaleString() +
-    " when they played. Tap an archetype to see its most played decks.", "hint"), metaTable(m));
+  show(out, el("p", m.decks.toLocaleString() + " decks · both players in the global top " +
+    m.top.toLocaleString() + " · open an archetype for its decks", "detail"), metaTable(m));
 }
 
 // --- pages ---------------------------------------------------------------------
@@ -1712,6 +1948,7 @@ function setPage(key) {
 async function showAccount() {
   try {
     const me = await api("/api/me");
+    state.local = Boolean(me.desktop || !me.login);
     if (me.desktop) setUpDesktop();
     if (!me.login) return;  // logins switched off (local use only)
     document.getElementById("account-name").textContent = me.username;
@@ -1724,6 +1961,7 @@ async function showAccount() {
 function setUpDesktop() {
   const quit = document.getElementById("quit-button");
   quit.hidden = false;
+  document.getElementById("account").hidden = false;
   quit.addEventListener("click", async () => {
     clearInterval(auto.timer);
     try {
@@ -1753,12 +1991,12 @@ document.addEventListener("DOMContentLoaded", () => {
   showAccount();
   document.getElementById("logout-button").addEventListener("click", logOut);
   document.getElementById("me-form").addEventListener("submit", lookUpMe);
-  document.getElementById("last-button").addEventListener("click", scoutLast);
   document.getElementById("find-form").addEventListener("submit", findOpponent);
   const autoBox = document.getElementById("auto-scout");
   autoBox.addEventListener("change", () => setAutoScout(autoBox.checked));
   document.getElementById("rescan-button").addEventListener("click", rescanOpponent);
   autoBox.checked = storageGet("decklens.autoScout") === "1";
+  boardIdle();
   if (autoBox.checked) setAutoScout(true);
   for (const tab of document.querySelectorAll(".pages [data-page]")) {
     tab.addEventListener("click", () => setPage(tab.dataset.page));
