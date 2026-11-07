@@ -134,7 +134,6 @@ def _parallel_logins(site, attempts):
         t.join()
 
 
-@pytest.mark.xfail(strict=True, reason="2026-11-07-web-auth F3: open defect; remove this mark in the fix")
 def test_password_checks_do_not_all_run_at_once(monkeypatch):
     site, _ = make_auth([user()])
     state = _count_concurrent_scrypt(monkeypatch)

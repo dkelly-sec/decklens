@@ -438,3 +438,32 @@ def test_each_user_only_sees_their_own_watcher_reports():
     david.post("/api/watch", json={"name": "Florent", "clan": "Sunny"})
     assert david.get("/api/watch").json()["latest"]["name"] == "Florent"
     assert friend.get("/api/watch").json()["latest"] is None
+
+
+# --- password checks are expensive: only a couple at a time -----------------------------
+
+
+def test_login_answers_429_when_password_checks_are_busy():
+    import threading
+
+    auth = Auth(lambda name: None, SECRET, secure_cookie=False, max_concurrent_checks=1,
+                check_wait=0.05)
+    started, release = threading.Event(), threading.Event()
+    real = auth._load_user
+
+    def slow_load(name):
+        started.set()
+        release.wait(5)
+        return real(name)
+
+    auth._load_user = slow_load
+    first = threading.Thread(target=auth.login, args=("david", PASSWORD))
+    first.start()
+    started.wait(5)
+    client = TestClient(create_app(Services(client=FakeClient(), auth=auth)),
+                        raise_server_exceptions=False, headers={"origin": "http://testserver"})
+    response = client.post("/api/login", json={"username": "kate", "password": PASSWORD})
+    release.set()
+    first.join()
+    assert response.status_code == 429 and response.headers["retry-after"] == "5"
+    assert auth.guard.locked_for("kate") == 0   # a busy refusal isn't a wrong password

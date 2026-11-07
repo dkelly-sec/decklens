@@ -181,12 +181,24 @@ class LoginGuard:
             self._failures.pop(key, None)
 
 
+class LoginBusy(Exception):
+    """Too many password checks already running: try again shortly."""
+
+
+# Each password check holds about 128 MB (scrypt) for ~0.2 s. Rate limits cap how many
+# a client may start a minute, not how many run at once, so this caps that too.
+MAX_CONCURRENT_CHECKS = 2
+CHECK_WAIT_SECONDS = 5.0
+
+
 class Auth:
     """Everything the web app needs for logins."""
 
     def __init__(self, load_user: Callable[[str], User | None], secret: str, *,
                  secure_cookie: bool, clock: Callable[[], float] = time.time,
-                 guard: LoginGuard | None = None, user_cache_seconds: float = 30.0):
+                 guard: LoginGuard | None = None, user_cache_seconds: float = 30.0,
+                 max_concurrent_checks: int = MAX_CONCURRENT_CHECKS,
+                 check_wait: float = CHECK_WAIT_SECONDS):
         self._load_user = load_user
         self.signer = SessionSigner(secret, clock=clock)
         self.secure_cookie = secure_cookie
@@ -197,6 +209,8 @@ class Auth:
         self._cache: dict[str, tuple[float, User | None]] = {}
         self._cache_seconds = user_cache_seconds
         self._lock = threading.Lock()
+        self._checks = threading.BoundedSemaphore(max_concurrent_checks)
+        self._check_wait = check_wait
 
     def _user(self, username: str, *, fresh: bool = False) -> User | None:
         now = self.clock()
@@ -212,15 +226,22 @@ class Auth:
         return user
 
     def login(self, raw_username: Any, password: Any) -> tuple[User | None, float]:
-        """(user, 0) on success; (None, 0) for wrong details; (None, seconds) when locked."""
+        """(user, 0) on success; (None, 0) for wrong details; (None, seconds) when locked.
+
+        Raises LoginBusy when too many password checks are already running."""
         key = raw_username.strip().lower()[:64] if isinstance(raw_username, str) else ""
         wait = self.guard.locked_for(key)
         if wait:
             return None, wait
         username = normalise_username(raw_username)
         password = password if isinstance(password, str) and len(password) <= MAX_PASSWORD else ""
-        user = self._user(username, fresh=True) if username else None
-        ok = verify_password(password, user.password_hash if user else _DUMMY_HASH)
+        if not self._checks.acquire(timeout=self._check_wait):
+            raise LoginBusy  # not counted as a failure: no password was checked
+        try:
+            user = self._user(username, fresh=True) if username else None
+            ok = verify_password(password, user.password_hash if user else _DUMMY_HASH)
+        finally:
+            self._checks.release()
         if ok and user and not user.disabled and password:
             self.guard.succeeded(key)
             return user, 0.0

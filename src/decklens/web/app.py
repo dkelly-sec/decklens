@@ -26,7 +26,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from ..api_client import ApiError, ClashRoyaleClient, NotFoundError
 from ..archetypes import ArchetypeModel
 from ..model import LinearMatchupModel, TreeMatchupModel
-from .auth import Auth, User
+from .auth import Auth, LoginBusy, User
 from .meta import meta
 from .tiers import TIERS
 from .tweaks import find_tweaks
@@ -461,7 +461,11 @@ def create_app(services: Services, *, hsts: bool = False,
         if auth is None:
             raise HTTPException(404, "Logins aren't enabled on this server")
         client = request.client.host if request.client else "unknown"
-        user, wait = auth.login(body.username, body.password)
+        try:
+            user, wait = auth.login(body.username, body.password)
+        except LoginBusy:
+            raise HTTPException(429, "Too many requests, slow down",
+                                headers={"Retry-After": "5"}) from None
         if wait:
             log.warning("login refused from %s: username locked after repeated failures", client)
             minutes = int(wait // 60) + 1

@@ -52,6 +52,7 @@ Living document: update it as features are added. Last reviewed: week 7 (logins)
 | Watcher inside the desktop app | Reports straight to the in-memory board under a key no web route can write; shown only to users logged in on that PC | Done |
 | Strangers using the site and its API quota | Login required for every page, API route and card image; no sign-up page, accounts only from the command line | Done |
 | Password guessing | 5 failures lock a username for 15 minutes (whether or not it exists); 10 login attempts per minute per client; 12+ character passwords | Done |
+| Exhausting memory through logins (each scrypt check holds ~128 MB) | At most 2 password checks run at once; others wait up to 5 s, then get 429 (not counted as a failed login) | Done (audit 2026-11-07, web-auth F3) |
 | Stolen password database | scrypt hashes (OWASP parameters) with per-password salts; plain text impossible by database check; hashes with absurd cost parameters refused | Done |
 | Username discovery | Same message and same timing for unknown users and wrong passwords (dummy hash check); lockouts apply to any username | Done |
 | Session theft or forgery | HMAC-signed cookie, HttpOnly (scripts can't read it), Secure and `__Host-` over HTTPS, 30-day expiry, per-user revocation on password change or logout-all | Done |
