@@ -51,7 +51,8 @@ RATE_LIMITS = {
     "tweaks": (12, 60.0),   # a tweak search walks every stored deck close to yours
     "images": (600, 60.0),  # card art: a page shows up to ~40 cards at once
     "login": (10, 60.0),    # password guesses per client, on top of per-username lockout
-    "clan_lookup": (6, 60.0),  # live clan lookups cost up to 6 API calls each
+    "clan_lookup": (6, 60.0),  # live clan lookups: 1 clan search + up to 40 member lists each
+    "clan_members": (60, 60.0),  # member lists fetched from the API (cache hits are free)
     "watch": (60, 60.0),       # screen watcher reports: about one per match
     "watch_poll": (120, 60.0), # the page checks for a new report every 2 seconds
     "watch_status": (40, 60.0),  # the stand-alone watcher's heartbeat (every 5 s or on change)
@@ -110,6 +111,10 @@ class PredictRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")  # unknown fields are rejected, not ignored
     deck_a: list[int]
     deck_b: list[int]
+
+
+class _OverBudget(Exception):
+    """A member list wasn't fetched: this client's upstream budget is spent."""
 
 
 def create_app(services: Services, *, hsts: bool = False,
@@ -323,10 +328,11 @@ def create_app(services: Services, *, hsts: bool = False,
             return []
 
     @app.get("/api/clan-lookup", dependencies=[*signed_in, Depends(limit("clan_lookup"))])
-    def clan_lookup(clan: str = Query(min_length=3, max_length=50),
+    def clan_lookup(request: Request, clan: str = Query(min_length=3, max_length=50),
                     name: str | None = Query(default=None, max_length=40)) -> dict[str, Any]:
         """Live lookup for players who aren't in the index: recently active
         members of clans with this name, straight from the Clash Royale API."""
+        client_host = request.client.host if request.client else "unknown"
         clan = clan.strip()
         if len(clan) < 3:
             raise HTTPException(400, "Type at least 3 characters of the clan name")
@@ -344,10 +350,18 @@ def create_app(services: Services, *, hsts: bool = False,
         seen = {c["tag"] for c in known}
         clans = known + [c for c in clans if c.get("tag") not in seen]
 
-        def members_of(tag: str) -> list[dict[str, Any]]:
+        def fetch_members(tag: str) -> list[dict[str, Any]]:
+            # Charged only when the API is really asked (inside the cache's compute), so a
+            # lookup can't spend more than this client's per-minute share of the API key.
+            if services.limiter.check(client_host, "clan_members") is not None:
+                raise _OverBudget
+            return services.client.get_clan_members(tag)
+
+        def members_of(tag: str) -> list[dict[str, Any]] | None:
             try:
-                return cached_call(("members", tag),
-                                   lambda: services.client.get_clan_members(tag), "")
+                return cached_call(("members", tag), lambda: fetch_members(tag), "")
+            except _OverBudget:
+                return None  # not cached: the next lookup may fetch it
             except HTTPException as exc:
                 if exc.status_code == 404:
                     return []  # clan disbanded since the search: skip it

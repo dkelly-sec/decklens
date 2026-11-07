@@ -515,7 +515,8 @@ def live_clan_lookup(clans: list[dict[str, Any]], members_of: Callable[[str], li
     """Recently active members of the clans that best match clan_name.
 
     clans is the API's clan search result; members_of(tag) fetches one clan's
-    members. Exact name matches are checked first, at most CLANS_TO_CHECK clans
+    members, or returns None when the caller's upstream budget is spent (that
+    clan isn't counted as checked, and no more clans are asked about). Exact name matches are checked first, at most CLANS_TO_CHECK clans
     (CLANS_TO_CHECK_WITH_NAME when a name was given, fetched CLANS_AT_ONCE at
     a time and stopping after the batch that finds an online member whose name
     matches well).
@@ -536,12 +537,18 @@ def live_clan_lookup(clans: list[dict[str, Any]], members_of: Callable[[str], li
     players, checked = [], []
     limit = CLANS_TO_CHECK_WITH_NAME if name_key else CLANS_TO_CHECK
     todo = valid[:limit]
+    out_of_budget = False
     with ThreadPoolExecutor(max_workers=CLANS_AT_ONCE) as pool:
         for start in range(0, len(todo), CLANS_AT_ONCE):
             if name_key and any(p["active"] and p["_match"] >= STRONG_NAME_MATCH for p in players):
                 break  # found them: no need to ask about more clans
+            if out_of_budget:
+                break  # this client's upstream budget is spent: stop asking
             batch = todo[start:start + CLANS_AT_ONCE]
             for (tag, cname, _), members in zip(batch, pool.map(lambda c: members_of(c[0]), batch)):
+                if members is None:  # not fetched: over the per-client budget
+                    out_of_budget = True
+                    continue
                 checked.append(cname)
                 players.extend(_live_members(members, cname, name_key, now))
     # Best name match first (when a name was typed), then most recently online.
@@ -550,7 +557,7 @@ def live_clan_lookup(clans: list[dict[str, Any]], members_of: Callable[[str], li
     for p in players:
         del p["_match"]
     return {"clans_checked": checked, "clans_found": len(valid),
-            "players": players[:MAX_LIVE_RESULTS]}
+            "players": players[:MAX_LIVE_RESULTS], "budget_reached": out_of_budget}
 
 
 # The game's own copy-deck link (Supercell's blog links decks the same way: card
