@@ -77,6 +77,7 @@ NAME_SLOT_GAP = 5.0
 # on real screenshots): the game keeps its corner text at the same proportions.
 MIN_SHAPE, MAX_SHAPE = 1.2, 2.6
 DEFAULT_LINE_HEIGHT = 0.07  # region fraction, when a line's height is unknown
+EDGE_INSET = 2  # pixels skipped at each window edge (border lines, rounded corners)
 
 
 @dataclass(frozen=True)
@@ -201,9 +202,9 @@ def phone_area(image: Any) -> Any:
 
     The window's edge colour is taken as background; rows and columns that are
     mostly background (borders, toolbars with a few icons) are cut away and the
-    largest solid block left is the phone screen. If the edges aren't a plain
-    colour (the game fills the window) or the result isn't phone-shaped, the
-    whole image is used.
+    largest solid block left is the phone screen. If no edge is a plain colour
+    (the game fills the window) or the result isn't phone-shaped, the whole
+    image is used.
     """
     import numpy as np
 
@@ -211,20 +212,28 @@ def phone_area(image: Any) -> Any:
     if h < 50 or w < 50:
         return image
     # Background = the colour of whichever window edges are plain. The game may
-    # touch some edges (e.g. top and bottom in a tall window), but the frame
-    # should show on at least two.
-    edges = [image[:3].reshape(-1, 3), image[-3:].reshape(-1, 3),
-             image[:, :3].reshape(-1, 3), image[:, -3:].reshape(-1, 3)]
+    # touch every edge but one: Phone Link's "Phone screen" window is as narrow
+    # as the game, which reaches its bottom, so only the title bar is plain. Each
+    # edge is sampled a few pixels in, past the 1-px border line and rounded
+    # corners some windows draw: otherwise the title bar stays in, and its text
+    # ("Phone screen") is read as the opponent's name.
+    inset = EDGE_INSET
+    edges = [image[inset:inset + 3].reshape(-1, 3), image[-inset - 3:-inset].reshape(-1, 3),
+             image[:, inset:inset + 3].reshape(-1, 3), image[:, -inset - 3:-inset].reshape(-1, 3)]
     plain = []
     for edge in edges:
         edge = edge.astype(int)
         colour = np.median(edge, axis=0)
         if (np.abs(edge - colour).sum(axis=1) < 30).mean() >= 0.9:
             plain.append(colour)
-    if len(plain) < 2:
+    if not plain:
         return image  # no plain frame: the game fills the window
-    background = np.median(np.array(plain), axis=0)
-    content = np.abs(image.astype(np.int16) - background).sum(axis=2) > 40
+    # Background is any plain edge's colour, not their average: a grey title bar
+    # over a game that fades to black at the bottom would match neither.
+    pixels = image.astype(np.int16)
+    content = np.ones((h, w), dtype=bool)
+    for colour in plain:
+        content &= np.abs(pixels - colour).sum(axis=2) > 40
 
     def longest_run(flags: Any, gap: int = 0) -> tuple[int, int]:
         """Longest stretch of True, bridging gaps of up to `gap` False values."""

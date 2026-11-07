@@ -326,7 +326,7 @@ def game_picture(w, h, seed=0):
     return img
 
 
-def window(game, *, bg=(43, 43, 43), pad=(300, 300, 32, 0), toolbar=None):
+def window(game, *, bg=(43, 43, 43), pad=(300, 300, 32, 0), toolbar=None, border=None):
     left, right, top, bottom = pad
     h, w = game.shape[:2]
     win = np.zeros((h + top + bottom, w + left + right, 3), dtype=np.uint8)
@@ -334,6 +334,8 @@ def window(game, *, bg=(43, 43, 43), pad=(300, 300, 32, 0), toolbar=None):
     if toolbar is not None:                       # a bar right across the top
         win[:toolbar[0]] = toolbar[1]
         win[5:15, 20:120] = 230                   # title text / icons
+    if border is not None:                        # 1-px line some apps draw along the top
+        win[0] = border
     win[top:top + h, left:left + w] = game
     return win, (top, left, h, w)
 
@@ -344,6 +346,11 @@ def window(game, *, bg=(43, 43, 43), pad=(300, 300, 32, 0), toolbar=None):
     dict(bg=(243, 243, 243), pad=(200, 200, 48, 8)),              # light theme
     dict(bg=(0, 0, 0), pad=(30, 30, 0, 0)),                       # black side bars, game full height
     dict(bg=(20, 20, 20), pad=(10, 10, 44, 10), toolbar=(40, (45, 45, 60))),  # coloured toolbar
+    # Phone Link's "Phone screen" window (Nov 2026): narrow, the game fills its width and
+    # reaches the bottom; only the title bar ("<- Phone screen ... - [] x") is plain.
+    dict(pad=(0, 0, 45, 0), toolbar=(45, (43, 43, 43))),
+    dict(pad=(0, 0, 45, 0), toolbar=(45, (43, 43, 43)), border=(110, 110, 110)),
+    dict(pad=(0, 0, 45, 12), toolbar=(45, (43, 43, 43)), border=(110, 110, 110)),  # + grey foot
 ])
 def test_finds_the_game_inside_the_window(layout):
     game = game_picture(612, 1360)
@@ -351,6 +358,19 @@ def test_finds_the_game_inside_the_window(layout):
     found = phone_area(win)
     assert found.shape[:2] == (h, w)
     assert np.array_equal(found, game)
+
+
+def test_title_bar_is_cut_when_the_game_fades_to_black_at_the_bottom():
+    """Two plain edges in different colours (grey title bar, black game foot) are both
+    background. Averaging them made the title bar count as game, and the watcher read
+    "Phone screen" as the opponent's name (real Phone Link window, 2026-11-07)."""
+    game = game_picture(612, 1360)
+    game[-20:] = (1, 0, 1)                          # the arena's dark bottom edge
+    win, (top, left, h, w) = window(game, pad=(0, 0, 45, 0), toolbar=(45, (43, 43, 43)),
+                                    border=(110, 110, 110))
+    found = phone_area(win)
+    assert found.shape[1] == w and h - 20 <= found.shape[0] <= h
+    assert np.array_equal(found[:100], game[:100])  # starts at the game, not the title bar
 
 
 def test_finds_an_ipad_game_inside_an_airplay_window():
