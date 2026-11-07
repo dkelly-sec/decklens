@@ -19,6 +19,7 @@ from __future__ import annotations
 import argparse
 import getpass
 import os
+import secrets
 import sys
 from typing import Any, Callable
 
@@ -26,6 +27,13 @@ from .config import ConfigError, load_settings
 from .web.auth import check_new_password, hash_password, normalise_username
 
 _BUMP = "UPDATE web_users SET session_version = session_version + 1 WHERE username = %s"
+
+
+def _first_session_version() -> int:
+    """A random starting version for a new account. Cookies carry the username and
+    version, so if a removed account's name is added again, starting at 1 would make
+    the old account's cookies valid for the new one. Leaves room to bump (INTEGER)."""
+    return secrets.randbelow(2**30) + 1
 
 
 def ask_new_password(prompt: Callable[[str], str] = getpass.getpass) -> str:
@@ -41,8 +49,9 @@ def add_user(conn: Any, username: str, password: str) -> None:
         cur.execute("SELECT 1 FROM web_users WHERE username = %s", (username,))
         if cur.fetchone():
             raise ValueError(f"{username} already exists (use passwd to change the password)")
-        cur.execute("INSERT INTO web_users (username, password_hash) VALUES (%s, %s)",
-                    (username, hash_password(password)))
+        cur.execute("INSERT INTO web_users (username, password_hash, session_version) "
+                    "VALUES (%s, %s, %s)",
+                    (username, hash_password(password), _first_session_version()))
 
 
 def _change(conn: Any, sql: str, params: tuple, username: str) -> None:

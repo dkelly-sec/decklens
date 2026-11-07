@@ -55,7 +55,7 @@ Living document: update it as features are added. Last reviewed: week 7 (logins)
 | Exhausting memory through logins (each scrypt check holds ~128 MB) | At most 2 password checks run at once; others wait up to 5 s, then get 429 (not counted as a failed login) | Done (audit 2026-11-07, web-auth F3) |
 | Stolen password database | scrypt hashes (OWASP parameters) with per-password salts; plain text impossible by database check; hashes with absurd cost parameters refused | Done |
 | Username discovery | Same message and same timing for unknown users and wrong passwords (dummy hash check); lockouts apply to any username | Done |
-| Session theft or forgery | HMAC-signed cookie, HttpOnly (scripts can't read it), Secure and `__Host-` over HTTPS, 30-day expiry, per-user revocation on password change or logout-all | Done |
+| Session theft or forgery | HMAC-signed cookie, HttpOnly (scripts can't read it), Secure and `__Host-` over HTTPS, 30-day expiry, per-user revocation on password change or logout-all; new accounts start at a random session version, so re-adding a removed username can't revive its old cookies | Done |
 | Cross-site request forgery | Origin (or Referer) must match the site on every POST; SameSite=Lax cookies | Done |
 | DNS rebinding (a web page pointing its own hostname at 127.0.0.1) | Host header must be one of this computer's names or `DECKLENS_HOSTS` (required with HTTPS); anything else gets 400 before routing | Done (audit 2026-11-07, web-auth F1) |
 | Compromised web app creating accounts | The web role can only SELECT from web_users; tested that INSERT, UPDATE and DELETE are refused | Done |

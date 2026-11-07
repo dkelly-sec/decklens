@@ -76,7 +76,6 @@ def _auth_on(conn):
     return Auth(database_user_loader(connect), SECRET, secure_cookie=False, user_cache_seconds=0)
 
 
-@pytest.mark.xfail(strict=True, reason="2026-11-07-web-auth F2: open defect; remove this mark in the fix")
 @needs_db
 def test_removed_users_cookie_stays_dead_after_the_name_is_added_again(db):
     from decklens.users import add_user, remove_user
