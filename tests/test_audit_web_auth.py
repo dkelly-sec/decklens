@@ -3,9 +3,7 @@
 Each pair is an attack test that fails while the defect is present and a legitimate-path
 test that must keep passing after the fix.
 
-The attack tests are marked xfail(strict=True) so CI stays green while the defect is open;
-a fix makes them pass, strict xfail then fails the build until the mark is removed.
-Run them as plain tests with: python -m pytest --runxfail <this file>
+Fixed: the attack tests now pass and stay as regression tests.
 """
 
 import os

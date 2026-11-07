@@ -10,9 +10,7 @@ These tests replay main()'s sequence (crawl.py, the `with psycopg.connect(...)` 
 with the real storage functions and crawl(), against a throwaway Postgres. They need
 DECKLENS_TEST_DATABASE_URL, like tests/test_storage_integration.py.
 
-The attack tests are marked xfail(strict=True) so CI stays green while the defect is open;
-a fix makes them pass, strict xfail then fails the build until the mark is removed.
-Run them as plain tests with: python -m pytest --runxfail <this file>
+Fixed: the attack tests now pass and stay as regression tests.
 """
 
 import os

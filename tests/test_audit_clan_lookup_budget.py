@@ -42,7 +42,8 @@ def upstream_calls(client):
     return [c for c in client.calls if c[0] in ("clans", "members")]
 
 
-def test_a_minute_of_lookups_stays_within_the_documented_upstream_budget():
+def test_one_lookup_stays_within_the_documented_upstream_budget():
+    """Name kept from the audit (findings.jsonl); the budget is now per client per minute."""
     client = ManyNamesakes()
     app, _, _ = make(client=client)
     for i in range(LOOKUPS_PER_MINUTE):   # a different common name each time: no cache hits

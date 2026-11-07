@@ -5,9 +5,7 @@ check reads the host with urlsplit, but requests (urllib3) treats a backslash as
 start of the path, so "http://other-host\\@127.0.0.1:8000" passes the check and then
 connects to other-host, sending the password in clear text.
 
-The attack tests are marked xfail(strict=True) so CI stays green while the defect is open;
-a fix makes them pass, strict xfail then fails the build until the mark is removed.
-Run them as plain tests with: python -m pytest --runxfail <this file>
+Fixed: the attack tests now pass and stay as regression tests.
 """
 
 import pytest
