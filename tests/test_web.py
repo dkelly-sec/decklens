@@ -1170,6 +1170,24 @@ def test_watcher_status_reaches_the_page_and_goes_stale():
     assert board.status("david") is None
 
 
+def test_read_again_reaches_the_watcher_once():
+    from decklens.web.watch import SCREEN_KEY, WatchBoard
+
+    app, services, _ = make()
+    status = {"state": "connected", "detail": "iPad (2)"}
+    assert app.post("/api/watch/status", json=status).json()["rescan"] is False
+    assert app.post("/api/watch/rescan").status_code == 200
+    assert app.post("/api/watch/status", json=status).json()["rescan"] is True   # stand-alone watcher
+    assert app.post("/api/watch/status", json=status).json()["rescan"] is False  # once per ask
+    assert services.watch.take_rescan(SCREEN_KEY) is True                        # the desktop app's too
+
+    now = [0.0]
+    board = WatchBoard(clock=lambda: now[0])
+    board.request_rescan("david")
+    now[0] += 31                                                   # nobody picked it up: dropped
+    assert board.take_rescan("david") is False and board.take_rescan(SCREEN_KEY) is False
+
+
 @pytest.mark.parametrize("body", [
     {"state": "hacked"}, {"state": "connected", "detail": "x" * 81}, {},
     {"state": "connected", "extra": 1},

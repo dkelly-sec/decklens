@@ -25,6 +25,8 @@ SCREEN_KEY = "*screen*"
 # The watcher reports its state every few seconds; quieter than this means it
 # isn't running, so the page never shows "connected" for a watcher that died.
 STATUS_FRESH_SECONDS = 10
+# A "read again" request the watcher hasn't picked up by then is dropped.
+RESCAN_TTL_SECONDS = 30
 
 
 class WatchBoard:
@@ -34,6 +36,7 @@ class WatchBoard:
         self.clock = clock
         self._latest: dict[str, dict[str, Any]] = {}
         self._status: dict[str, dict[str, Any]] = {}
+        self._rescan: dict[str, float] = {}
         self._ids = itertools.count(1)
         self._lock = threading.Lock()
 
@@ -59,6 +62,21 @@ class WatchBoard:
             return None
         entry = max(entries, key=lambda e: e["id"])
         return {**entry, "age_seconds": round(self.clock() - entry["at"], 1)}
+
+    def request_rescan(self, user: str) -> None:
+        """The page asks the watcher to read this battle's opponent again.
+        Both this user's own watcher and the desktop app's are asked."""
+        with self._lock:
+            if len(self._rescan) >= MAX_USERS and user not in self._rescan:
+                self._rescan.clear()
+            for key in (user, SCREEN_KEY):
+                self._rescan[key] = self.clock()
+
+    def take_rescan(self, user: str) -> bool:
+        """True once per request (if still fresh) for the watcher reporting as user."""
+        with self._lock:
+            at = self._rescan.pop(user, None)
+        return at is not None and self.clock() - at <= RESCAN_TTL_SECONDS
 
     def set_status(self, user: str, state: str, detail: str | None = None) -> None:
         """What the watcher can see right now (connected, no window, ...)."""

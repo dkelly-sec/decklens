@@ -84,6 +84,18 @@ def test_ipad_battle_corner_from_a_real_screenshot():
     assert read_opponent(ranked_tl) == Sighting("MONO", "taller telo", 2216)
 
 
+def test_ipad_ranked_league_line_in_a_tall_box():
+    """Real iPad Ranked battle (League 3): RapidOCR read "celvas" fine, but the
+    league line's box is taller than plain digits, so measured in its height the
+    name looked like it sat in the clan slot and was dropped."""
+    tl = [TextLine("celvas", 0.11, 0.10, 0.79, 0.29),
+          TextLine("LOSPATRONES", 0.12, 0.45, 0.85, 0.19),
+          TextLine("League 3", 0.11, 0.72, 0.84, 0.26)]
+    assert read_opponent(tl) == Sighting("celvas", "LOSPATRONES")
+    assert read_opponent([tl[0], tl[2]]) == Sighting("celvas", None)   # clan missed
+    assert read_opponent(tl[1:]) == Sighting(None, "LOSPATRONES")      # name missed
+
+
 def ranked(*rows):
     """Lines laid out like the Ranked battle screen: text height 0.08, pitch 0.13."""
     return [TextLine(text, 0.25, y, 0.9, 0.08) for text, y in rows]
@@ -211,6 +223,12 @@ def test_failed_send_is_retried_next_look():
     with pytest.raises(OSError):
         watcher.step()
     assert watcher.step() == Sighting("FIOReNt", "Sunny") and len(attempts) == 2
+
+
+def test_read_again_reports_the_same_battle_once_more():
+    asks = iter([False, False, False, True, False, False, False])
+    sent = run([BATTLE] * 7, rescan=lambda: next(asks))
+    assert sent == [Sighting("FIOReNt", "Sunny")] * 2    # read again on request, once
 
 
 # --- talking to DeckLens --------------------------------------------------------------
@@ -459,3 +477,20 @@ def test_window_grabber_reports_what_it_can_see(monkeypatch):
     assert grab() is None and seen[-1] == ("minimised", "David's A53")
     world.update(box=(0, 0, 2560, 1400))                               # visible, but no window picture
     assert grab().shape[:2] == (1360, 612) and seen[-1] == ("screen_only", "David's A53")
+
+
+def test_heartbeat_passes_on_the_pages_read_again_request():
+    answers = iter([False, True])
+    beat = Heartbeat(lambda s, d: next(answers), every=0, clock=lambda: 0.0)
+    beat("connected", "x")
+    assert beat.take_rescan() is False
+    beat("connected", "x")
+    assert beat.take_rescan() is True and beat.take_rescan() is False   # once per ask
+
+
+def test_client_status_returns_the_read_again_flag():
+    session = FakeSession(FakeResponse(200, {"ok": True, "rescan": True}),
+                          FakeResponse(200, {"ok": True, "rescan": False}))
+    client = DeckLensClient("http://127.0.0.1:8000", session=session)
+    assert client.status("connected", "iPad") is True
+    assert client.status("connected", "iPad") is False

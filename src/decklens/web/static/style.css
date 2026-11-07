@@ -517,6 +517,9 @@ a { color: var(--blue); text-underline-offset: 3px; }
 .status-dot.warn { background: #f2b33d; }
 .status-dot.off { background: #e5484d; }
 #auto-status[hidden] { display: none; }
+.auto-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 8px; }
+.auto-row #auto-status { flex: 1 1 auto; margin: 0; }
+#rescan-button[hidden] { display: none; }
 
 footer { font-size: 0.8125rem; padding-bottom: 32px; }
 

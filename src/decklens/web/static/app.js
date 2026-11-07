@@ -1354,6 +1354,24 @@ function showWatcherStatus(watcher, latest) {
     } else line += " · waiting for a battle";
   }
   show(status, el("span", null, "status-dot " + kind), el("span", line));
+  document.getElementById("rescan-button").hidden = !(kind === "on" || kind === "warn");
+}
+
+// Ask the screen watcher to read this battle's opponent again (a misread name,
+// or the wrong player picked). The new read arrives through pollWatcher.
+async function rescanOpponent() {
+  const button = document.getElementById("rescan-button");
+  button.disabled = true;
+  button.textContent = "Reading\u2026";
+  try {
+    await api("/api/watch/rescan", { method: "POST" });
+  } catch (error) {
+    button.textContent = error.message;
+  }
+  setTimeout(() => {
+    button.disabled = false;
+    button.textContent = "Read again";
+  }, 4000);
 }
 
 async function pollWatcher() {
@@ -1402,6 +1420,7 @@ function setAutoScout(on) {
   storageSet("decklens.autoScout", on ? "1" : "0");
   const status = document.getElementById("auto-status");
   status.hidden = !on;
+  document.getElementById("rescan-button").hidden = true;  // shown once the watcher is connected
   clearInterval(auto.timer);
   auto.timer = null;
   auto.lastId = null;
@@ -1738,6 +1757,7 @@ document.addEventListener("DOMContentLoaded", () => {
   document.getElementById("find-form").addEventListener("submit", findOpponent);
   const autoBox = document.getElementById("auto-scout");
   autoBox.addEventListener("change", () => setAutoScout(autoBox.checked));
+  document.getElementById("rescan-button").addEventListener("click", rescanOpponent);
   autoBox.checked = storageGet("decklens.autoScout") === "1";
   if (autoBox.checked) setAutoScout(true);
   for (const tab of document.querySelectorAll(".pages [data-page]")) {

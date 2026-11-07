@@ -68,6 +68,9 @@ MAX_RATING = 20_000
 # to this, the line sits in the clan slot (seen: 1.7); beyond, the name slot
 # (about 3.4). Line heights are used so it works at any window size.
 CLAN_SLOT_GAP = 2.5
+# "League 3" sits in a taller box than digits, so gaps measured in it are
+# smaller (real iPad: clan 1.0, name 2.4; seen elsewhere: clan 1.6, name 3.3).
+LEAGUE_CLAN_SLOT_GAP = 2.0
 NAME_SLOT_GAP = 5.0
 # Game picture height / width: phones are about 2.2 (20:9); an iPad mirrored
 # with 5KPlayer is 1.33 (4:3). The same reading areas work for both (checked
@@ -154,13 +157,17 @@ def read_opponent(top_left: Sequence[TextLine]) -> Sighting | None:
     rating = next((r for r in ratings if is_rating(r)), None)
     words = [ln for ln in words if rating is None or ln.y < rating.y]
     if rating is not None:
-        # Ranked layout: name / clan / rating (or league). Measure from that line.
-        unit = rating.height or DEFAULT_LINE_HEIGHT
+        # Ranked layout: name / clan / rating (or league). Measure from that line,
+        # in units of the smallest line's height: "League 3" sits in a taller box
+        # than plain digits, which made the name look like it was in the clan slot.
         above = [ln for ln in words if ln.y < rating.y]
-        clan = next((ln for ln in reversed(above) if (rating.y - ln.y) / unit <= CLAN_SLOT_GAP),
-                    None)
+        floor = (rating.height or DEFAULT_LINE_HEIGHT) / 2   # ignore specks of junk text
+        unit = min((ln.height for ln in [rating, *above] if ln.height >= floor),
+                   default=rating.height or DEFAULT_LINE_HEIGHT)
+        slot = CLAN_SLOT_GAP if _rating(rating) is not None else LEAGUE_CLAN_SLOT_GAP
+        clan = next((ln for ln in reversed(above) if (rating.y - ln.y) / unit <= slot), None)
         name = next((ln for ln in reversed(above)
-                     if CLAN_SLOT_GAP < (rating.y - ln.y) / unit <= NAME_SLOT_GAP), None)
+                     if slot < (rating.y - ln.y) / unit <= NAME_SLOT_GAP), None)
     elif words:
         name = words[0]
         clan = next((ln for ln in words[1:] if 0.1 < ln.y - name.y < 0.5), None)
@@ -294,8 +301,10 @@ class Watcher:
     def __init__(self, grab: Callable[[], Any], ocr: Callable[[Any], Any],
                  send: Callable[[Sighting], None], *,
                  event: Callable[[str], None] | None = None,
+                 rescan: Callable[[], bool] | None = None,
                  confirm: int = 2, rearm_after: int = 3, unreadable_after: int = UNREADABLE_AFTER):
         self.grab, self.ocr, self.send, self.event = grab, ocr, send, event
+        self.rescan = rescan  # True when the page asked to read this battle again
         self.confirm, self.rearm_after = confirm, rearm_after
         self.unreadable_after = unreadable_after
         self.reported = False
@@ -320,6 +329,9 @@ class Watcher:
 
     def step(self) -> Sighting | None:
         """One look at the screen. Returns the opponent if they were just reported."""
+        if self.rescan is not None and self.rescan():
+            self.reported, self.pending, self.agree = False, None, 0
+            self.unread, self.flagged = 0, False
         image = self.grab()  # None: the window isn't available right now
         if image is None or not in_battle(self._read(image, TOP_RIGHT)):
             self.misses += 1
@@ -367,17 +379,24 @@ class Heartbeat:
         self.send, self.every, self.clock = send, every, clock
         self.last: tuple[str, str | None] | None = None
         self.sent_at = float("-inf")
+        self.rescan_asked = False
 
     def __call__(self, state: str, detail: str | None = None) -> None:
         now = self.clock()
         if (state, detail) == self.last and now - self.sent_at < self.every:
             return
         try:
-            self.send(state, detail)
+            if self.send(state, detail):
+                self.rescan_asked = True
         except (OSError, NeedLogin) as exc:  # the next beat will try again
             log.debug("couldn't send the watcher status: %s", type(exc).__name__)
             return
         self.last, self.sent_at = (state, detail), now
+
+    def take_rescan(self) -> bool:
+        """Whether the page asked to read the opponent again (once per ask)."""
+        asked, self.rescan_asked = self.rescan_asked, False
+        return asked
 
 
 class DeckLensClient:
@@ -411,12 +430,17 @@ class DeckLensClient:
             raise NeedLogin("session expired")
         r.raise_for_status()
 
-    def status(self, state: str, detail: str | None) -> None:
+    def status(self, state: str, detail: str | None) -> bool:
+        """Send the watcher's state. True if the page asked to read the opponent again."""
         r = self.session.post(self.base + "/api/watch/status", timeout=5,
                               json={"state": state, "detail": (detail or None) and detail[:80]})
         if r.status_code == 401:
             raise NeedLogin("session expired")
         r.raise_for_status()
+        try:
+            return r.json().get("rescan") is True
+        except ValueError:
+            return False
 
     def report(self, found: Sighting) -> None:
         r = self.session.post(self.base + "/api/watch", timeout=10,
@@ -701,7 +725,7 @@ def main(argv: list[str] | None = None) -> int:
             client.event(kind)
         log.info("battle %s -> told DeckLens", kind)
 
-    watcher = Watcher(grab, text_reader(), send, event=event)
+    watcher = Watcher(grab, text_reader(), send, event=event, rescan=heartbeat.take_rescan)
     log.info("watching your phone screen (Ctrl+C to stop). Tick Auto-scout on the DeckLens page.")
     try:
         while True:

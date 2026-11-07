@@ -376,7 +376,14 @@ def create_app(services: Services, *, hsts: bool = False) -> FastAPI:
 
     @app.post("/api/watch/status", dependencies=[*signed_in, Depends(limit("watch_status"))])
     def watch_status(body: WatchStatus, request: Request) -> dict[str, Any]:
-        services.watch.set_status(watch_key(request), body.state, body.detail)
+        key = watch_key(request)
+        services.watch.set_status(key, body.state, body.detail)
+        return {"ok": True, "rescan": services.watch.take_rescan(key)}
+
+    @app.post("/api/watch/rescan", dependencies=[*signed_in, Depends(limit("watch"))])
+    def watch_rescan(request: Request) -> dict[str, Any]:
+        """Ask the screen watcher to read the current opponent again."""
+        services.watch.request_rescan(watch_key(request))
         return {"ok": True}
 
     @app.post("/api/predict", dependencies=[*signed_in, Depends(limit("predict"))])
