@@ -76,7 +76,6 @@ def stored_battles():
         return c.execute("SELECT count(*) FROM battles").fetchone()[0]
 
 
-@pytest.mark.xfail(strict=True, reason="2026-11-07-upstream-data F1: open defect; remove this mark in the fix")
 def test_battles_stored_before_a_403_survive_the_abort():
     with pytest.raises(CrawlAborted):
         nightly_run(TwoPlayers(second=ApiError("forbidden: /players/%239QJ/battlelog", 403)))

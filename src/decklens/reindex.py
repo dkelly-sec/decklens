@@ -27,7 +27,9 @@ def main() -> int:
 
     from .storage import reindex_names
 
-    with psycopg.connect(settings.database_url) as conn:
+    # autocommit: each storage function commits its own transaction, so an
+    # abort later in the run never rolls back what was already saved.
+    with psycopg.connect(settings.database_url, autocommit=True) as conn:
         changed = reindex_names(conn)
     log.info("reindex: updated search keys for %d players", changed)
     return 0

@@ -406,7 +406,9 @@ def main(argv: list[str] | None = None) -> int:
         def now() -> datetime:
             return datetime.now(timezone.utc)
 
-        with psycopg.connect(settings.database_url) as conn:
+        # autocommit: each storage function commits its own transaction, so an
+        # abort later in the run never rolls back what was already saved.
+        with psycopg.connect(settings.database_url, autocommit=True) as conn:
             filled = backfill_clan_keys(conn)  # players stored before clan search existed
             if filled:
                 log.info("clan search: indexed clans for %d older players", filled)

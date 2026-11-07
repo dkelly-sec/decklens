@@ -202,7 +202,10 @@ def players_due_for_crawl(
 
     The same (rank, tag) shape crawl() takes as seeds, so the two plug together.
     """
-    with conn.cursor() as cur:
+    # Its own transaction, like every function here: a bare read on a non-autocommit
+    # connection would leave a transaction open, turning every later save into a
+    # savepoint that an aborted crawl rolls back.
+    with conn.transaction(), conn.cursor() as cur:
         cur.execute(_DUE_FOR_CRAWL, (now - recrawl_after, limit))
         return [(row[0], row[1]) for row in cur.fetchall()]
 

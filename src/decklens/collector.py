@@ -110,7 +110,9 @@ def main(argv: list[str] | None = None) -> int:
 
     from .storage import save_battles
 
-    with psycopg.connect(settings.database_url) as conn:
+    # autocommit: each storage function commits its own transaction, so an
+    # abort later in the run never rolls back what was already saved.
+    with psycopg.connect(settings.database_url, autocommit=True) as conn:
         new = save_battles(conn, battles)
         log.info("stored %d new battles", new)
         if args.mine:  # your rank too, for the rank graph
