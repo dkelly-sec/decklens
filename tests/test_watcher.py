@@ -275,10 +275,42 @@ def test_client_login_failures_and_expiry():
         client.report(Sighting("x"))
 
 
-@pytest.mark.parametrize("url", ["http://decklens.example", "ftp://127.0.0.1", "javascript:x"])
+@pytest.mark.parametrize("url", [
+    "http://decklens.example", "ftp://127.0.0.1", "javascript:x",
+    "http://evil.example\\@127.0.0.1:8000",      # urlsplit sees 127.0.0.1, requests sees evil
+    "http://user:pw@127.0.0.1:8000", "http://evil.example@localhost",
+    "http://127.0.0.1:99999", "http://127.0.0.1:8000\tx", "https://", "http://127.0.0.1.evil.example",
+])
 def test_client_refuses_to_send_passwords_unencrypted_to_another_computer(url):
     with pytest.raises(ValueError):
         DeckLensClient(url, session=FakeSession())
+
+
+@pytest.mark.parametrize("url, base", [
+    ("http://LOCALHOST:8000/anything", "http://localhost:8000"),
+    ("http://[::1]:8000", "http://[::1]:8000"),
+    ("https://DeckLens.example/", "https://decklens.example"),
+])
+def test_client_server_address_is_rebuilt_from_its_parts(url, base):
+    assert DeckLensClient(url, session=FakeSession()).base == base
+
+
+def test_client_never_follows_redirects():
+    """requests re-sends the body on a 307/308, so a redirect could carry the password away."""
+    sent = []
+
+    class Recorder(FakeSession):
+        def post(self, url, **kw):
+            sent.append(kw)
+            return super().post(url, **kw)
+
+    client = DeckLensClient("http://127.0.0.1:8000", session=Recorder(
+        FakeResponse(200), FakeResponse(200, {"id": 1}), FakeResponse(200, {}), FakeResponse(200)))
+    client.login("david", "correct horse battery staple")
+    client.report(Sighting("x"))
+    client.status("connected", None)
+    client.event("ended")
+    assert len(sent) == 4 and all(kw["allow_redirects"] is False for kw in sent)
 
 
 # --- finding the game picture inside the mirror window ---------------------------------

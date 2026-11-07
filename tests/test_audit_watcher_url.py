@@ -17,7 +17,6 @@ from decklens.watcher import DeckLensClient
 from test_watcher import FakeSession
 
 
-@pytest.mark.xfail(strict=True, reason="2026-11-07-local-and-supply-chain F1: open defect; remove this mark in the fix")
 @pytest.mark.parametrize("url", ["http://evil.example\\@127.0.0.1:8000",
                                  "http://127.0.0.2:8000\\@localhost:8000"])
 def test_backslash_tricks_cannot_pass_for_this_computer(url):

@@ -403,11 +403,7 @@ class DeckLensClient:
     """Logs in like the page does and posts what the watcher read (text only)."""
 
     def __init__(self, base_url: str, session: Any = None):
-        parts = urlsplit(base_url)
-        local = parts.hostname in ("127.0.0.1", "localhost", "::1")
-        if parts.scheme not in ("http", "https") or (parts.scheme == "http" and not local):
-            raise ValueError("use https:// for a DeckLens server that isn't on this computer")
-        self.base = f"{parts.scheme}://{parts.netloc}"
+        self.base = self.server_base(base_url)
         if session is None:
             import requests
             session = requests.Session()
@@ -415,9 +411,36 @@ class DeckLensClient:
         # The server's cross-site check wants requests to come from its own origin.
         self.session.headers.update({"Origin": self.base})
 
+    @staticmethod
+    def server_base(url: str) -> str:
+        """scheme://host[:port] of the DeckLens server, rebuilt from its parts.
+
+        The password goes here, so anything that URL parsers read differently is
+        refused: a backslash ("http://evil\\@127.0.0.1" is 127.0.0.1 to urlsplit but
+        evil to requests), a user name or "@", spaces or control characters. Plain
+        http is only for this computer."""
+        if not isinstance(url, str) or "\\" in url or any(c <= " " or c == "\x7f" for c in url):
+            raise ValueError("that server address isn't a plain URL")
+        parts = urlsplit(url)
+        try:
+            host, port = parts.hostname, parts.port
+        except ValueError:
+            raise ValueError("that server address has a bad port") from None
+        if parts.scheme not in ("http", "https") or not host or "@" in parts.netloc:
+            raise ValueError("use https://host or http://127.0.0.1:port for the DeckLens server")
+        if parts.scheme == "http" and host not in ("127.0.0.1", "localhost", "::1"):
+            raise ValueError("use https:// for a DeckLens server that isn't on this computer")
+        shown = f"[{host}]" if ":" in host else host
+        return f"{parts.scheme}://{shown}" + (f":{port}" if port is not None else "")
+
+    def _post(self, path: str, body: dict[str, Any], timeout: float = 10) -> Any:
+        # Never follow redirects: requests would re-send the body (password included)
+        # to wherever a 307/308 points, even plain http.
+        return self.session.post(self.base + path, json=body, timeout=timeout,
+                                 allow_redirects=False)
+
     def login(self, username: str, password: str) -> None:
-        r = self.session.post(self.base + "/api/login", timeout=10,
-                              json={"username": username, "password": password})
+        r = self._post("/api/login", {"username": username, "password": password})
         if r.status_code != 200:
             detail = r.json().get("detail") if r.headers.get("content-type", "").startswith(
                 "application/json") else None
@@ -425,15 +448,15 @@ class DeckLensClient:
 
     def event(self, kind: str) -> None:
         """A battle whose opponent can't be read ("unreadable"), or its end ("ended")."""
-        r = self.session.post(self.base + "/api/watch", timeout=10, json={"kind": kind})
+        r = self._post("/api/watch", {"kind": kind})
         if r.status_code == 401:
             raise NeedLogin("session expired")
         r.raise_for_status()
 
     def status(self, state: str, detail: str | None) -> bool:
         """Send the watcher's state. True if the page asked to read the opponent again."""
-        r = self.session.post(self.base + "/api/watch/status", timeout=5,
-                              json={"state": state, "detail": (detail or None) and detail[:80]})
+        r = self._post("/api/watch/status",
+                       {"state": state, "detail": (detail or None) and detail[:80]}, timeout=5)
         if r.status_code == 401:
             raise NeedLogin("session expired")
         r.raise_for_status()
@@ -443,9 +466,8 @@ class DeckLensClient:
             return False
 
     def report(self, found: Sighting) -> None:
-        r = self.session.post(self.base + "/api/watch", timeout=10,
-                              json={"name": found.name, "clan": found.clan,
-                                    "rating": found.rating})
+        r = self._post("/api/watch", {"name": found.name, "clan": found.clan,
+                                      "rating": found.rating})
         if r.status_code == 401:
             raise NeedLogin("session expired")
         r.raise_for_status()
