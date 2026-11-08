@@ -377,10 +377,19 @@ function winBar(rate) {
   return bar;
 }
 
+// Below this many games a cell shows its win-loss record, not a win rate (the
+// headline ignores such cells too: HEADLINE_MIN_GAMES in services.py).
+const FEW_GAMES = 5;
+
 function recordCell(cell) {
   const td = el("td", null, "record");
   if (cell.mirror) {
     td.append(el("span", "Mirror", "rate"), el("span", plural(cell.games, "game", "games"), "games"));
+  } else if (cell.games && cell.games < FEW_GAMES) {
+    // A handful of games says almost nothing: show the record, not a percentage.
+    const wins = cell.wins ?? Math.round(cell.rate * cell.games);
+    td.append(el("span", wins + "–" + (cell.games - wins), "rate"),
+      el("span", plural(cell.games, "game", "games") + ", too few to call", "games"));
   } else if (cell.games) {
     const lean = cell.range[0] > 0.5 ? " good" : cell.range[1] < 0.5 ? " bad" : "";
     td.append(el("span", pct(cell.rate), "rate" + lean), winBar(cell.rate));
