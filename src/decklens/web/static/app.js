@@ -324,15 +324,18 @@ function playerFacts(player, options = {}) {
   if (options.withTag !== false && player.tag) facts.push(el("span", player.tag));
   if (player.clan) facts.push(el("bdi", player.clan));
   else if (options.showNoClan) facts.push(el("span", "no clan"));
-  if (player.ultimate) {
-    // Ultimate Champion: medals, then global rank (top 10k) and country rank if known.
-    facts.push(el("span", "Ultimate Champion"));
-    if (player.rating) facts.push(el("span", player.rating.toLocaleString() + " medals"));
-    if (player.rank) facts.push(el("span", "#" + player.rank.toLocaleString() + " global"));
+  if (player.ultimate !== undefined) {
+    // A looked-up profile (you, or an opponent once their tag is known). Below
+    // Ultimate Champion: the league. In it: rank if top 10k, then medals. Either
+    // way, their rank on their country's leaderboard if they're on it.
+    if (!player.ultimate) {
+      if (player.league) facts.push(el("span", "league " + player.league));
+    } else {
+      if (player.rank) facts.push(el("span", "rank #" + player.rank.toLocaleString()));
+      if (player.rating) facts.push(el("span", player.rating.toLocaleString() + " medals"));
+    }
     const local = player.country_rank;
     if (local && local.rank) facts.push(el("span", "#" + local.rank.toLocaleString() + " in " + local.country));
-  } else if (player.ultimate === false) {
-    if (player.league) facts.push(el("span", "league " + player.league));
   } else {
     // Opponents and search results: whatever was stored.
     if (player.rank) facts.push(el("span", "rank #" + player.rank.toLocaleString()));
@@ -1417,6 +1420,22 @@ async function fillHistory(player, slot) {
   slot.append(el("p", "Played before", "label"), line, disclosure(plural(found.meetings.length, "game", "games"), games));
 }
 
+// The opponent side starts with what the screen or battle log said (a rating, a
+// battle-time rank). Once their tag is known, look up their profile and show
+// their standing by the same rule as yours.
+async function refreshThemSide(head, tag, token) {
+  if (!tag) return;
+  let p;
+  try {
+    p = await api("/api/players/" + tagPath(tag));
+  } catch {
+    return;  // keep what the screen or battle log said
+  }
+  const facts = head.querySelector(".vs-them .vs-facts");
+  if (token !== board.token || board.key !== tag || !facts) return;
+  facts.replaceChildren(...playerFacts(p));
+}
+
 // Open a player on the board: their decks by game mode, newest first.
 async function openOpponent(player, how = {}) {
   const token = ++board.token;
@@ -1424,6 +1443,7 @@ async function openOpponent(player, how = {}) {
   board.key = player.tag;
   const head = vsBar(player, how.tag, lands);
   setBoard(head, loadingText("Loading their decks…"));
+  refreshThemSide(head, player.tag, token);
   boardSay("Your opponent: " + (player.name || player.tag) + (player.clan ? ", " + player.clan : "") + ".");
   const history = el("div");
   fillHistory(player, history);
@@ -1498,7 +1518,7 @@ async function openOpponent(player, how = {}) {
 
 // Your last battle's opponent, straight from your battle log.
 function showLastOpponent(opp, tag) {
-  board.token++;
+  const token = ++board.token;
   const lands = board.key !== opp.tag;
   board.key = opp.tag;
   const head = vsBar(opp, tag, lands);
@@ -1510,6 +1530,7 @@ function showLastOpponent(opp, tag) {
   setBoard(head, ...boardBody(opp.deck, MODE_NAMES[opp.mode] || "Battle", opp.mode,
     state.me ? mine : null, result, history, [recent]));
   setTools(wrongPlayer());
+  refreshThemSide(head, opp.tag, token);
   boardSay("Last opponent: " + (opp.name || opp.tag) + ". You " + opp.your_result + ".");
 }
 
