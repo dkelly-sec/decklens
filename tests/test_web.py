@@ -160,6 +160,43 @@ def test_player_lookup_and_cache():
     assert services.client.calls == [("player", "#2PP")]  # second answer came from the cache
 
 
+class CountryClient(FakeClient):
+    """An Ultimate Champion in an Australian clan, 35th on Australia's board."""
+
+    def get_player(self, tag):
+        profile = super().get_player(tag)
+        profile["clan"] = {"tag": "#QQQ", "name": "Clan"}
+        return profile
+
+    def get_clan(self, tag):
+        self.calls.append(("clan", tag))
+        return {"tag": tag, "location": {"id": 57000017, "name": "Australia", "isCountry": True}}
+
+    def get_ranked_leaderboard(self, location_id="global", *, max_items=1000):
+        self.calls.append(("board", location_id))
+        if self.error:
+            raise self.error
+        return [{"tag": "#9QJ", "name": "Top", "rank": 1}, {"tag": ME, "name": "Me", "rank": 35}]
+
+
+def test_ultimate_champion_shows_country_rank():
+    app, services, _ = make(client=CountryClient())
+    first = app.get("/api/players/%232PP").json()
+    assert first["ultimate"] is True and first["rating"] == 2900
+    assert first["country_rank"] == {"rank": 35, "country": "Australia"}
+    services.cache = type(services.cache)(ttl=60.0)  # fresh player and clan; board still cached
+    app.get("/api/players/%232PP")
+    assert services.client.calls.count(("board", "57000017")) == 1
+
+
+def test_country_rank_failure_still_returns_the_player():
+    client = CountryClient()
+    client.get_ranked_leaderboard = lambda *a, **k: (_ for _ in ()).throw(ApiError("HTTP 500", 500))
+    app, _, _ = make(client=client)
+    body = app.get("/api/players/%232PP").json()
+    assert body["name"] == "Me" and body["country_rank"] is None
+
+
 @pytest.mark.parametrize("bad", ["%3Cscript%3E", "%232PP%2F..%2Fclans", "ABC", "%23" + "2" * 20])
 def test_invalid_tags_never_reach_the_api(bad):
     app, services, _ = make()

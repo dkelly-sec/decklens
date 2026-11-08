@@ -63,3 +63,39 @@ def test_last_seasons_rank_is_not_this_seasons():
     # A real new rank (different from last season's) is kept.
     profile["currentPathOfLegendSeasonResult"] = {"leagueNumber": 10, "trophies": 2100, "rank": 9100}
     assert parse_profile_rank(profile).rank == 9100
+
+
+def test_below_ultimate_champion_has_no_rank_or_medals():
+    # League 5 this season, but the API still carries last season's rank and rating.
+    profile = {
+        "tag": "#2PP", "name": "Me",
+        "currentPathOfLegendSeasonResult": {"leagueNumber": 5, "trophies": 2410, "rank": 7853},
+        "lastPathOfLegendSeasonResult": {"leagueNumber": 7, "trophies": 2600, "rank": 5120},
+    }
+    assert current_season_result(profile) == {"leagueNumber": 5}
+
+    from decklens.web.services import summarise_player
+    s = summarise_player(profile)
+    assert (s["league"], s["ultimate"], s["rank"], s["rating"]) == (5, False, None, None)
+
+
+def test_ultimate_champion_rank_only_in_top_10k():
+    from decklens.web.services import summarise_player
+    profile = {"tag": "#2PP", "name": "Me",
+               "currentPathOfLegendSeasonResult": {"leagueNumber": 7, "trophies": 2150, "rank": 9999}}
+    s = summarise_player(profile)
+    assert (s["ultimate"], s["rating"], s["rank"]) == (True, 2150, 9999)
+    profile["currentPathOfLegendSeasonResult"]["rank"] = 10_001
+    s = summarise_player(profile)
+    assert (s["ultimate"], s["rating"], s["rank"]) == (True, 2150, None)
+
+
+def test_country_from_clan_and_rank_on_board():
+    from decklens.web.services import clan_country, rank_on_board
+    assert clan_country({"location": {"id": 57000017, "name": "Australia", "isCountry": True}}) == (
+        57000017, "Australia")
+    assert clan_country({"location": {"id": 57000006, "name": "International", "isCountry": False}}) is None
+    assert clan_country({}) is None
+    board = [{"tag": "#9QJ", "name": "A", "rank": 1}, {"tag": "#2PP", "name": "Me", "rank": 35}]
+    assert rank_on_board("#2pp", board) == 35
+    assert rank_on_board("#8YY", board) is None

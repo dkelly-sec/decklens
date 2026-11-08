@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from typing import Any, Callable, Sequence
 
 from ..archetypes import ArchetypeModel
-from ..rankings import current_season_result
+from ..rankings import current_season_result, is_ultimate_champion, parse_leaderboard
 from ..battles import (
     CHALLENGE_GAME_MODE, EVO_SLOT, FORM_TOKEN, WILD_SLOT, Battle, active_form, form_token,
     form_tokens, is_form_token, is_trophy_road, opt_int, parse_battle_log, parse_battle_time,
@@ -32,6 +32,7 @@ from ..validation import InvalidTagError, normalize_tag
 # "trail" is shared by Trophy Road, the challenge and friendlies, so modes are
 # picked out by their game mode name, not their type.
 RANKED = "pathOfLegend"
+TOP_RANKS = 10_000  # global ranks shown: the top 10k
 MODES = ("ranked", "trophy", "challenge")
 SCOUTED_TYPES = frozenset({RANKED, "trail", "PvP"})
 
@@ -144,15 +145,39 @@ def summarise_player(profile: dict[str, Any]) -> dict[str, Any]:
     clan = profile.get("clan") if isinstance(profile.get("clan"), dict) else {}
     ranked = current_season_result(profile)  # last season's rank left out
     deck = _cards(profile.get("currentDeck"))  # 7 from the API means a hidden Hero
+    league = opt_int(ranked.get("leagueNumber"))
+    rank = opt_int(ranked.get("rank"))
     return {
         "tag": normalize_tag(profile.get("tag")),
         "name": _text(profile.get("name")),
         "clan": _text(clan.get("name")) or None,
-        "league": opt_int(ranked.get("leagueNumber")),
-        "rating": opt_int(ranked.get("trophies")),
-        "rank": opt_int(ranked.get("rank")),
+        "league": league,
+        "ultimate": is_ultimate_champion(league),
+        "rating": opt_int(ranked.get("trophies")),  # Ultimate Champion medals
+        "rank": rank if rank is not None and 0 < rank <= TOP_RANKS else None,
         "deck": _deck(deck if len(deck) == 8 else []),
     }
+
+
+def clan_country(clan: dict[str, Any]) -> tuple[int, str] | None:
+    """(location id, name) of a clan's country, or None for a region or no location.
+    The API has no country for players, so their clan's stands in for it."""
+    loc = clan.get("location") if isinstance(clan, dict) else None
+    if not isinstance(loc, dict) or loc.get("isCountry") is not True:
+        return None
+    loc_id, name = loc.get("id"), _text(loc.get("name"))
+    if not isinstance(loc_id, int) or isinstance(loc_id, bool) or not name:
+        return None
+    return loc_id, name
+
+
+def rank_on_board(tag: str, board: list[dict[str, Any]]) -> int | None:
+    """This player's rank on a leaderboard, if they're on it."""
+    tag = normalize_tag(tag)
+    for entry in parse_leaderboard(board):
+        if entry.tag == tag:
+            return entry.rank
+    return None
 
 
 def _side(battle: Battle, tag: str) -> tuple[int, int] | None:

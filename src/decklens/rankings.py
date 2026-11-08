@@ -59,20 +59,33 @@ def parse_leaderboard(items: Iterable[dict[str, Any]]) -> list[RankEntry]:
     return entries
 
 
+# Ranked's top league. Only there do players have a rating (medals) and a
+# leaderboard rank. (Old Path of Legend data numbered it 10, hence >=.)
+ULTIMATE_CHAMPION_LEAGUE = 7
+
+
+def is_ultimate_champion(league: int | None) -> bool:
+    return league is not None and league >= ULTIMATE_CHAMPION_LEAGUE
+
+
 def current_season_result(profile: dict[str, Any]) -> dict[str, Any]:
     """The profile's current-season Ranked result, without last season's numbers.
 
     Early in a season the API keeps showing last season's final rank and rating
-    in currentPathOfLegendSeasonResult until the player has a new one. When it
-    matches lastPathOfLegendSeasonResult, it's last season's: drop the rank and
-    rating (the league stays)."""
+    in currentPathOfLegendSeasonResult. Below Ultimate Champion there is no rank
+    or rating this season, so any there are last season's; and in Ultimate
+    Champion, numbers matching lastPathOfLegendSeasonResult are last season's
+    too. Either way, drop the rank and rating (the league stays)."""
     current = profile.get("currentPathOfLegendSeasonResult")
     current = dict(current) if isinstance(current, dict) else {}
     last = profile.get("lastPathOfLegendSeasonResult")
     last = last if isinstance(last, dict) else {}
+    league = _first_int(current, "leagueNumber")
     rank, last_rank = _first_int(current, "rank"), _first_int(last, "rank")
-    if rank is not None and rank == last_rank and (
-            _first_int(current, "trophies", "rating") == _first_int(last, "trophies", "rating")):
+    below_top = league is not None and not is_ultimate_champion(league)
+    repeated = rank is not None and rank == last_rank and (
+        _first_int(current, "trophies", "rating") == _first_int(last, "trophies", "rating"))
+    if below_top or repeated:
         current.pop("rank", None)
         current.pop("trophies", None)
         current.pop("rating", None)

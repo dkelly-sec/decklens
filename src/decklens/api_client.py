@@ -122,6 +122,11 @@ class ClashRoyaleClient:
         items = data.get("items") if isinstance(data, dict) else None
         return [i for i in items if isinstance(i, dict)] if isinstance(items, list) else []
 
+    def get_clan(self, tag: str) -> dict[str, Any]:
+        """A clan's details, including its location (a country or region)."""
+        data = self._get(f"/clans/{encode_tag(tag)}")
+        return data if isinstance(data, dict) else {}
+
     def get_clan_members(self, tag: str) -> list[dict[str, Any]]:
         """A clan's members (up to 50), with each one's lastSeen time."""
         data = self._get(f"/clans/{encode_tag(tag)}/members")

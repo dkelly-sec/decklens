@@ -37,8 +37,8 @@ from .security import (
 )
 from .services import (
     CLAN_SEARCH_LIMIT, Predictor, battle_mix, card_ids, last_opponent, live_clan_lookup,
-    deck_link, my_record, qr_rows, rank_at, recent_decks, rematches, safe_tag, session,
-    summarise_player, validate_deck,
+    clan_country, deck_link, my_record, qr_rows, rank_at, rank_on_board, recent_decks,
+    rematches, safe_tag, session, summarise_player, validate_deck,
 )
 
 log = logging.getLogger("decklens.web")
@@ -187,9 +187,32 @@ def create_app(services: Services, *, hsts: bool = False,
         return {"status": "ok", "model": services.predictor is not None,
                 "search": services.search_db is not None}
 
+    boards = TTLCache(ttl=600.0, max_items=50)  # country leaderboards: 10 pages each
+
+    def country_rank(profile: dict[str, Any]) -> dict[str, Any] | None:
+        """Rank on the player's country leaderboard (top 1,000), or None. Their clan's
+        location stands in for their country. Best effort: a failure just hides it."""
+        clan = profile.get("clan") if isinstance(profile.get("clan"), dict) else {}
+        try:
+            clan_tag = safe_tag(clan.get("tag"))
+            country = clan_country(services.cache.get_or_set(
+                ("clan", clan_tag), lambda: services.client.get_clan(clan_tag)))
+            if country is None:
+                return None
+            loc, name = country
+            board = boards.get_or_set(loc, lambda: services.client.get_ranked_leaderboard(str(loc)))
+            rank = rank_on_board(profile.get("tag"), board)
+        except (ValueError, ApiError) as exc:
+            log.info("country rank unavailable: %s", type(exc).__name__)
+            return None
+        return {"rank": rank, "country": name} if rank else None
+
     @app.get("/api/players/{tag}", dependencies=[*signed_in, Depends(limit("lookup"))])
     def player(tag: str) -> dict[str, Any]:
-        return summarise_player(upstream("player", tag_or_400(tag)))
+        profile = upstream("player", tag_or_400(tag))
+        summary = summarise_player(profile)
+        summary["country_rank"] = country_rank(profile) if summary["ultimate"] else None
+        return summary
 
     @app.get("/api/players/{tag}/decks", dependencies=[*signed_in, Depends(limit("lookup"))])
     def decks(tag: str) -> dict[str, Any]:

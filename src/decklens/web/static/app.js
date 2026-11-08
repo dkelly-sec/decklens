@@ -324,9 +324,21 @@ function playerFacts(player, options = {}) {
   if (options.withTag !== false && player.tag) facts.push(el("span", player.tag));
   if (player.clan) facts.push(el("bdi", player.clan));
   else if (options.showNoClan) facts.push(el("span", "no clan"));
-  if (player.rank) facts.push(el("span", "rank #" + player.rank.toLocaleString()));
-  if (player.rating) facts.push(el("span", "rating " + player.rating));
-  else if (player.league) facts.push(el("span", "league " + player.league));
+  if (player.ultimate) {
+    // Ultimate Champion: medals, then global rank (top 10k) and country rank if known.
+    facts.push(el("span", "Ultimate Champion"));
+    if (player.rating) facts.push(el("span", player.rating.toLocaleString() + " medals"));
+    if (player.rank) facts.push(el("span", "#" + player.rank.toLocaleString() + " global"));
+    const local = player.country_rank;
+    if (local && local.rank) facts.push(el("span", "#" + local.rank.toLocaleString() + " in " + local.country));
+  } else if (player.ultimate === false) {
+    if (player.league) facts.push(el("span", "league " + player.league));
+  } else {
+    // Opponents and search results: whatever was stored.
+    if (player.rank) facts.push(el("span", "rank #" + player.rank.toLocaleString()));
+    if (player.rating) facts.push(el("span", "rating " + player.rating));
+    else if (player.league) facts.push(el("span", "league " + player.league));
+  }
   if (player.trophies) facts.push(el("span", player.trophies.toLocaleString() + " trophies"));
   if (player.last_seen_minutes !== null && player.last_seen_minutes !== undefined) {
     facts.push(el("span", seenText(player.last_seen_minutes), player.last_seen_minutes < 2 ? "online" : undefined));
