@@ -441,7 +441,47 @@ function recordOnly(m) {
 }
 
 // The odds as a score bug: blue fills the bar by your win chance.
+// Known counters from the hand-kept list (counters.py): a warning beside the
+// odds, never part of them.
+function countersRows(m) {
+  const c = m.counters || {};
+  const rows = [];
+  for (const [list, words, kind] of [[c.against_you, (w) => "Counters your " + w, "against"],
+                                     [c.for_you, (w) => "Your counters to their " + w, "for"]]) {
+    for (const found of list || []) {
+      const row = el("div", null, "row-of " + kind);
+      row.append(el("span", words(found.win_condition), "what"));
+      for (const card of found.cards) row.append(el("span", card, "chip"));
+      rows.push(row);
+    }
+  }
+  if (!rows.length) return null;
+  const box = el("div", null, "counters");
+  const head = el("p", "Known counters", "label");
+  head.append(el("span", "from your counter list, not in the odds", "sub"));
+  box.append(head, ...rows);
+  return box;
+}
+
+// Too few games behind this pairing for a number: say so, keep the guess small.
+function lowDataOdds(m) {
+  const box = el("div", null, "odds low-data");
+  const head = el("div", null, "odds-head");
+  head.append(el("p", "Odds", "label"), el("span", "Too few games", "basis"));
+  const body = el("div", null, "odds-unknown");
+  body.append(el("p", "Not enough data to call this one", "verdict"),
+    el("p", (m.games ? "Only " + plural(m.games, "game", "games") : "No games") + " between " +
+      m.archetype_a + " and " + m.archetype_b + " in the training data. The model's guess from " +
+      "cards alone is " + pct(m.win_chance) + ", but it hasn't seen enough of this matchup to trust.",
+      "note"));
+  box.append(head, body);
+  const counters = countersRows(m);
+  if (counters) box.append(counters);
+  return box;
+}
+
 function oddsBug(m) {
+  if (m.low_data) return lowDataOdds(m);
   const you = m.mirror ? 0.5 : m.win_chance;
   const box = el("div", null, "odds" + (m.mirror ? " mirror" : ""));
   const numbers = el("div", null, "odds-numbers");
@@ -460,6 +500,8 @@ function oddsBug(m) {
   if (m.based_on) head.append(el("span", plural(m.based_on.games, "game", "games"), "basis"));
   else if (m.mirror) head.append(el("span", "Mirror match", "basis"));
   box.append(head, el("p", said, "visually-hidden"), numbers, names);
+  const counters = countersRows(m);
+  if (counters) box.append(counters);
   // Blue fills exactly your win chance, sliding from level to the result.
   requestAnimationFrame(() => requestAnimationFrame(() => {
     numbers.style.setProperty("--p", (you * 100).toFixed(1) + "%");

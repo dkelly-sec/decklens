@@ -381,6 +381,17 @@ section + section { margin-top: clamp(28px, 4vw, 48px); }
 .odds .archetypes { padding: 8px 14px 12px; }
 .odds.mirror .odds-numbers { background: var(--band-2); }
 .odds.mirror .you, .odds.mirror .them { color: var(--text); }
+.odds-unknown { display: grid; gap: 6px; padding: 14px; background: var(--band-2); }
+.odds-unknown .verdict { margin: 0; font: 700 clamp(1.5rem, 2.4vw, 2rem)/1.05 var(--display); text-transform: uppercase; letter-spacing: 0.02em; }
+.odds-unknown .note { margin: 0; }
+/* Known counters (hand-kept list): red when they hit you, blue when you hit them. */
+.odds .counters { display: grid; gap: 8px; padding: 10px 14px 12px; border-top: 1px solid var(--rule); }
+.counters > .label { margin: 0; display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; }
+.counters > .label .sub { color: var(--muted); font-size: 0.8125rem; text-transform: none; letter-spacing: 0; }
+.counters .row-of { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.counters .what { color: var(--muted); font: 700 0.9375rem/1.2 var(--display); text-transform: uppercase; letter-spacing: 0.05em; }
+.counters .row-of.against .chip { background: var(--red-wash); padding: 4px 12px; }
+.counters .row-of.for .chip { background: var(--blue-wash); padding: 4px 12px; }
 .archetypes { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 2px 12px; font-weight: 600; font-size: 0.9375rem; }
 .archetypes .a { color: var(--blue-ink); }
 .archetypes .b { color: var(--red-ink); text-align: right; margin-left: auto; }

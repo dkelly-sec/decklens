@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from typing import Any, Callable, Sequence
 
 from ..archetypes import ArchetypeModel
+from ..counters import counters_in
 from ..rankings import current_season_result, is_ultimate_champion, parse_leaderboard
 from ..battles import (
     CHALLENGE_GAME_MODE, EVO_SLOT, FORM_TOKEN, WILD_SLOT, Battle, active_form, form_token,
@@ -470,7 +471,18 @@ class Predictor:
                             "games between decks like these."))
         if self.linear is not None:
             result["key_cards"] = self._key_cards(deck_a, deck_b)
+        # Too little evidence for this pairing to back a number: no games between
+        # decks this alike, and few between the archetypes. The estimate still
+        # comes back, but the page says so instead of a confident-looking 51%.
+        result["low_data"] = (not result["mirror"] and "based_on" not in result
+                              and games < MIN_GAMES_FOR_CONFIDENCE)
+        names_a, names_b = self._names(deck_a), self._names(deck_b)
+        result["counters"] = {"against_you": counters_in(names_a, names_b),
+                              "for_you": counters_in(names_b, names_a)}
         return result
+
+    def _names(self, deck: Sequence[int]) -> list[str]:
+        return [self.archetypes.vocab.name(c) for c in base_cards(deck)]
 
     def _key_cards(self, deck_a: Sequence[int], deck_b: Sequence[int], top: int = 4
                    ) -> list[dict[str, Any]]:

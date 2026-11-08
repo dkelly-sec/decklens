@@ -335,6 +335,29 @@ def test_predict(predictor):
     assert data["note"] and data["key_cards"]
 
 
+def test_predict_lists_known_counters():
+    matchups, names, _ = make_archetype_matchups(4000, seed=2)
+    names = {**names, MY_DECK[0]: "X-Bow", OPP_DECK[0]: "Arrows", OPP_DECK[1]: "Lightning"}
+    train, _, _ = time_split(matchups, 0.2)
+    vocab = CardVocab.build(train, names=names)
+    app, _, _ = make(Predictor(ArchetypeModel.fit(vocab, train, 6, 20.0)))
+    data = app.post("/api/predict", json={"deck_a": list(MY_DECK), "deck_b": list(OPP_DECK)}).json()
+    assert data["counters"] == {
+        "against_you": [{"win_condition": "X-Bow", "cards": ["Arrows", "Lightning"]}],
+        "for_you": []}
+
+
+def test_predict_flags_too_little_data(predictor):
+    app, _, _ = make(predictor)
+    data = app.post("/api/predict", json={"deck_a": list(MY_DECK), "deck_b": list(OPP_DECK)}).json()
+    assert data["low_data"] is (data["games"] < 30 and not data["mirror"])
+    matchups, names, _ = make_archetype_matchups(150, seed=2)  # a few games per pairing
+    vocab = CardVocab.build(matchups, names=names)
+    app, _, _ = make(Predictor(ArchetypeModel.fit(vocab, matchups, 6, 20.0)))
+    data = app.post("/api/predict", json={"deck_a": list(MY_DECK), "deck_b": list(OPP_DECK)}).json()
+    assert data["games"] < 30 and data["low_data"] is True
+
+
 @pytest.mark.parametrize("body, status", [
     ({"deck_a": list(MY_DECK)[:6], "deck_b": list(OPP_DECK)}, 400),        # 6 cards
     ({"deck_a": list(MY_DECK) + [card_id(46)], "deck_b": list(OPP_DECK)}, 400),  # 9 cards
