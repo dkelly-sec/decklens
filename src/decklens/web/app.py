@@ -53,6 +53,7 @@ RATE_LIMITS = {
     "login": (10, 60.0),    # password guesses per client, on top of per-username lockout
     "clan_lookup": (6, 60.0),  # live clan lookups: 1 clan search + up to 40 member lists each
     "clan_members": (60, 60.0),  # member lists fetched from the API (cache hits are free)
+    "boards": (4, 60.0),       # country leaderboards fetched from the API: up to 10 requests each
     "watch": (60, 60.0),       # screen watcher reports: about one per match
     "watch_poll": (120, 60.0), # the page checks for a new report every 2 seconds
     "watch_status": (40, 60.0),  # the stand-alone watcher's heartbeat (every 5 s or on change)
@@ -114,7 +115,7 @@ class PredictRequest(BaseModel):
 
 
 class _OverBudget(Exception):
-    """A member list wasn't fetched: this client's upstream budget is spent."""
+    """A member list or leaderboard wasn't fetched: this client's upstream budget is spent."""
 
 
 def create_app(services: Services, *, hsts: bool = False,
@@ -189,10 +190,18 @@ def create_app(services: Services, *, hsts: bool = False,
 
     boards = TTLCache(ttl=600.0, max_items=50)  # country leaderboards: 10 pages each
 
-    def country_rank(profile: dict[str, Any]) -> dict[str, Any] | None:
+    def country_rank(profile: dict[str, Any], client_host: str) -> dict[str, Any] | None:
         """Rank on the player's country leaderboard (top 1,000), or None. Their clan's
         location stands in for their country. Best effort: a failure just hides it."""
         clan = profile.get("clan") if isinstance(profile.get("clan"), dict) else {}
+
+        def fetch_board(loc: int) -> list[dict[str, Any]]:
+            # Charged only when the API is really asked: a board is up to 10 requests,
+            # so looking up players from many countries can't drain the API key.
+            if services.limiter.check(client_host, "boards") is not None:
+                raise _OverBudget
+            return services.client.get_ranked_leaderboard(str(loc))
+
         try:
             clan_tag = safe_tag(clan.get("tag"))
             country = clan_country(services.cache.get_or_set(
@@ -200,19 +209,25 @@ def create_app(services: Services, *, hsts: bool = False,
             if country is None:
                 return None
             loc, name = country
-            board = boards.get_or_set(loc, lambda: services.client.get_ranked_leaderboard(str(loc)))
-            rank = rank_on_board(profile.get("tag"), board)
-        except (ValueError, ApiError) as exc:
+            rank = rank_on_board(profile.get("tag"), boards.get_or_set(loc, lambda: fetch_board(loc)))
+        except (ValueError, ApiError, _OverBudget) as exc:
             log.info("country rank unavailable: %s", type(exc).__name__)
             return None
         return {"rank": rank, "country": name} if rank else None
 
     @app.get("/api/players/{tag}", dependencies=[*signed_in, Depends(limit("lookup"))])
     def player(tag: str) -> dict[str, Any]:
+        return summarise_player(upstream("player", tag_or_400(tag)))
+
+    @app.get("/api/players/{tag}/country-rank",
+             dependencies=[*signed_in, Depends(limit("lookup"))])
+    def country_rank_route(tag: str, request: Request) -> dict[str, Any]:
+        """Asked for separately, after the profile: it needs the player's clan and their
+        country's whole leaderboard, and the profile shouldn't wait for those."""
         profile = upstream("player", tag_or_400(tag))
-        summary = summarise_player(profile)
-        summary["country_rank"] = country_rank(profile) if summary["ultimate"] else None
-        return summary
+        client_host = request.client.host if request.client else "unknown"
+        ultimate = summarise_player(profile)["ultimate"]
+        return {"country_rank": country_rank(profile, client_host) if ultimate else None}
 
     @app.get("/api/players/{tag}/decks", dependencies=[*signed_in, Depends(limit("lookup"))])
     def decks(tag: str) -> dict[str, Any]:
@@ -670,6 +685,9 @@ def create_app_from_env() -> FastAPI:
     https = os.environ.get("DECKLENS_HTTPS") == "1"
     hosts = _hosts_from_env(https)
     auth = _auth_from_env(search_db, https)
-    client = ClashRoyaleClient(settings.api_token, timeout=settings.request_timeout)
+    # Someone is waiting on the page: one quick retry, then say so. (The crawler keeps
+    # the client's patient defaults: four retries, waits of up to a minute.)
+    client = ClashRoyaleClient(settings.api_token, timeout=settings.request_timeout,
+                               max_retries=1, max_backoff=2.0)
     return create_app(Services(client=client, predictor=predictor, search_db=search_db,
                                images=CardImages(client), auth=auth), hsts=https, hosts=hosts)

@@ -695,6 +695,19 @@ function asTag(text) {
   return "#" + t.replace(/^#/, "").toUpperCase().replace(/O/g, "0");
 }
 
+// Rank on their country's leaderboard. It needs the whole board, so it's asked for
+// after the profile is on the page and added when it arrives. True if they have one.
+async function addCountryRank(player) {
+  if (!player.ultimate) return false;
+  try {
+    const found = await api("/api/players/" + tagPath(player.tag) + "/country-rank");
+    player.country_rank = found.country_rank;
+  } catch {
+    return false;  // the rest of their standing is already showing
+  }
+  return Boolean(player.country_rank);
+}
+
 async function showMe(tag) {
   const out = document.getElementById("me-result");
   show(out, loadingText("Looking up…"));
@@ -704,6 +717,12 @@ async function showMe(tag) {
     state.myDecks = undefined;  // your Trophy Road / challenge decks: fetched again for this player
     storageSet("decklens.myTag", me.tag);
     show(out, youView(me));
+    addCountryRank(me).then((found) => {
+      if (!found || state.me !== me) return;
+      const facts = out.querySelector(".you-head .facts");
+      if (facts) facts.replaceChildren(...playerFacts(me));
+      refreshYouSide();
+    });
   } catch (error) {
     state.me = null;
     state.myDecks = undefined;
@@ -1434,6 +1453,9 @@ async function refreshThemSide(head, tag, token) {
   const facts = head.querySelector(".vs-them .vs-facts");
   if (token !== board.token || board.key !== tag || !facts) return;
   facts.replaceChildren(...playerFacts(p));
+  if (await addCountryRank(p) && token === board.token && board.key === tag) {
+    facts.replaceChildren(...playerFacts(p));
+  }
 }
 
 // Open a player on the board: their decks by game mode, newest first.

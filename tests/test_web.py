@@ -179,22 +179,53 @@ class CountryClient(FakeClient):
         return [{"tag": "#9QJ", "name": "Top", "rank": 1}, {"tag": ME, "name": "Me", "rank": 35}]
 
 
-def test_ultimate_champion_shows_country_rank():
+def test_a_profile_lookup_is_one_upstream_call():
+    # Country rank used to ride along: the clan and up to 10 leaderboard pages before
+    # the profile came back, and no limit on how many boards one client could pull.
     app, services, _ = make(client=CountryClient())
-    first = app.get("/api/players/%232PP").json()
-    assert first["ultimate"] is True and first["rating"] == 2900
-    assert first["country_rank"] == {"rank": 35, "country": "Australia"}
+    body = app.get("/api/players/%232PP").json()
+    assert body["ultimate"] is True and body["rating"] == 2900 and "country_rank" not in body
+    assert services.client.calls == [("player", "#2PP")]
+
+
+def test_ultimate_champion_country_rank():
+    app, services, _ = make(client=CountryClient())
+    first = app.get("/api/players/%232PP/country-rank").json()
+    assert first == {"country_rank": {"rank": 35, "country": "Australia"}}
     services.cache = type(services.cache)(ttl=60.0)  # fresh player and clan; board still cached
-    app.get("/api/players/%232PP")
+    app.get("/api/players/%232PP/country-rank")
     assert services.client.calls.count(("board", "57000017")) == 1
 
 
-def test_country_rank_failure_still_returns_the_player():
+def test_no_country_rank_below_ultimate_champion():
+    client = CountryClient()
+    profile = client.get_player
+    client.get_player = lambda tag: profile(tag) | {
+        "currentPathOfLegendSeasonResult": {"leagueNumber": 5}}
+    app, services, _ = make(client=client)
+    assert app.get("/api/players/%232PP/country-rank").json() == {"country_rank": None}
+    assert not any(kind in ("clan", "board") for kind, _ in services.client.calls)
+
+
+def test_country_rank_failure_is_just_no_rank():
     client = CountryClient()
     client.get_ranked_leaderboard = lambda *a, **k: (_ for _ in ()).throw(ApiError("HTTP 500", 500))
     app, _, _ = make(client=client)
-    body = app.get("/api/players/%232PP").json()
-    assert body["name"] == "Me" and body["country_rank"] is None
+    response = app.get("/api/players/%232PP/country-rank")
+    assert response.status_code == 200 and response.json() == {"country_rank": None}
+
+
+def test_one_client_can_only_pull_a_few_country_boards_a_minute():
+    """Each board is up to 10 API requests. Players from many countries, looked up one
+    after another, must not turn 30 lookups a minute into 300 requests on the API key."""
+    client = CountryClient()
+    client.get_clan = lambda tag: {"tag": tag, "location": {
+        "id": 57000000 + len(client.calls), "name": "Somewhere", "isCountry": True}}
+    app, services, _ = make(client=client)
+    for _ in range(10):
+        services.cache = type(services.cache)(ttl=60.0)  # a different player and clan each time
+        assert app.get("/api/players/%232PP/country-rank").status_code == 200
+    assert sum(kind == "board" for kind, _ in client.calls) == 4  # RATE_LIMITS["boards"]
 
 
 @pytest.mark.parametrize("bad", ["%3Cscript%3E", "%232PP%2F..%2Fclans", "ABC", "%23" + "2" * 20])

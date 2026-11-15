@@ -88,6 +88,17 @@ def test_retry_after_is_capped():
     assert sleeps[0] == 60.0
 
 
+def test_a_short_backoff_cap_keeps_a_waiting_page_from_hanging():
+    # The web app's client: one retry, never more than 2 seconds, whatever the API asks for.
+    session, sleeps = FakeSession(FakeResponse(429, headers={"Retry-After": "60"}),
+                                  FakeResponse(503)), []
+    client = ClashRoyaleClient(TOKEN, session=session, sleep=sleeps.append,
+                               max_retries=1, max_backoff=2.0)
+    with pytest.raises(ApiError):
+        client.get_battle_log("#2PP")
+    assert sleeps == [2.0] and len(session.calls) == 2
+
+
 def test_gives_up_after_max_retries():
     client, session, _ = make(*[FakeResponse(503) for _ in range(4)])
     with pytest.raises(ApiError) as err:
