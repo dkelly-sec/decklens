@@ -4,6 +4,19 @@ A Clash Royale matchup predictor trained on top-ladder battles, built on the off
 
 > **Status:** week 5 of 8. Web app: player lookup, last-opponent scouting, opponent search by name and archetype matchups, behind a hardened API.
 
+![The Scout page in demo mode: you in blue, the opponent in red, their deck, the spells to play around, the odds and a known-counters warning](docs/scout-demo.png)
+
+*The Scout page in demo mode. Everything in the picture is sample data; card art needs an API key, so cards show by name.*
+
+## Try it without setting anything up
+
+```bash
+pip install -e .
+python -m decklens.web --demo      # then open http://127.0.0.1:8000
+```
+
+Demo mode runs the real app (same routes, validation, rate limits and page) on invented players, with no API key, database or login. Their battles are generated when it starts, and the model is fitted to games drawn from made-up win rates (`src/decklens/web/demo.py`), so the page carries a "Sample data" mark and none of its numbers mean anything about the real game. It opens the sample player (`#2PPGJQ8V`); try Scout → Scout last opponent, or search for the clan `Cycle Club`. Name search needs the real database, so it stays off. Because there is no login, demo mode only listens on this computer and refuses to start with `DECKLENS_HTTPS=1`.
+
 ## Security from the first commit
 
 - **The API key never leaves the server.** It lives only in environment variables, is excluded from `repr()` and logs, and is sent only in the `Authorization` header. Redirects are refused so it can't be forwarded to another host.

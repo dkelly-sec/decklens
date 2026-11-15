@@ -244,7 +244,7 @@ def test_login_flow_and_logout(site):
     response = log_in(client, "David")
     assert response.status_code == 200 and response.json() == {"username": "david"}
     assert "HttpOnly" in response.headers["set-cookie"]
-    assert client.get("/api/me").json() == {"username": "david", "login": True, "desktop": False}
+    assert client.get("/api/me").json() == {"username": "david", "login": True, "desktop": False, "demo": None}
     assert client.get("/api/players/%232PP").status_code == 200
 
     out = client.post("/api/logout")

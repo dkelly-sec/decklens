@@ -72,6 +72,7 @@ class Services:
     cache: TTLCache = field(default_factory=lambda: TTLCache(ttl=60.0, max_items=2000))
     watch: WatchBoard = field(default_factory=WatchBoard)
     quit_app: Callable[[], None] | None = None   # set only by the desktop app
+    demo_tag: str | None = None                  # demo mode: the sample player to open
 
 
 class LoginRequest(BaseModel):
@@ -546,7 +547,7 @@ def create_app(services: Services, *, hsts: bool = False,
         if auth is not None and user is None:
             raise HTTPException(401, "Please log in")
         return {"username": user.username if user else None, "login": auth is not None,
-                "desktop": services.quit_app is not None}
+                "desktop": services.quit_app is not None, "demo": services.demo_tag}
 
     @app.post("/api/desktop/quit", dependencies=signed_in)
     def quit_desktop_app() -> dict[str, Any]:
@@ -631,6 +632,17 @@ def _auth_from_env(search_db: Callable[[], Any] | None, https: bool) -> Auth | N
     if search_db is None:
         raise ConfigError("logins need the database: set WEB_DATABASE_URL in .env")
     return Auth(database_user_loader(search_db), secret, secure_cookie=https)
+
+
+def create_demo_app() -> FastAPI:
+    """The app on sample data: no API key, database or login (see demo.py)."""
+    from ..config import ConfigError
+    from .demo import YOU, DemoClient, demo_predictor
+
+    if os.environ.get("DECKLENS_HTTPS") == "1":
+        raise ConfigError("--demo has no login, so it is for this computer only: "
+                          "it can't be combined with DECKLENS_HTTPS=1")
+    return create_app(Services(client=DemoClient(), predictor=demo_predictor(), demo_tag=YOU))
 
 
 def _hosts_from_env(https: bool) -> frozenset[str]:

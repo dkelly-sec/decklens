@@ -179,7 +179,7 @@ function elixirDrop(cost) {
 }
 
 function plural(n, one, many) {
-  return n + " " + (n === 1 ? one : many);
+  return n.toLocaleString() + " " + (n === 1 ? one : many);
 }
 
 function fact(value, words) {
@@ -197,7 +197,7 @@ function deckView(deck, side, options = {}) {
   box.append(list);
   const s = deck.summary || {};
   const facts = el("p", null, "deck-facts");
-  if (s.avg_elixir !== null && s.avg_elixir !== undefined) facts.append(fact(s.avg_elixir, "avg elixir"));
+  if (s.avg_elixir !== null && s.avg_elixir !== undefined) facts.append(fact(s.avg_elixir.toFixed(1), "avg elixir"));  // 3.0, as players say it
   if (s.cycle !== null && s.cycle !== undefined) facts.append(fact(s.cycle, "4-card cycle"));
   if (s.evolutions) facts.append(fact(s.evolutions, s.evolutions === 1 ? "evolution" : "evolutions"));
   if (s.heroes) facts.append(fact(s.heroes, s.heroes === 1 ? "hero" : "heroes"));
@@ -542,8 +542,13 @@ function matchupDetail(m, mode, decks) {
     const cards = el("ul", null, "key-cards");
     for (const k of m.key_cards) {
       const item = el("li");
-      item.append(el("span", k.card, k.effect > 0 ? "yours" : "theirs"),
-        k.effect > 0 ? " in your deck helps you" : " in their deck helps them");
+      // Whose card it is comes from the server, not from the sign: a card the model
+      // rates as weak in your own deck counts against you, and it is still yours.
+      const mine = k.deck === "yours";
+      const good = mine ? k.effect > 0 : k.effect < 0;  // good for whoever plays it
+      item.append(el("span", k.card, mine ? "yours" : "theirs"),
+        (mine ? " in your deck " : " in their deck ") +
+        (good ? "helps " : "holds ") + (mine ? "you" : "them") + (good ? "" : " back"));
       cards.append(item);
     }
     box.append(el("p", "Cards that decide it", "label"), cards);
@@ -1080,9 +1085,13 @@ function expandRow(list, name, wins, games, range, detail, extraClass) {
   const rate = wins / games;
   const lean = range ? (range[0] > 0.5 ? " good" : range[1] < 0.5 ? " bad" : "")
     : (rate >= 0.6 ? " good" : rate <= 0.4 ? " bad" : "");
+  // Same rule as the matchup table: a handful of games gets its record, not a percentage
+  // (1–0 is not "100%").
+  const few = games < FEW_GAMES;
   row.append(el("span", name, "row-name"), el("span", wins + "–" + (games - wins), "row-record"),
-    el("span", pct(rate), "row-rate rate" + lean));
-  if (games < 10) row.title = "Few games, so the win rate can swing a lot";
+    el("span", few ? "" : pct(rate), "row-rate rate" + (few ? "" : lean)));
+  if (few) row.title = "Too few games to call";
+  else if (games < 10) row.title = "Few games, so the win rate can swing a lot";
   let box = null;
   item.open = (opening, exclusive = true) => {  // a search opens every match at once
     if (opening && exclusive && list.openItem && list.openItem !== item) list.openItem.open(false);
@@ -1247,7 +1256,7 @@ function youSide() {
   const facts = el("div", null, "vs-facts");
   if (state.me) {
     const s = state.me.deck && state.me.deck.summary;
-    if (s && s.avg_elixir !== null && s.avg_elixir !== undefined) facts.append(el("span", s.avg_elixir + " avg elixir"));
+    if (s && s.avg_elixir !== null && s.avg_elixir !== undefined) facts.append(el("span", s.avg_elixir.toFixed(1) + " avg elixir"));
     facts.append(...playerFacts(state.me, { withTag: false }));
     you.append(facts);
   } else {
@@ -2056,6 +2065,13 @@ async function showAccount() {
     const me = await api("/api/me");
     state.local = Boolean(me.desktop || !me.login);
     if (me.desktop) setUpDesktop();
+    if (me.demo) {  // sample data: say so, and open the sample player
+      document.getElementById("demo-mark").hidden = false;
+      if (!state.me && !document.getElementById("me-tag").value) {
+        document.getElementById("me-tag").value = me.demo;
+        showMe(me.demo);
+      }
+    }
     if (!me.login) return;  // logins switched off (local use only)
     document.getElementById("account-name").textContent = me.username;
     document.getElementById("account").hidden = false;

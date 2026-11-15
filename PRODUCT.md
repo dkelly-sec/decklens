@@ -33,6 +33,7 @@ Matchup estimates come from the owner's own crawl of top-ladder battles (archety
 - Strict Content Security Policy: scripts, styles, images and fonts only from the site itself; no inline script or style; no external hosts. Fonts must be bundled locally.
 - All DOM is built with textContent; player and clan names are hostile input and may be emoji, right-to-left, or any script.
 - Card art is served through the app's own `/cards/{id}.png` proxy from the official asset host.
+- Demo mode (`python -m decklens.web --demo`) runs the app on invented players with no API key, database or login, and marks the page "Sample data"; its numbers are made up and must never be quoted as results.
 - Some features need the battle database (search, Meta, Tweaks) or the screen watcher (auto-scout); without them those areas must still read as working, not broken.
 - Terminology from the game: elixir, 4-card cycle, Evo, Hero, archetype, Ranked / Path of Legend, Trophy Road, 20-win challenge, league, rating, clan.
 
