@@ -677,6 +677,15 @@ def create_app_from_env() -> FastAPI:
                 yield conn
 
         search_db = connect
+        try:  # say so now, not as a slow search in the middle of a match
+            from .search import has_read_indexes
+
+            with connect() as conn:
+                if not has_read_indexes(conn):
+                    log.warning("player search will be slow: run "
+                                "db/migrations/007_read_keys.sql once (see the README)")
+        except psycopg.Error as exc:  # database not up yet: search says so when it's used
+            log.info("couldn't check the search indexes: %s", type(exc).__name__)
 
     model_dir = Path(os.environ.get("DECKLENS_MODEL_DIR", "models"))
     predictor = load_predictor(model_dir)

@@ -306,7 +306,8 @@ def test_search_normalises_and_escapes(predictor):
     assert params == {"pattern": "dipo%", "key": "dipo", "clan_pattern": None, "clan_key": None,
                       "near": 2136, "limit": 10, "clan_match": 0.7,
                       "no_clan": False, "no_clan_bonus": 0.5,
-                      "name_match": 0.45}  # no user wildcards survive
+                      "name_match": 0.45,  # no user wildcards survive
+                      "read_key": "dlpo", "clan_read_key": None, "read_match": 0.9}
     assert response.json()["results"][0]["rating"] == 2400
 
 

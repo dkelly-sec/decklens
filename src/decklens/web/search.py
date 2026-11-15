@@ -9,11 +9,14 @@ used here should only be able to read (see db/web_role.sql).
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from psycopg import Connection
 
-from ..names import search_key
+from ..names import READ_MATCH, read_key, search_key
+
+log = logging.getLogger("decklens.web.search")
 
 # Stored games between two players (only Ranked and Trophy Road are stored).
 _MEETINGS = """
@@ -92,6 +95,13 @@ NO_CLAN_BONUS = 0.5
 # whose rating is closest to yours, as Ranked pairs similar ratings.
 # no_clan (name only): the opponent had no clan, so players without one score
 # NO_CLAN_BONUS more, and count as a match when their name fits well too.
+# Read keys: a name read off the screen mixes up I, l and 1, and O and 0 ("Ali"
+# arrives as "AIi", "Bo0m" as "BoOm"), which is enough to hide a short name from
+# the fuzzy match. translate(key, 'i10', 'llo') folds each group to one letter
+# (names.read_key does the same in Python; a test keeps the two in step). Equal
+# after folding scores 1.1, just under the name exactly as typed; otherwise the
+# folded similarity counts for READ_MATCH of a plain one. The expression must stay
+# exactly as written here: migration 007's indexes are built on it.
 _SEARCH = r"""
     SELECT p.tag, p.name, p.clan_name, r.rank, p.rating,
            CASE WHEN %(no_clan)s THEN p.clan_name IS NULL AND s.name_score >= %(clan_match)s
@@ -107,20 +117,30 @@ _SEARCH = r"""
         SELECT
             CASE WHEN %(key)s::text IS NULL THEN 0
                  WHEN p.search_key = %(key)s THEN 1.2
+                 WHEN translate(p.search_key, 'i10', 'llo') = %(read_key)s THEN 1.1
                  WHEN p.search_key LIKE %(pattern)s ESCAPE '\' THEN 1.0
-                 ELSE word_similarity(%(key)s, p.search_key) END AS name_score,
+                 ELSE GREATEST(word_similarity(%(key)s, p.search_key), %(read_match)s *
+                      word_similarity(%(read_key)s, translate(p.search_key, 'i10', 'llo')))
+                 END AS name_score,
             CASE WHEN %(no_clan)s THEN CASE WHEN p.clan_name IS NULL THEN %(no_clan_bonus)s
                                             ELSE 0 END
                  WHEN %(clan_key)s::text IS NULL OR p.clan_key IS NULL THEN 0
                  WHEN p.clan_key = %(clan_key)s THEN 1.2
+                 WHEN translate(p.clan_key, 'i10', 'llo') = %(clan_read_key)s THEN 1.1
                  WHEN p.clan_key LIKE %(clan_pattern)s ESCAPE '\' THEN 1.0
-                 ELSE word_similarity(%(clan_key)s, p.clan_key) END AS clan_score
+                 ELSE GREATEST(word_similarity(%(clan_key)s, p.clan_key), %(read_match)s *
+                      word_similarity(%(clan_read_key)s, translate(p.clan_key, 'i10', 'llo')))
+                 END AS clan_score
     ) s
     CROSS JOIN LATERAL (SELECT s.name_score + s.clan_score AS score, s.clan_score) m
     WHERE (%(key)s::text IS NOT NULL
-           AND (p.search_key LIKE %(pattern)s ESCAPE '\' OR %(key)s <%% p.search_key))
+           AND (p.search_key LIKE %(pattern)s ESCAPE '\' OR %(key)s <%% p.search_key
+                OR translate(p.search_key, 'i10', 'llo') = %(read_key)s
+                OR %(read_key)s <%% translate(p.search_key, 'i10', 'llo')))
        OR (%(clan_key)s::text IS NOT NULL
-           AND (p.clan_key LIKE %(clan_pattern)s ESCAPE '\' OR %(clan_key)s <%% p.clan_key))
+           AND (p.clan_key LIKE %(clan_pattern)s ESCAPE '\' OR %(clan_key)s <%% p.clan_key
+                OR translate(p.clan_key, 'i10', 'llo') = %(clan_read_key)s
+                OR %(clan_read_key)s <%% translate(p.clan_key, 'i10', 'llo')))
     ORDER BY
         round(m.score::numeric, 1) DESC,
         CASE WHEN %(near)s::int IS NULL THEN 0
@@ -130,6 +150,14 @@ _SEARCH = r"""
         p.last_seen DESC
     LIMIT %(limit)s
 """
+
+
+def has_read_indexes(conn: Connection) -> bool:
+    """Whether migration 007's indexes exist. Search works without them, but reads
+    every player for each search (about half a second at 250,000 players)."""
+    with conn.cursor() as cur:
+        cur.execute("SELECT 1 FROM pg_indexes WHERE indexname = %s", ("players_read_key_trgm_idx",))
+        return cur.fetchone() is not None
 
 
 def _like_prefix(key: str) -> str:
@@ -157,6 +185,8 @@ def search_players(conn: Connection, query: str | None = None, *, clan: str | No
         "pattern": _like_prefix(key) if use_name else None, "key": key if use_name else None,
         "clan_pattern": _like_prefix(clan_key) if use_clan else None,
         "clan_key": clan_key if use_clan else None, "near": near_rating, "limit": MAX_RESULTS,
+        "read_key": read_key(key) if use_name else None,
+        "clan_read_key": read_key(clan_key) if use_clan else None, "read_match": READ_MATCH,
         "clan_match": CLAN_MATCH, "no_clan": no_clan, "no_clan_bonus": NO_CLAN_BONUS,
         "name_match": FUZZY_THRESHOLD,
     }
@@ -184,12 +214,17 @@ def search_players(conn: Connection, query: str | None = None, *, clan: str | No
 # or misreads a letter ("RICHESPORTS"), which the normalised key ignores.
 _KNOWN_CLANS = r"""
     SELECT p.clan_tag, max(p.clan_name), count(*) AS members,
-           max(CASE WHEN p.clan_key = %(key)s THEN 1.0 ELSE similarity(%(key)s, p.clan_key) END) AS score
+           max(CASE WHEN p.clan_key = %(key)s THEN 1.0
+                    WHEN translate(p.clan_key, 'i10', 'llo') = %(read_key)s THEN 0.95
+                    ELSE similarity(%(key)s, p.clan_key) END) AS score
     FROM players p
     WHERE p.clan_tag IS NOT NULL AND p.clan_key IS NOT NULL
-      AND (p.clan_key = %(key)s OR %(key)s %% p.clan_key)
+      AND (p.clan_key = %(key)s OR %(key)s %% p.clan_key
+           OR translate(p.clan_key, 'i10', 'llo') = %(read_key)s)
     GROUP BY p.clan_tag
-    HAVING max(CASE WHEN p.clan_key = %(key)s THEN 1.0 ELSE similarity(%(key)s, p.clan_key) END)
+    HAVING max(CASE WHEN p.clan_key = %(key)s THEN 1.0
+                    WHEN translate(p.clan_key, 'i10', 'llo') = %(read_key)s THEN 0.95
+                    ELSE similarity(%(key)s, p.clan_key) END)
            >= %(min_score)s
     ORDER BY score DESC, members DESC
     LIMIT %(limit)s
@@ -204,6 +239,7 @@ def known_clans(conn: Connection, clan: str) -> list[dict[str, Any]]:
     if len(key) < MIN_QUERY:
         return []
     with conn.cursor() as cur:
-        cur.execute(_KNOWN_CLANS, {"key": key, "min_score": KNOWN_CLAN_MIN_SCORE,
+        cur.execute(_KNOWN_CLANS, {"key": key, "read_key": read_key(key),
+                                   "min_score": KNOWN_CLAN_MIN_SCORE,
                                    "limit": MAX_KNOWN_CLANS})
         return [{"tag": tag, "name": name} for tag, name, _, _ in cur.fetchall()]
