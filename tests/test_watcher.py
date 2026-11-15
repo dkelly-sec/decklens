@@ -3,7 +3,7 @@ import pytest
 
 from decklens.watcher import (
     TOP_LEFT, TOP_RIGHT, DeckLensClient, NeedLogin, Sighting, TextLine, Watcher, crop, describe,
-    in_battle, lines_from_ocr, read_opponent,
+    in_battle, lines_from_ocr, locate, read_opponent, valid_rows,
 )
 
 # What RapidOCR returned for a real battle screenshot (1080x2400), per region.
@@ -111,6 +111,72 @@ def test_ranked_layout_name_clan_rating():
     # Spaces OCR puts in numbers are fine; crown levels and junk numbers aren't ratings.
     assert read_opponent(ranked(("Dipo", 0.19), ("Clan", 0.32), ("2 216", 0.45))).rating == 2216
     assert read_opponent(ranked(("Dipo", 0.19), ("Clan", 0.32), ("16", 0.45))).rating is None
+
+
+# --- lines the text reader splits, digit names, and a lone line ------------------------
+# Box shapes below are what RapidOCR returned for rendered test corners (310x111).
+
+
+def box(text, left, top, right, bottom, confidence=0.9):
+    return [[[left, top], [right, top], [right, bottom], [left, bottom]], text, confidence]
+
+
+def test_a_name_split_at_a_symbol_is_read_whole():
+    # "nova | Sub": two boxes on one row. It used to be reported as "ISub".
+    split = [box("nova", 43, 51, 88, 67, 1.0), box("ISub", 90, 44, 131, 71, 0.76),
+             box("RICHESPORTS", 46, 75, 141, 88, 1.0)]
+    found = read_opponent(lines(split, 310, 111))
+    assert found == Sighting("nova ISub", "RICHESPORTS")
+    # "noob_master" came back as "noob_r" + "master", then a clan and a rating.
+    ranked_split = [box("noob_r", 43, 49, 98, 68), box("master", 99, 51, 160, 67),
+                    box("RICHESPORTS", 46, 75, 141, 88), box("2216", 46, 95, 80, 108)]
+    assert read_opponent(lines(ranked_split, 310, 111)) == Sighting(
+        "noob_r master", "RICHESPORTS", 2216)
+
+
+def test_numbers_and_distant_text_are_never_joined_to_a_name():
+    # iPad: trophies far to the right on the name's row; a tower level beside it.
+    far = [box("MONO", 34, 9, 80, 36), box("4725", 240, 9, 290, 30), box("taller telo", 34, 44, 120, 62)]
+    assert read_opponent(lines(far, 310, 111)) == Sighting("MONO", "taller telo")
+    beside = [box("Florent", 43, 47, 110, 67), box("11", 113, 49, 128, 66),
+              box("Sunny", 46, 75, 90, 88)]
+    assert read_opponent(lines(beside, 310, 111)) == Sighting("Florent", "Sunny")
+    # The rating stays a clean number even with text right beside it.
+    rated = [box("Dipo", 43, 47, 90, 67), box("Clan", 46, 75, 90, 88),
+             box("2216", 46, 95, 80, 108), box("UC", 82, 95, 100, 108)]
+    assert read_opponent(lines(rated, 310, 111)).rating == 2216
+
+
+def test_a_name_read_as_digits_is_still_the_name():
+    # "l1ll1" comes back as "11111", "O0O0" as "0000": above the clan or rating, that's the name.
+    ranked_digits = [box("11111", 43, 48, 105, 67, 0.86), box("BrasilElite", 46, 75, 130, 88),
+                     box("2540", 46, 95, 80, 108)]
+    assert read_opponent(lines(ranked_digits, 310, 111)) == Sighting("11111", "BrasilElite", 2540)
+    no_clan = [box("0000", 43, 48, 100, 67, 0.86), box("2216", 46, 95, 80, 108)]
+    assert read_opponent(lines(no_clan, 310, 111)) == Sighting("0000", None, 2216)
+    unranked = [box("11111", 43, 48, 105, 67, 0.86), box("Sunny", 46, 75, 90, 88)]
+    assert read_opponent(lines(unranked, 310, 111)) == Sighting("11111", "Sunny")
+    # Still nothing to go on from numbers alone.
+    assert read_opponent(lines([box("2580", 43, 48, 100, 67)], 310, 111)) is None
+
+
+def test_two_rows_above_the_rating_are_name_then_clan_whatever_the_gaps():
+    # A reader that draws taller boxes (PP-OCRv6 on the same picture): measured in line
+    # heights the name looked like it sat in the clan slot, and was dropped.
+    tall = [box("Leo", 37, 44, 75, 72, 1.0), box("YEET", 43, 71, 85, 92, 0.79),
+            box("1987", 43, 91, 80, 110, 1.0)]
+    assert read_opponent(lines(tall, 310, 111)) == Sighting("Leo", "YEET", 1987)
+
+
+def test_a_lone_line_on_the_clan_row_is_the_clan_once_rows_are_known():
+    name_and_clan = [box("Florent", 43, 47, 110, 67), box("YEET", 46, 75, 90, 88)]
+    placed = locate(lines(name_and_clan, 310, 111))
+    rows = (placed.name.y + placed.name.height / 2, placed.clan.y + placed.clan.height / 2)
+    only_clan = lines([box("YEET", 46, 75, 90, 88)], 310, 111)     # a name the reader can't see
+    assert read_opponent(only_clan) == Sighting("YEET", None)      # no way to tell yet
+    assert read_opponent(only_clan, rows) == Sighting(None, "YEET")
+    only_name = lines([box("Florent", 43, 47, 110, 67)], 310, 111)  # a player with no clan
+    assert read_opponent(only_name, rows) == Sighting("Florent", None)
 
 
 def test_ocr_junk_is_skipped():
@@ -229,6 +295,77 @@ def test_read_again_reports_the_same_battle_once_more():
     asks = iter([False, False, False, True, False, False, False])
     sent = run([BATTLE] * 7, rescan=lambda: next(asks))
     assert sent == [Sighting("FIOReNt", "Sunny")] * 2    # read again on request, once
+
+
+def scripted(reads, **kw):
+    """A watcher fed these top-left reads (each a list of OCR boxes), always in a battle."""
+    todo = iter(reads)
+    sent = []
+
+    def ocr(part):
+        return REAL_TOP_RIGHT if part.shape[1] < 400 else next(todo)
+    watcher = Watcher(lambda: frame(BATTLE), ocr, sent.append, **kw)
+    for _ in reads:
+        watcher.step()
+    return sent, watcher
+
+
+def test_the_surest_of_the_agreeing_reads_is_reported():
+    # Looks at one opponent differ: "Legend学" (0.92) then "Legend" (0.998). Report the surer.
+    clan = box("YEET", 99, 161, 190, 195)
+    sent, _ = scripted([[box("Legend学", 93, 102, 330, 150, 0.92), clan],
+                        [box("Legend", 93, 102, 300, 150, 0.998), clan]])
+    assert sent == [Sighting("Legend", "YEET")]
+    sent, _ = scripted([[box("Legend", 93, 102, 300, 150, 0.998), clan],
+                        [box("Legend学", 93, 102, 330, 150, 0.92), clan]])
+    assert sent == [Sighting("Legend", "YEET")]
+
+
+def test_a_name_that_flickers_out_does_not_restart_the_count():
+    # A name of bars and symbols is read on one look and missed on the next. The clan
+    # and rating agree, so it's one opponent, reported with the name that was seen.
+    clan, rating = box("STS", 99, 161, 160, 195), box("2216", 99, 205, 170, 235)
+    sent, _ = scripted([[clan, rating], [box("Kaua", 93, 102, 250, 150, 0.6), clan, rating]])
+    assert sent == [Sighting("Kaua", "STS", 2216)]
+    # Different clans are still different opponents: no report after one look at each.
+    other = box("Sunny", 99, 161, 190, 195)
+    assert scripted([[clan, rating], [other, rating]])[0] == []
+
+
+def test_look_alike_reads_count_as_agreeing():
+    clan = box("Sunny", 99, 161, 190, 195)
+    sent, _ = scripted([[box("Ivy", 93, 102, 200, 150, 0.83), clan],
+                        [box("lvy", 93, 102, 200, 150, 0.81), clan]])
+    assert sent == [Sighting("Ivy", "Sunny")]
+
+
+def test_row_positions_are_learned_and_remembered_per_screen_shape():
+    saved = []
+    name, clan = box("FIOReNt", 93, 102, 330, 150), box("Sunny", 99, 161, 190, 195)
+    sent, watcher = scripted([[name, clan], [name, clan]], save_rows=saved.append)
+    assert sent == [Sighting("FIOReNt", "Sunny")]
+    assert list(watcher.rows) == ["2.2"] and saved == [watcher.rows]   # saved once, not every look
+    # Next battle on that screen: only the clan line is readable. It isn't taken for a name.
+    sent, _ = scripted([[clan], [clan]], rows=watcher.rows)
+    assert sent == [Sighting(None, "Sunny")]
+    # Without the memory there is no telling, so it is read as before.
+    assert scripted([[clan], [clan]])[0] == [Sighting("Sunny", None)]
+
+
+def test_saved_rows_are_checked_before_use():
+    assert valid_rows({"2.2": [0.52, 0.74], "1.3": (0.2, 0.5)}) == {"2.2": (0.52, 0.74),
+                                                                 "1.3": (0.2, 0.5)}
+    for junk in (None, [], "x", {"2.2": [0.7, 0.5]}, {"2.2": ["a", "b"]}, {"2.2": [0.5]},
+                 {2: [0.1, 0.2]}, {"2.2": [True, 2]}, {"2.2": [0.1, 9]}):
+        assert valid_rows(junk) == {}
+
+
+def test_failing_to_save_rows_never_stops_the_watcher():
+    def broken(rows):
+        raise OSError("disk full")
+    name, clan = box("FIOReNt", 93, 102, 330, 150), box("Sunny", 99, 161, 190, 195)
+    sent, watcher = scripted([[name, clan], [name, clan]], save_rows=broken)
+    assert sent == [Sighting("FIOReNt", "Sunny")] and watcher.rows
 
 
 # --- talking to DeckLens --------------------------------------------------------------
@@ -390,6 +527,24 @@ def test_odd_shapes_fall_back_to_the_whole_window():
     wide[50:350, 100:1500] = game_picture(1400, 300)   # landscape: not a phone
     assert phone_area(wide).shape == wide.shape
     assert phone_area(np.zeros((20, 20, 3), dtype=np.uint8)).shape == (20, 20, 3)
+
+
+def test_a_saved_screenshot_is_read_like_the_live_window(monkeypatch):
+    """--check --image: a read that went wrong can be looked at again from a screenshot."""
+    import sys
+    import types
+
+    from decklens.watcher import image_grabber, main
+
+    game = game_picture(612, 1360)
+    win, _ = window(game, pad=(0, 0, 45, 0), toolbar=(45, (43, 43, 43)))
+    files = {"shot.png": win[:, :, ::-1].copy()}          # picture files load as BGR
+    monkeypatch.setitem(sys.modules, "cv2", types.SimpleNamespace(imread=files.get))
+    assert np.array_equal(image_grabber("shot.png")(), game)   # RGB again, title bar cut
+    with pytest.raises(SystemExit, match="Couldn't open"):
+        image_grabber("missing.png")
+    with pytest.raises(SystemExit):                        # a picture is only for --check
+        main(["--image", "shot.png"])
 
 
 def test_enlarge_leaves_big_regions_alone():

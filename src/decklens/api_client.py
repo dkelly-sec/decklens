@@ -68,6 +68,7 @@ class ClashRoyaleClient:
         *,
         timeout: float = 10.0,
         max_retries: int = 4,
+        max_backoff: float = _MAX_BACKOFF_SECONDS,
         session: requests.Session | None = None,
         sleep: Callable[[float], None] = time.sleep,
     ) -> None:
@@ -79,6 +80,7 @@ class ClashRoyaleClient:
         )
         self._timeout = timeout
         self._max_retries = max_retries
+        self._max_backoff = max_backoff  # longest wait before a retry, Retry-After included
         self._sleep = sleep
 
     def __repr__(self) -> str:  # never expose the token
@@ -174,9 +176,8 @@ class ClashRoyaleClient:
         if response is not None:
             retry_after = response.headers.get("Retry-After", "")
             if retry_after.isdigit():
-                return min(float(retry_after), _MAX_BACKOFF_SECONDS)
-        base = min(2.0**attempt, _MAX_BACKOFF_SECONDS)
-        return base + _jitter.uniform(0, 0.5)
+                return min(float(retry_after), self._max_backoff)
+        return min(2.0**attempt + _jitter.uniform(0, 0.5), self._max_backoff)
 
     def _get(self, path: str, params: dict[str, Any] | None = None) -> Any:
         url = BASE_URL + path

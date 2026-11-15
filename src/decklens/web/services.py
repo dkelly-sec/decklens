@@ -21,7 +21,7 @@ from ..battles import (
     CHALLENGE_GAME_MODE, EVO_SLOT, FORM_TOKEN, WILD_SLOT, Battle, active_form, form_token,
     form_tokens, is_form_token, is_trophy_road, opt_int, parse_battle_log, parse_battle_time,
 )
-from ..names import fuzzy_score, search_key
+from ..names import read_score, search_key
 from ..features import Matchup
 from ..model import LinearMatchupModel, TreeMatchupModel, wilson_interval
 from ..validation import InvalidTagError, normalize_tag
@@ -512,7 +512,7 @@ CLANS_AT_ONCE = 8  # member lists fetched in parallel, a batch at a time
 STRONG_NAME_MATCH = 0.8
 ACTIVE_MINUTES = 15
 MAX_LIVE_RESULTS = 10
-NAME_MATCH_MIN = 0.6  # how close typed name letters must be (see names.fuzzy_score)
+NAME_MATCH_MIN = 0.6  # how close typed name letters must be (see names.read_score)
 
 
 def _minutes_ago(raw: Any, now: datetime) -> int | None:
@@ -533,7 +533,7 @@ def _live_members(members: list[dict[str, Any]], cname: str, name_key: str,
         except InvalidTagError:
             continue
         mname = _text(m.get("name"))
-        match = fuzzy_score(name_key, search_key(mname)) if name_key else 1.0
+        match = read_score(name_key, search_key(mname)) if name_key else 1.0
         if match < NAME_MATCH_MIN:
             continue  # typed name letters don't resemble this player's name
         minutes = _minutes_ago(m.get("lastSeen"), now)
@@ -566,7 +566,7 @@ def live_clan_lookup(clans: list[dict[str, Any]], members_of: Callable[[str], li
         except InvalidTagError:
             continue
         key = search_key(cname)
-        score = 1.1 if key == want else max(fuzzy_score(want, key), fuzzy_score(key, want))
+        score = 1.1 if key == want else max(read_score(want, key), read_score(key, want))
         valid.append((tag, cname, score))
     # Closest clan names first; ties keep the API's own order (stable sort).
     valid.sort(key=lambda t: -round(t[2], 1))

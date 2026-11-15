@@ -2,6 +2,7 @@
 
     python -m decklens.web                  # http://127.0.0.1:8000
     python -m decklens.web --port 8080
+    python -m decklens.web --demo           # sample players: no API key, database or login
 
 Binds to 127.0.0.1 (this computer only). Exposing it to a network belongs
 behind HTTPS and a reverse proxy, which comes with deployment.
@@ -16,16 +17,18 @@ import sys
 import uvicorn
 
 from ..config import ConfigError
-from .app import create_app_from_env
+from .app import create_app_from_env, create_demo_app
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run the DeckLens web app.")
     parser.add_argument("--port", type=int, default=8000)
+    parser.add_argument("--demo", action="store_true",
+                        help="run on sample players, with no API key, database or login")
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     try:
-        app = create_app_from_env()
+        app = create_demo_app() if args.demo else create_app_from_env()
     except ConfigError as exc:
         logging.getLogger("decklens.web").error("%s", exc)
         sys.exit(2)

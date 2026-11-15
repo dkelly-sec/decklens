@@ -3,6 +3,7 @@ screen and sends them to the DeckLens page, which searches their decks.
 
     pip install -e ".[watcher]"              # once: screen capture + text recognition
     python -m decklens.watcher --check       # see what it reads right now
+    python -m decklens.watcher --check --image shot.png   # or what it reads in a screenshot
     python -m decklens.watcher               # run it (Ctrl+C to stop)
 
 It finds Phone Link's mirror window by itself (it's titled after your phone,
@@ -49,7 +50,7 @@ from pathlib import Path
 from typing import Any, Callable, NamedTuple, Sequence
 from urllib.parse import urlsplit
 
-from .names import fuzzy_score, search_key
+from .names import read_score, search_key
 
 log = logging.getLogger("decklens.watcher")
 
@@ -87,6 +88,7 @@ class TextLine:
     y: float  # top edge, as a fraction of the region's height
     confidence: float
     height: float = 0.0  # as a fraction of the region's height (0: unknown)
+    width: float = 0.0   # as a fraction of the region's width (0: unknown)
 
 
 class Sighting(NamedTuple):
@@ -97,20 +99,53 @@ class Sighting(NamedTuple):
     rating: int | None = None
 
 
+# The text reader often returns one line of text as two boxes, split at a space
+# or a symbol ("nova | Sub" came back as "nova" and "ISub"). Boxes on the same
+# row that nearly touch are one piece of text: at most this many line heights apart.
+JOIN_GAP = 1.0
+
+
+def _is_number(text: str) -> bool:
+    return text.replace(" ", "").isdigit()
+
+
+def _join_rows(boxes: list[tuple[str, float, float, float, float, float]]
+               ) -> list[tuple[str, float, float, float, float, float]]:
+    """Join boxes (text, left, top, right, bottom, confidence; pixels) that sit side
+    by side on one row. Numbers are never joined to anything: the rating must stay
+    a clean number, and tower levels beside a name are not part of it."""
+    rows: list[tuple[str, float, float, float, float, float]] = []
+    for box in sorted(boxes, key=lambda b: b[1]):
+        text, left, top, right, bottom, confidence = box
+        for i, (t, l, tp, r, bt, c) in enumerate(rows):
+            tall, short = max(bottom - top, bt - tp), min(bottom - top, bt - tp)
+            overlap = min(bottom, bt) - max(top, tp)
+            if (short > 0 and overlap >= 0.5 * short and -0.5 * tall <= left - r <= JOIN_GAP * tall
+                    and not _is_number(text) and not _is_number(t)):
+                rows[i] = (f"{t} {text}", l, min(top, tp), max(right, r), max(bottom, bt),
+                           min(confidence, c))
+                break
+        else:
+            rows.append(box)
+    return rows
+
+
 def lines_from_ocr(result: Any, width: int, height: int) -> list[TextLine]:
-    """RapidOCR output [[box, text, confidence], ...] -> TextLines. Junk is skipped."""
-    lines = []
+    """RapidOCR output [[box, text, confidence], ...] -> TextLines, with boxes on the
+    same row joined left to right. Junk is skipped."""
+    boxes = []
     for item in result or []:
         try:
             box, text, confidence = item[0], str(item[1]), float(item[2])
-            x = min(float(p[0]) for p in box) / max(width, 1)
-            y = min(float(p[1]) for p in box) / max(height, 1)
-            tall = (max(float(p[1]) for p in box) - min(float(p[1]) for p in box)) / max(height, 1)
+            xs, ys = [float(p[0]) for p in box], [float(p[1]) for p in box]
+            left, top, right, bottom = min(xs), min(ys), max(xs), max(ys)
         except (TypeError, ValueError, IndexError):
             continue
         if text.strip():
-            lines.append(TextLine(text.strip(), x, y, confidence, tall))
-    return lines
+            boxes.append((text.strip(), left, top, right, bottom, confidence))
+    w, h = max(width, 1), max(height, 1)
+    return [TextLine(text, left / w, top / h, confidence, (bottom - top) / h, (right - left) / w)
+            for text, left, top, right, bottom, confidence in _join_rows(boxes)]
 
 
 def in_battle(top_right: Sequence[TextLine]) -> bool:
@@ -133,52 +168,101 @@ def _rating(line: TextLine) -> int | None:
     return value if 100 <= value <= MAX_RATING else None
 
 
-def read_opponent(top_left: Sequence[TextLine]) -> Sighting | None:
-    """Name, clan and rating from the top-left corner of the battle screen."""
-    usable = [ln for ln in top_left if ln.x < 0.35 and ln.confidence >= MIN_CONFIDENCE]
-    # The third line: the rating (Ultimate Champion) or the league ("League 4",
-    # before that). Either one pins down where the clan and name lines are.
-    ratings = sorted((ln for ln in usable if _rating(ln) is not None
-                      or LEAGUE_TEXT.fullmatch(search_key(ln.text))), key=lambda ln: ln.y)
-    words = sorted((ln for ln in usable if not ln.text.replace(" ", "").isdigit()
-                    and len(search_key(ln.text)) >= 1
-                    and not LEAGUE_TEXT.fullmatch(search_key(ln.text))), key=lambda ln: ln.y)
+class Placed(NamedTuple):
+    """The lines read_opponent settled on (any may be missing)."""
     name: TextLine | None
     clan: TextLine | None
+    rating: TextLine | None   # the rating or the league line
+
+
+# (name row, clan row): where each line's middle sits, as a fraction of the corner's
+# height. Learned from battles where both were read; see Watcher.
+Rows = tuple[float, float]
+
+
+def _middle(line: TextLine) -> float:
+    return line.y + line.height / 2
+
+
+def locate(top_left: Sequence[TextLine], rows: Rows | None = None) -> Placed | None:
+    """Which line in the top-left corner is the name, the clan and the rating.
+
+    rows: where the name and clan rows were on earlier battles on this screen. A
+    single line with nothing else to go by is the name unless it sits on the clan
+    row, so a clan under an unreadable name isn't searched as a name."""
+    usable = sorted((ln for ln in top_left if ln.x < 0.35 and ln.confidence >= MIN_CONFIDENCE),
+                    key=lambda ln: ln.y)
+
+    def is_league(ln: TextLine) -> bool:
+        return bool(LEAGUE_TEXT.fullmatch(search_key(ln.text)))
+
+    # Anything that could be a name or clan. Numbers count: a name can be digits, or
+    # be read as digits ("l1ll1" comes back as "11111").
+    texts = [ln for ln in usable if not is_league(ln) and len(search_key(ln.text)) >= 1]
+    words = [ln for ln in texts if not _is_number(ln.text)]
+    # The third line: the rating (Ultimate Champion) or the league ("League 4",
+    # before that). Either one pins down where the clan and name lines are.
+    anchors = [ln for ln in usable if _rating(ln) is not None or is_league(ln)]
+
     def is_rating(number: TextLine) -> bool:
         """The rating sits right under the clan, or two lines under the name if
         the clan wasn't read. Other numbers, like tower health just below the
         corner on an iPad, are further down than that: skip them."""
-        above = [ln for ln in words if ln.y < number.y]
+        above = [ln for ln in texts if ln.y < number.y and ln is not number]
         if not above:
             return False
         gap = (number.y - above[-1].y) / (number.height or DEFAULT_LINE_HEIGHT)
         return gap <= (CLAN_SLOT_GAP if len(above) > 1 else NAME_SLOT_GAP)
 
-    rating = next((r for r in ratings if is_rating(r)), None)
-    words = [ln for ln in words if rating is None or ln.y < rating.y]
+    rating = next((r for r in anchors if is_rating(r)), None)
+    name: TextLine | None = None
+    clan: TextLine | None = None
     if rating is not None:
         # Ranked layout: name / clan / rating (or league). Measure from that line,
         # in units of the smallest line's height: "League 3" sits in a taller box
         # than plain digits, which made the name look like it was in the clan slot.
-        above = [ln for ln in words if ln.y < rating.y]
+        above = [ln for ln in texts if ln.y < rating.y and ln is not rating]
         floor = (rating.height or DEFAULT_LINE_HEIGHT) / 2   # ignore specks of junk text
         unit = min((ln.height for ln in [rating, *above] if ln.height >= floor),
                    default=rating.height or DEFAULT_LINE_HEIGHT)
         slot = CLAN_SLOT_GAP if _rating(rating) is not None else LEAGUE_CLAN_SLOT_GAP
-        clan = next((ln for ln in reversed(above) if (rating.y - ln.y) / unit <= slot), None)
-        name = next((ln for ln in reversed(above)
-                     if slot < (rating.y - ln.y) / unit <= NAME_SLOT_GAP), None)
+        near = [ln for ln in above if (rating.y - ln.y) / unit <= NAME_SLOT_GAP]
+        if len(near) >= 2 and near[-1].y - near[-2].y >= 0.5 * unit:
+            # Two rows above the rating: the nearer is the clan and the next the
+            # name, whatever the gaps measure (they vary with how tall the text
+            # reader draws its boxes).
+            name, clan = near[-2], near[-1]
+        elif near:   # one row: the gap says which it is
+            if (rating.y - near[-1].y) / unit <= slot:
+                clan = near[-1]
+            else:
+                name = near[-1]
     elif words:
         name = words[0]
         clan = next((ln for ln in words[1:] if 0.1 < ln.y - name.y < 0.5), None)
+        if clan is None:
+            # A name made of digits sits above the clan like any other name.
+            digits = [ln for ln in texts if _is_number(ln.text) and 0.1 < name.y - ln.y < 0.5
+                      and abs(ln.x - name.x) < 0.08]
+            if digits:
+                name, clan = digits[-1], name
+            elif rows is not None and abs(_middle(name) - rows[1]) < abs(_middle(name) - rows[0]):
+                name, clan = None, name   # on the clan row: the name above it wasn't read
     else:
         return None
     if clan is not None and search_key(clan.text) in NO_CLAN_TEXT:
         clan = None  # the game's "no clan" label, not a clan called that
-    found = Sighting(name.text[:40] if name else None, clan.text[:50] if clan else None,
-                     _rating(rating) if rating else None)
-    return found if found.name or found.clan else None  # a rating alone says too little
+    return Placed(name, clan, rating) if name or clan else None  # a rating alone says too little
+
+
+def read_opponent(top_left: Sequence[TextLine], rows: Rows | None = None) -> Sighting | None:
+    """Name, clan and rating from the top-left corner of the battle screen."""
+    placed = locate(top_left, rows)
+    if placed is None:
+        return None
+    name, clan, rating = placed
+    return Sighting(name.text[:40] if name else None, clan.text[:50] if clan else None,
+                    _rating(rating) if rating else None)
 
 
 def describe(found: Sighting) -> str:
@@ -189,12 +273,40 @@ def describe(found: Sighting) -> str:
 
 
 def _same(a: Sighting, b: Sighting) -> bool:
-    def close(x: str | None, y: str | None) -> bool:
-        if not x or not y:
-            return x == y
+    """Two reads of one opponent: every part both reads have is alike, and they
+    share at least one. A part one read missed (the name flickers in and out when
+    it is mostly symbols) doesn't make it a different player."""
+    def close(x: str, y: str) -> bool:
         kx, ky = search_key(x), search_key(y)
-        return fuzzy_score(kx, ky) >= SAME_READ and fuzzy_score(ky, kx) >= SAME_READ
-    return close(a.name, b.name) and close(a.clan, b.clan)
+        return read_score(kx, ky) >= SAME_READ and read_score(ky, kx) >= SAME_READ
+    shared = [(x, y) for x, y in ((a.name, b.name), (a.clan, b.clan)) if x and y]
+    return bool(shared) and all(close(x, y) for x, y in shared)
+
+
+def _better(a: tuple[Sighting, float], b: tuple[Sighting, float]) -> tuple[Sighting, float]:
+    """Of two reads of one opponent, the one to report: the fuller one (name, clan,
+    rating), then the one the text reader was surer of."""
+    def worth(read: tuple[Sighting, float]) -> tuple[int, float]:
+        found, confidence = read
+        return (bool(found.name) * 2 + bool(found.clan) + bool(found.rating), confidence)
+    return b if worth(b) > worth(a) else a
+
+
+def _rows_key(image: Any) -> str:
+    """Screens of one shape lay the corner out the same way: "2.2" a phone, "1.3" an iPad."""
+    h, w = image.shape[:2]
+    return f"{h / max(w, 1):.1f}"
+
+
+def valid_rows(saved: Any) -> dict[str, Rows]:
+    """Row positions from the config file, keeping only what looks like them."""
+    out: dict[str, Rows] = {}
+    for key, pair in (saved.items() if isinstance(saved, dict) else ()):
+        if (isinstance(key, str) and isinstance(pair, (list, tuple)) and len(pair) == 2
+                and all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in pair)
+                and 0 <= pair[0] < pair[1] <= 1.5):
+            out[key[:8]] = (float(pair[0]), float(pair[1]))
+    return out
 
 
 def phone_area(image: Any) -> Any:
@@ -311,13 +423,20 @@ class Watcher:
                  send: Callable[[Sighting], None], *,
                  event: Callable[[str], None] | None = None,
                  rescan: Callable[[], bool] | None = None,
-                 confirm: int = 2, rearm_after: int = 3, unreadable_after: int = UNREADABLE_AFTER):
+                 confirm: int = 2, rearm_after: int = 3, unreadable_after: int = UNREADABLE_AFTER,
+                 rows: dict[str, Rows] | None = None,
+                 save_rows: Callable[[dict[str, Rows]], None] | None = None):
         self.grab, self.ocr, self.send, self.event = grab, ocr, send, event
         self.rescan = rescan  # True when the page asked to read this battle again
         self.confirm, self.rearm_after = confirm, rearm_after
         self.unreadable_after = unreadable_after
+        # Where the name and clan rows sit, per screen shape, learned whenever both
+        # are read (and remembered between runs through save_rows).
+        self.rows: dict[str, Rows] = dict(rows or {})
+        self.save_rows = save_rows
         self.reported = False
         self.pending: Sighting | None = None
+        self.pending_confidence = 0.0
         self.agree = 0
         self.misses = 0
         self.unread = 0          # looks in this battle with nothing readable
@@ -353,23 +472,47 @@ class Watcher:
         self.misses = 0
         if self.reported or self.flagged:
             return None
-        found = read_opponent(self._read(image, TOP_LEFT))
-        if found is None:
+        shape = _rows_key(image)
+        placed = locate(self._read(image, TOP_LEFT), self.rows.get(shape))
+        if placed is None:
             self.unread += 1
             if self.unread >= self.unreadable_after:
                 self._tell("unreadable")
                 self.flagged = True
             return None
         self.unread = 0
+        self._learn_rows(shape, placed)
+        found = Sighting(placed.name.text[:40] if placed.name else None,
+                         placed.clan.text[:50] if placed.clan else None,
+                         _rating(placed.rating) if placed.rating else None)
+        confidence = (placed.name or placed.clan).confidence
         if self.pending is not None and _same(found, self.pending):
             self.agree += 1
+            # Looks at one opponent differ a little (the picture is a video stream):
+            # report the fullest, surest of them, not whichever came last.
+            self.pending, self.pending_confidence = _better(
+                (self.pending, self.pending_confidence), (found, confidence))
         else:
-            self.pending, self.agree = found, 1
+            self.pending, self.pending_confidence, self.agree = found, confidence, 1
         if self.agree >= self.confirm:
-            self.send(found)
+            self.send(self.pending)
             self.reported = True
-            return found
+            return self.pending
         return None
+
+    def _learn_rows(self, shape: str, placed: Placed) -> None:
+        if placed.name is None or placed.clan is None:
+            return
+        rows = (round(_middle(placed.name), 3), round(_middle(placed.clan), 3))
+        old = self.rows.get(shape)
+        if rows[0] >= rows[1] or (old and max(abs(rows[0] - old[0]), abs(rows[1] - old[1])) < 0.03):
+            return  # not two rows, or where they already were
+        self.rows[shape] = rows
+        if self.save_rows is not None:
+            try:
+                self.save_rows(dict(self.rows))
+            except OSError as exc:  # can't write the config file: still known for this run
+                log.debug("couldn't remember the row positions: %s", type(exc).__name__)
 
 
 # --- talking to DeckLens ---------------------------------------------------------
@@ -662,17 +805,35 @@ def check(grab: Callable[[], Any]) -> None:
                                *enlarge(crop(image, TOP_RIGHT)).shape[1::-1])
     top_left = lines_from_ocr(ocr(enlarge(crop(image, TOP_LEFT))),
                               *enlarge(crop(image, TOP_LEFT)).shape[1::-1])
-    print("Top right:", [ln.text for ln in top_right])
-    print("Top left: ", [ln.text for ln in top_left])
+    def shown(found_lines: Sequence[TextLine]) -> list[str]:
+        # with how sure the reader was: under 50% a line is ignored
+        return [f"{ln.text} ({ln.confidence:.0%})" for ln in found_lines]
+
+    print("Top right:", shown(top_right))
+    print("Top left: ", shown(top_left))
     print("In a battle:", "yes" if in_battle(top_right) else "no (start a match and check again)")
-    found = read_opponent(top_left)
-    if found:
-        print(f"Opponent: {describe(found)}")
+    rows = valid_rows(read_config().get("rows")).get(_rows_key(image))
+    found = read_opponent(top_left, rows)
+    print(f"Opponent: {describe(found)}" if found else "Opponent: nothing readable in their corner")
+
+
+def image_grabber(path: str) -> Callable[[], Any]:
+    """A saved screenshot (of the phone, or of the mirror window) in place of the
+    live window, so a read that went wrong can be looked at again with --check."""
+    import cv2
+
+    picture = cv2.imread(path)  # BGR
+    if picture is None:
+        raise SystemExit(f"Couldn't open {path} as a picture.")
+    picture = picture[:, :, ::-1].copy()
+    return lambda: phone_area(picture)
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Read your opponent off your mirrored phone.")
     parser.add_argument("--check", action="store_true", help="read the screen once and show it")
+    parser.add_argument("--image", metavar="FILE",
+                        help="with --check: read a saved screenshot instead of the live window")
     parser.add_argument("--window", metavar="TITLE",
                         help="title of the mirror window, remembered for next time "
                              "(default: found through Phone Link)")
@@ -708,7 +869,10 @@ def main(argv: list[str] | None = None) -> int:
     if args.calibrate:
         calibrate()
         return 0
-    grab = screen_grabber(load_region()) if args.manual else window_grabber(titles)
+    if args.image and not args.check:
+        parser.error("--image goes with --check")
+    grab = (image_grabber(args.image) if args.image else
+            screen_grabber(load_region()) if args.manual else window_grabber(titles))
     if args.check:
         check(grab)
         return 0
@@ -756,7 +920,9 @@ def main(argv: list[str] | None = None) -> int:
             client.event(kind)
         log.info("battle %s -> told DeckLens", kind)
 
-    watcher = Watcher(grab, text_reader(), send, event=event, rescan=heartbeat.take_rescan)
+    watcher = Watcher(grab, text_reader(), send, event=event, rescan=heartbeat.take_rescan,
+                      rows=valid_rows(read_config().get("rows")),
+                      save_rows=lambda rows: write_config(rows=rows))
     log.info("watching your phone screen (Ctrl+C to stop). Tick Auto-scout on the DeckLens page.")
     try:
         while True:

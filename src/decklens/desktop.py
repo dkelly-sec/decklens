@@ -217,7 +217,8 @@ def run_watcher(board: Any, stop: threading.Event) -> None:
 
     status("starting")
     try:
-        from .watcher import Watcher, describe, read_config, text_reader, window_grabber
+        from .watcher import (Watcher, describe, read_config, text_reader, valid_rows,
+                              window_grabber, write_config)
     except ImportError:
         log.warning("screen watcher not installed (pip install -e \".[watcher]\"): Auto-scout is off")
         return keep_saying("unavailable", "screen reader not installed")
@@ -228,7 +229,9 @@ def run_watcher(board: Any, stop: threading.Event) -> None:
         watcher = Watcher(grab, text_reader(),
                           lambda found: board.report(SCREEN_KEY, *found),
                           event=lambda kind: board.report(SCREEN_KEY, None, None, kind=kind),
-                          rescan=lambda: board.take_rescan(SCREEN_KEY))
+                          rescan=lambda: board.take_rescan(SCREEN_KEY),
+                          rows=valid_rows(read_config().get("rows")),
+                          save_rows=lambda rows: write_config(rows=rows))
     except ImportError as exc:  # screen capture / text recognition packages missing
         log.warning("screen watcher not installed (%s): pip install -e \".[watcher]\"", exc.name)
         return keep_saying("unavailable", "screen reader not installed")

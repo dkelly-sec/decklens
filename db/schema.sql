@@ -22,6 +22,13 @@ CREATE INDEX IF NOT EXISTS players_clan_key_idx ON players (clan_key text_patter
 CREATE EXTENSION IF NOT EXISTS pg_trgm;
 CREATE INDEX IF NOT EXISTS players_search_key_trgm_idx ON players USING gin (search_key gin_trgm_ops);
 CREATE INDEX IF NOT EXISTS players_clan_key_trgm_idx ON players USING gin (clan_key gin_trgm_ops);
+-- Names read off the screen: I/l/1 and O/0 folded together (see db/migrations/007_read_keys.sql).
+CREATE INDEX IF NOT EXISTS players_read_key_idx ON players ((translate(search_key, 'i10', 'llo')));
+CREATE INDEX IF NOT EXISTS players_read_key_trgm_idx ON players
+    USING gin ((translate(search_key, 'i10', 'llo')) gin_trgm_ops);
+CREATE INDEX IF NOT EXISTS players_clan_read_key_idx ON players ((translate(clan_key, 'i10', 'llo')));
+CREATE INDEX IF NOT EXISTS players_clan_read_key_trgm_idx ON players
+    USING gin ((translate(clan_key, 'i10', 'llo')) gin_trgm_ops);
 
 -- Rank and rating over time, so each battle can be placed in a skill tier
 -- (Ultimate Champion / top 1,000 / top 200) as it was when it was played.

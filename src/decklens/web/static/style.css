@@ -163,6 +163,13 @@ main, footer { max-width: var(--page); margin: 0 auto; padding: 0 var(--gutter);
 .bug-status .state.warn { background: transparent; color: var(--warn); box-shadow: inset 0 0 0 2px currentColor; }
 .bug-status .state.off { background: transparent; color: var(--bad); box-shadow: inset 0 0 0 2px currentColor; }
 .bug-status .what { color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Demo mode: every player and result on the page is invented. */
+.demo-mark {
+  align-self: center; padding: 3px 7px; white-space: nowrap;
+  color: var(--warn); box-shadow: inset 0 0 0 2px currentColor;
+  font: 700 1rem/1.1 var(--display); text-transform: uppercase; letter-spacing: 0.04em;
+}
+.demo-mark[hidden] { display: none; }
 .account { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 0.875rem; }
 .account { margin-left: auto; }
 .bug:not([hidden]) ~ .account { margin-left: 8px; }

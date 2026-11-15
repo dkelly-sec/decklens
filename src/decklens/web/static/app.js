@@ -179,7 +179,7 @@ function elixirDrop(cost) {
 }
 
 function plural(n, one, many) {
-  return n + " " + (n === 1 ? one : many);
+  return n.toLocaleString() + " " + (n === 1 ? one : many);
 }
 
 function fact(value, words) {
@@ -197,7 +197,7 @@ function deckView(deck, side, options = {}) {
   box.append(list);
   const s = deck.summary || {};
   const facts = el("p", null, "deck-facts");
-  if (s.avg_elixir !== null && s.avg_elixir !== undefined) facts.append(fact(s.avg_elixir, "avg elixir"));
+  if (s.avg_elixir !== null && s.avg_elixir !== undefined) facts.append(fact(s.avg_elixir.toFixed(1), "avg elixir"));  // 3.0, as players say it
   if (s.cycle !== null && s.cycle !== undefined) facts.append(fact(s.cycle, "4-card cycle"));
   if (s.evolutions) facts.append(fact(s.evolutions, s.evolutions === 1 ? "evolution" : "evolutions"));
   if (s.heroes) facts.append(fact(s.heroes, s.heroes === 1 ? "hero" : "heroes"));
@@ -542,8 +542,13 @@ function matchupDetail(m, mode, decks) {
     const cards = el("ul", null, "key-cards");
     for (const k of m.key_cards) {
       const item = el("li");
-      item.append(el("span", k.card, k.effect > 0 ? "yours" : "theirs"),
-        k.effect > 0 ? " in your deck helps you" : " in their deck helps them");
+      // Whose card it is comes from the server, not from the sign: a card the model
+      // rates as weak in your own deck counts against you, and it is still yours.
+      const mine = k.deck === "yours";
+      const good = mine ? k.effect > 0 : k.effect < 0;  // good for whoever plays it
+      item.append(el("span", k.card, mine ? "yours" : "theirs"),
+        (mine ? " in your deck " : " in their deck ") +
+        (good ? "helps " : "holds ") + (mine ? "you" : "them") + (good ? "" : " back"));
       cards.append(item);
     }
     box.append(el("p", "Cards that decide it", "label"), cards);
@@ -695,6 +700,19 @@ function asTag(text) {
   return "#" + t.replace(/^#/, "").toUpperCase().replace(/O/g, "0");
 }
 
+// Rank on their country's leaderboard. It needs the whole board, so it's asked for
+// after the profile is on the page and added when it arrives. True if they have one.
+async function addCountryRank(player) {
+  if (!player.ultimate) return false;
+  try {
+    const found = await api("/api/players/" + tagPath(player.tag) + "/country-rank");
+    player.country_rank = found.country_rank;
+  } catch {
+    return false;  // the rest of their standing is already showing
+  }
+  return Boolean(player.country_rank);
+}
+
 async function showMe(tag) {
   const out = document.getElementById("me-result");
   show(out, loadingText("Looking up…"));
@@ -704,6 +722,12 @@ async function showMe(tag) {
     state.myDecks = undefined;  // your Trophy Road / challenge decks: fetched again for this player
     storageSet("decklens.myTag", me.tag);
     show(out, youView(me));
+    addCountryRank(me).then((found) => {
+      if (!found || state.me !== me) return;
+      const facts = out.querySelector(".you-head .facts");
+      if (facts) facts.replaceChildren(...playerFacts(me));
+      refreshYouSide();
+    });
   } catch (error) {
     state.me = null;
     state.myDecks = undefined;
@@ -1061,9 +1085,13 @@ function expandRow(list, name, wins, games, range, detail, extraClass) {
   const rate = wins / games;
   const lean = range ? (range[0] > 0.5 ? " good" : range[1] < 0.5 ? " bad" : "")
     : (rate >= 0.6 ? " good" : rate <= 0.4 ? " bad" : "");
+  // Same rule as the matchup table: a handful of games gets its record, not a percentage
+  // (1–0 is not "100%").
+  const few = games < FEW_GAMES;
   row.append(el("span", name, "row-name"), el("span", wins + "–" + (games - wins), "row-record"),
-    el("span", pct(rate), "row-rate rate" + lean));
-  if (games < 10) row.title = "Few games, so the win rate can swing a lot";
+    el("span", few ? "" : pct(rate), "row-rate rate" + (few ? "" : lean)));
+  if (few) row.title = "Too few games to call";
+  else if (games < 10) row.title = "Few games, so the win rate can swing a lot";
   let box = null;
   item.open = (opening, exclusive = true) => {  // a search opens every match at once
     if (opening && exclusive && list.openItem && list.openItem !== item) list.openItem.open(false);
@@ -1228,7 +1256,7 @@ function youSide() {
   const facts = el("div", null, "vs-facts");
   if (state.me) {
     const s = state.me.deck && state.me.deck.summary;
-    if (s && s.avg_elixir !== null && s.avg_elixir !== undefined) facts.append(el("span", s.avg_elixir + " avg elixir"));
+    if (s && s.avg_elixir !== null && s.avg_elixir !== undefined) facts.append(el("span", s.avg_elixir.toFixed(1) + " avg elixir"));
     facts.append(...playerFacts(state.me, { withTag: false }));
     you.append(facts);
   } else {
@@ -1423,7 +1451,9 @@ async function fillHistory(player, slot) {
 // The opponent side starts with what the screen or battle log said (a rating, a
 // battle-time rank). Once their tag is known, look up their profile and show
 // their standing by the same rule as yours.
-async function refreshThemSide(head, tag, token) {
+// readRating: the rating the watcher read on the battle screen, if it did. A profile
+// with exactly that rating is this opponent whatever their name was read as.
+async function refreshThemSide(head, tag, token, readRating) {
   if (!tag) return;
   let p;
   try {
@@ -1434,6 +1464,15 @@ async function refreshThemSide(head, tag, token) {
   const facts = head.querySelector(".vs-them .vs-facts");
   if (token !== board.token || board.key !== tag || !facts) return;
   facts.replaceChildren(...playerFacts(p));
+  if (readRating && p.ultimate && p.rating === readRating) {
+    const side = head.querySelector(".vs-them");
+    const old = side.querySelector(".tag");
+    const mark = el("span", RATING_MATCHES, "tag sure");
+    if (old) old.replaceWith(mark); else side.prepend(mark);
+  }
+  if (await addCountryRank(p) && token === board.token && board.key === tag) {
+    facts.replaceChildren(...playerFacts(p));
+  }
 }
 
 // Open a player on the board: their decks by game mode, newest first.
@@ -1443,7 +1482,7 @@ async function openOpponent(player, how = {}) {
   board.key = player.tag;
   const head = vsBar(player, how.tag, lands);
   setBoard(head, loadingText("Loading their decks…"));
-  refreshThemSide(head, player.tag, token);
+  refreshThemSide(head, player.tag, token, how.rating);
   boardSay("Your opponent: " + (player.name || player.tag) + (player.clan ? ", " + player.clan : "") + ".");
   const history = el("div");
   fillHistory(player, history);
@@ -1462,6 +1501,9 @@ async function openOpponent(player, how = {}) {
     setBoard(head, calm(emptyMessage("ranked", result.recent_modes)));
     return;
   }
+  // A rating on the battle screen means this battle is Ranked: open their Ranked deck,
+  // not whichever mode they played last.
+  if (how.rating && played.includes("ranked")) played.sort((a, b) => (b === "ranked") - (a === "ranked"));
   const body = el("div");
   let chosen = null;
   const tabs = el("div", null, "subtabs board-modes");
@@ -1567,6 +1609,7 @@ function resultList(players) {
     button.dataset.nameMatch = String(r.name_match !== false);
     button.dataset.active = String(Boolean(r.active));
     button.dataset.clanMatch = String(Boolean(r.clan_match));
+    button.dataset.tag = r.tag;
     button.append(playerLine(r, { showNoClan: "clan" in r }));
     button.addEventListener("click", () => pickPlayer(r, button));
     item.append(button);
@@ -1584,7 +1627,9 @@ function pickPlayer(player, button) {
   button.classList.add("picked");
   const badge = button.dataset.badge;
   if (badge) button.prepend(el("span", badge, "pick-tag"));
-  openOpponent(player, { tag: badge ? { text: badge, kind: badge === "Auto-picked" ? "sure" : "doubt" } : null });
+  const sure = badge === "Auto-picked" || badge === RATING_MATCHES;
+  openOpponent(player, { tag: badge ? { text: badge, kind: sure ? "sure" : "doubt" } : null,
+    rating: auto.rating });
   // Picked by hand further down the page: bring the board into view (once).
   if (!button.dataset.auto) document.getElementById("board").scrollIntoView({ block: "start" });
 }
@@ -1622,26 +1667,49 @@ async function liveClanLookup(clan, name, out) {
 const NOT_KNOWN_NO_CLAN = " Without a clan the game can't be searched; after the battle, " +
   "Scout last opponent shows their deck.";
 
-// Auto-scout picks the player for you: the first confident match (in the clan
-// that was read, or online right now), else the top result with a similar name
-// as a best guess, else nobody. Results are already sorted best-first. You can
-// still pick someone else. Returns whether anyone was picked.
-function autoOpen(out, allowGuess = true) {
+// The rating on the battle screen is the one thing the watcher reads reliably
+// (plain digits), and it is the player's own: among a few candidates, the one whose
+// profile shows exactly that rating is the opponent, even when their name is in a
+// script the reader gets wrong. Looks at up to RATING_CHECKS profiles, best first.
+const RATING_MATCHES = "Rating matches";
+const RATING_CHECKS = 5;
+
+async function ratingMatch(buttons, rating) {
+  const some = buttons.filter((b) => b.dataset.tag).slice(0, RATING_CHECKS);
+  const profiles = await Promise.all(some.map((b) =>
+    api("/api/players/" + tagPath(b.dataset.tag)).catch(() => null)));
+  const at = profiles.findIndex((p) => p && p.ultimate && p.rating === rating);
+  return at < 0 ? null : some[at];
+}
+
+// Auto-scout picks the player for you. One confident match (in the clan that was
+// read with a name like the one read, or online right now) is opened at once.
+// With none, or several, and a rating read off the screen, whoever has exactly
+// that rating is opened. Failing that: the first confident match, else the top
+// result with a similar name as a best guess, else nobody. Results are already
+// sorted best-first. You can still pick someone else. Returns whether anyone was
+// picked.
+async function autoOpen(out, allowGuess = true, rating = null) {
   const buttons = [...out.querySelectorAll(".result-button")];
-  let pick;
-  if (allowGuess) {
+  const confident = buttons.filter((b) => b.dataset.confident === "true");
+  let pick = null;
+  let badge = null;
+  if (rating && confident.length !== 1) {
+    pick = await ratingMatch(buttons, rating);
+    if (pick) badge = RATING_MATCHES;
+  }
+  if (!pick && allowGuess) {
     // A best guess must at least have a name like the one read: a clanmate
     // with a different name is never them.
-    pick = buttons.find((b) => b.dataset.confident === "true") ||
-      buttons.find((b) => b.dataset.nameMatch !== "false");
-  } else {
+    pick = confident[0] || buttons.find((b) => b.dataset.nameMatch !== "false");
+  } else if (!pick) {
     // Only the clan is known (name unreadable): being in the clan isn't enough,
     // it may have 50 members. Online right now, or the only member we know.
     const inClan = buttons.filter((b) => b.dataset.clanMatch === "true");
     pick = buttons.find((b) => b.dataset.active === "true") || (inClan.length === 1 ? inClan[0] : null);
   }
   if (!pick) return false;
-  pick.dataset.badge = pick.dataset.confident === "true" ? "Auto-picked" : "Best guess";
+  pick.dataset.badge = badge || (pick.dataset.confident === "true" ? "Auto-picked" : "Best guess");
   pick.dataset.auto = "1";
   pick.click();
   delete pick.dataset.auto;
@@ -1656,6 +1724,7 @@ async function findOpponent(event, options = {}) {
   const name = document.getElementById("find-name").value.trim();
   const clan = document.getElementById("find-clan").value.trim();
   const done = (picked) => ({ picked, count: out.querySelectorAll(".result-button").length });
+  auto.rating = options.auto ? options.rating || null : null;  // a hand search has no screen read
   if (!name && !clan) {
     show(out, errorBox(new Error("Type some of their name, their clan, or both.")));
     return done(false);
@@ -1683,11 +1752,11 @@ async function findOpponent(event, options = {}) {
     }
   }
   const canGoLive = clan.length >= 3;
-  const pick = () => (options.auto ? autoOpen(out, !options.nameUnread) : false);
+  const pick = () => (options.auto ? autoOpen(out, !options.nameUnread, auto.rating) : false);
   if (!results.length) {
     if (canGoLive) {
       await liveClanLookup(clan, name, out);  // not in our index: ask the game
-      return done(pick());
+      return done(await pick());
     }
     show(out, calm("No players found.", noClan ? NOT_KNOWN_NO_CLAN
       : " If their name is emoji or a language you can't type, search by their clan."));
@@ -1697,7 +1766,7 @@ async function findOpponent(event, options = {}) {
     if (results.some((r) => r.clan_match)) {
       show(out, el("p", "No clan, so players without one come first. Pick your opponent:", "label"),
         resultList(results));
-      return done(pick());
+      return done(await pick());
     }
     // Everyone here has a clan, so none of them is likely to be the
     // opponent: list them, but don't open one as if it were.
@@ -1712,17 +1781,17 @@ async function findOpponent(event, options = {}) {
     show(out, loadingText("Nobody DeckLens knows is in that clan. Checking the game…"));
     const live = await liveClanParts(clan, name);
     show(out, ...live, el("p", "Others DeckLens knows with a similar name or clan", "label"), resultList(results));
-    return done(pick());
+    return done(await pick());
   }
   const parts = [el("p", "Pick your opponent", "label"), resultList(results)];
   if (canGoLive) parts.push(action("Not here? Check the clan live", () => liveClanLookup(clan, name, out)));
   show(out, ...parts);
-  return done(pick());
+  return done(await pick());
 }
 
 // --- auto-scout (screen watcher) -------------------------------------------
 
-const auto = { lastId: null, timer: null, afterBattle: null, afterToken: 0 };
+const auto = { lastId: null, timer: null, afterBattle: null, afterToken: 0, rating: null };
 const AFTER_BATTLE_TRIES = 12;      // your battle log can take a minute or two to update
 const AFTER_BATTLE_WAIT_MS = 10000;
 
@@ -1848,8 +1917,15 @@ async function pollWatcher() {
   const token = board.token;
   // No name (fancy letters or symbols): search the clan, but only open
   // someone we're sure of: a guess from the clan alone is usually wrong.
-  const found = await findOpponent(null, { auto: true, nameUnread: !latest.name,
+  let found = await findOpponent(null, { auto: true, nameUnread: !latest.name,
     noClan: Boolean(latest.name && !latest.clan), rating: latest.rating });
+  if (!found.picked && latest.name && latest.clan && token === board.token) {
+    // Nobody in that clan has a name like the one read. Names in scripts the reader
+    // doesn't know come back as confident nonsense ("ミナ" as "三十"), while the clan
+    // and rating read fine: look again by the clan alone, as for an unreadable name.
+    document.getElementById("find-name").value = "";
+    found = await findOpponent(null, { auto: true, nameUnread: true, rating: latest.rating });
+  }
   if (!found.picked && token === board.token) boardNotFound(latest, found.count);
 }
 
@@ -2034,6 +2110,13 @@ async function showAccount() {
     const me = await api("/api/me");
     state.local = Boolean(me.desktop || !me.login);
     if (me.desktop) setUpDesktop();
+    if (me.demo) {  // sample data: say so, and open the sample player
+      document.getElementById("demo-mark").hidden = false;
+      if (!state.me && !document.getElementById("me-tag").value) {
+        document.getElementById("me-tag").value = me.demo;
+        showMe(me.demo);
+      }
+    }
     if (!me.login) return;  // logins switched off (local use only)
     document.getElementById("account-name").textContent = me.username;
     document.getElementById("account").hidden = false;
