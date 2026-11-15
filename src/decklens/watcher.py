@@ -3,6 +3,7 @@ screen and sends them to the DeckLens page, which searches their decks.
 
     pip install -e ".[watcher]"              # once: screen capture + text recognition
     python -m decklens.watcher --check       # see what it reads right now
+    python -m decklens.watcher --check --image shot.png   # or what it reads in a screenshot
     python -m decklens.watcher               # run it (Ctrl+C to stop)
 
 It finds Phone Link's mirror window by itself (it's titled after your phone,
@@ -804,17 +805,35 @@ def check(grab: Callable[[], Any]) -> None:
                                *enlarge(crop(image, TOP_RIGHT)).shape[1::-1])
     top_left = lines_from_ocr(ocr(enlarge(crop(image, TOP_LEFT))),
                               *enlarge(crop(image, TOP_LEFT)).shape[1::-1])
-    print("Top right:", [ln.text for ln in top_right])
-    print("Top left: ", [ln.text for ln in top_left])
+    def shown(found_lines: Sequence[TextLine]) -> list[str]:
+        # with how sure the reader was: under 50% a line is ignored
+        return [f"{ln.text} ({ln.confidence:.0%})" for ln in found_lines]
+
+    print("Top right:", shown(top_right))
+    print("Top left: ", shown(top_left))
     print("In a battle:", "yes" if in_battle(top_right) else "no (start a match and check again)")
-    found = read_opponent(top_left)
-    if found:
-        print(f"Opponent: {describe(found)}")
+    rows = valid_rows(read_config().get("rows")).get(_rows_key(image))
+    found = read_opponent(top_left, rows)
+    print(f"Opponent: {describe(found)}" if found else "Opponent: nothing readable in their corner")
+
+
+def image_grabber(path: str) -> Callable[[], Any]:
+    """A saved screenshot (of the phone, or of the mirror window) in place of the
+    live window, so a read that went wrong can be looked at again with --check."""
+    import cv2
+
+    picture = cv2.imread(path)  # BGR
+    if picture is None:
+        raise SystemExit(f"Couldn't open {path} as a picture.")
+    picture = picture[:, :, ::-1].copy()
+    return lambda: phone_area(picture)
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Read your opponent off your mirrored phone.")
     parser.add_argument("--check", action="store_true", help="read the screen once and show it")
+    parser.add_argument("--image", metavar="FILE",
+                        help="with --check: read a saved screenshot instead of the live window")
     parser.add_argument("--window", metavar="TITLE",
                         help="title of the mirror window, remembered for next time "
                              "(default: found through Phone Link)")
@@ -850,7 +869,10 @@ def main(argv: list[str] | None = None) -> int:
     if args.calibrate:
         calibrate()
         return 0
-    grab = screen_grabber(load_region()) if args.manual else window_grabber(titles)
+    if args.image and not args.check:
+        parser.error("--image goes with --check")
+    grab = (image_grabber(args.image) if args.image else
+            screen_grabber(load_region()) if args.manual else window_grabber(titles))
     if args.check:
         check(grab)
         return 0

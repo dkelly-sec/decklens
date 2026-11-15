@@ -529,6 +529,24 @@ def test_odd_shapes_fall_back_to_the_whole_window():
     assert phone_area(np.zeros((20, 20, 3), dtype=np.uint8)).shape == (20, 20, 3)
 
 
+def test_a_saved_screenshot_is_read_like_the_live_window(monkeypatch):
+    """--check --image: a read that went wrong can be looked at again from a screenshot."""
+    import sys
+    import types
+
+    from decklens.watcher import image_grabber, main
+
+    game = game_picture(612, 1360)
+    win, _ = window(game, pad=(0, 0, 45, 0), toolbar=(45, (43, 43, 43)))
+    files = {"shot.png": win[:, :, ::-1].copy()}          # picture files load as BGR
+    monkeypatch.setitem(sys.modules, "cv2", types.SimpleNamespace(imread=files.get))
+    assert np.array_equal(image_grabber("shot.png")(), game)   # RGB again, title bar cut
+    with pytest.raises(SystemExit, match="Couldn't open"):
+        image_grabber("missing.png")
+    with pytest.raises(SystemExit):                        # a picture is only for --check
+        main(["--image", "shot.png"])
+
+
 def test_enlarge_leaves_big_regions_alone():
     big = np.zeros((100, 600, 3), dtype=np.uint8)
     assert enlarge(big) is big

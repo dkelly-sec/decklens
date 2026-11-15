@@ -1451,7 +1451,9 @@ async function fillHistory(player, slot) {
 // The opponent side starts with what the screen or battle log said (a rating, a
 // battle-time rank). Once their tag is known, look up their profile and show
 // their standing by the same rule as yours.
-async function refreshThemSide(head, tag, token) {
+// readRating: the rating the watcher read on the battle screen, if it did. A profile
+// with exactly that rating is this opponent whatever their name was read as.
+async function refreshThemSide(head, tag, token, readRating) {
   if (!tag) return;
   let p;
   try {
@@ -1462,6 +1464,12 @@ async function refreshThemSide(head, tag, token) {
   const facts = head.querySelector(".vs-them .vs-facts");
   if (token !== board.token || board.key !== tag || !facts) return;
   facts.replaceChildren(...playerFacts(p));
+  if (readRating && p.ultimate && p.rating === readRating) {
+    const side = head.querySelector(".vs-them");
+    const old = side.querySelector(".tag");
+    const mark = el("span", RATING_MATCHES, "tag sure");
+    if (old) old.replaceWith(mark); else side.prepend(mark);
+  }
   if (await addCountryRank(p) && token === board.token && board.key === tag) {
     facts.replaceChildren(...playerFacts(p));
   }
@@ -1474,7 +1482,7 @@ async function openOpponent(player, how = {}) {
   board.key = player.tag;
   const head = vsBar(player, how.tag, lands);
   setBoard(head, loadingText("Loading their decks…"));
-  refreshThemSide(head, player.tag, token);
+  refreshThemSide(head, player.tag, token, how.rating);
   boardSay("Your opponent: " + (player.name || player.tag) + (player.clan ? ", " + player.clan : "") + ".");
   const history = el("div");
   fillHistory(player, history);
@@ -1493,6 +1501,9 @@ async function openOpponent(player, how = {}) {
     setBoard(head, calm(emptyMessage("ranked", result.recent_modes)));
     return;
   }
+  // A rating on the battle screen means this battle is Ranked: open their Ranked deck,
+  // not whichever mode they played last.
+  if (how.rating && played.includes("ranked")) played.sort((a, b) => (b === "ranked") - (a === "ranked"));
   const body = el("div");
   let chosen = null;
   const tabs = el("div", null, "subtabs board-modes");
@@ -1598,6 +1609,7 @@ function resultList(players) {
     button.dataset.nameMatch = String(r.name_match !== false);
     button.dataset.active = String(Boolean(r.active));
     button.dataset.clanMatch = String(Boolean(r.clan_match));
+    button.dataset.tag = r.tag;
     button.append(playerLine(r, { showNoClan: "clan" in r }));
     button.addEventListener("click", () => pickPlayer(r, button));
     item.append(button);
@@ -1615,7 +1627,9 @@ function pickPlayer(player, button) {
   button.classList.add("picked");
   const badge = button.dataset.badge;
   if (badge) button.prepend(el("span", badge, "pick-tag"));
-  openOpponent(player, { tag: badge ? { text: badge, kind: badge === "Auto-picked" ? "sure" : "doubt" } : null });
+  const sure = badge === "Auto-picked" || badge === RATING_MATCHES;
+  openOpponent(player, { tag: badge ? { text: badge, kind: sure ? "sure" : "doubt" } : null,
+    rating: auto.rating });
   // Picked by hand further down the page: bring the board into view (once).
   if (!button.dataset.auto) document.getElementById("board").scrollIntoView({ block: "start" });
 }
@@ -1653,26 +1667,49 @@ async function liveClanLookup(clan, name, out) {
 const NOT_KNOWN_NO_CLAN = " Without a clan the game can't be searched; after the battle, " +
   "Scout last opponent shows their deck.";
 
-// Auto-scout picks the player for you: the first confident match (in the clan
-// that was read, or online right now), else the top result with a similar name
-// as a best guess, else nobody. Results are already sorted best-first. You can
-// still pick someone else. Returns whether anyone was picked.
-function autoOpen(out, allowGuess = true) {
+// The rating on the battle screen is the one thing the watcher reads reliably
+// (plain digits), and it is the player's own: among a few candidates, the one whose
+// profile shows exactly that rating is the opponent, even when their name is in a
+// script the reader gets wrong. Looks at up to RATING_CHECKS profiles, best first.
+const RATING_MATCHES = "Rating matches";
+const RATING_CHECKS = 5;
+
+async function ratingMatch(buttons, rating) {
+  const some = buttons.filter((b) => b.dataset.tag).slice(0, RATING_CHECKS);
+  const profiles = await Promise.all(some.map((b) =>
+    api("/api/players/" + tagPath(b.dataset.tag)).catch(() => null)));
+  const at = profiles.findIndex((p) => p && p.ultimate && p.rating === rating);
+  return at < 0 ? null : some[at];
+}
+
+// Auto-scout picks the player for you. One confident match (in the clan that was
+// read with a name like the one read, or online right now) is opened at once.
+// With none, or several, and a rating read off the screen, whoever has exactly
+// that rating is opened. Failing that: the first confident match, else the top
+// result with a similar name as a best guess, else nobody. Results are already
+// sorted best-first. You can still pick someone else. Returns whether anyone was
+// picked.
+async function autoOpen(out, allowGuess = true, rating = null) {
   const buttons = [...out.querySelectorAll(".result-button")];
-  let pick;
-  if (allowGuess) {
+  const confident = buttons.filter((b) => b.dataset.confident === "true");
+  let pick = null;
+  let badge = null;
+  if (rating && confident.length !== 1) {
+    pick = await ratingMatch(buttons, rating);
+    if (pick) badge = RATING_MATCHES;
+  }
+  if (!pick && allowGuess) {
     // A best guess must at least have a name like the one read: a clanmate
     // with a different name is never them.
-    pick = buttons.find((b) => b.dataset.confident === "true") ||
-      buttons.find((b) => b.dataset.nameMatch !== "false");
-  } else {
+    pick = confident[0] || buttons.find((b) => b.dataset.nameMatch !== "false");
+  } else if (!pick) {
     // Only the clan is known (name unreadable): being in the clan isn't enough,
     // it may have 50 members. Online right now, or the only member we know.
     const inClan = buttons.filter((b) => b.dataset.clanMatch === "true");
     pick = buttons.find((b) => b.dataset.active === "true") || (inClan.length === 1 ? inClan[0] : null);
   }
   if (!pick) return false;
-  pick.dataset.badge = pick.dataset.confident === "true" ? "Auto-picked" : "Best guess";
+  pick.dataset.badge = badge || (pick.dataset.confident === "true" ? "Auto-picked" : "Best guess");
   pick.dataset.auto = "1";
   pick.click();
   delete pick.dataset.auto;
@@ -1687,6 +1724,7 @@ async function findOpponent(event, options = {}) {
   const name = document.getElementById("find-name").value.trim();
   const clan = document.getElementById("find-clan").value.trim();
   const done = (picked) => ({ picked, count: out.querySelectorAll(".result-button").length });
+  auto.rating = options.auto ? options.rating || null : null;  // a hand search has no screen read
   if (!name && !clan) {
     show(out, errorBox(new Error("Type some of their name, their clan, or both.")));
     return done(false);
@@ -1714,11 +1752,11 @@ async function findOpponent(event, options = {}) {
     }
   }
   const canGoLive = clan.length >= 3;
-  const pick = () => (options.auto ? autoOpen(out, !options.nameUnread) : false);
+  const pick = () => (options.auto ? autoOpen(out, !options.nameUnread, auto.rating) : false);
   if (!results.length) {
     if (canGoLive) {
       await liveClanLookup(clan, name, out);  // not in our index: ask the game
-      return done(pick());
+      return done(await pick());
     }
     show(out, calm("No players found.", noClan ? NOT_KNOWN_NO_CLAN
       : " If their name is emoji or a language you can't type, search by their clan."));
@@ -1728,7 +1766,7 @@ async function findOpponent(event, options = {}) {
     if (results.some((r) => r.clan_match)) {
       show(out, el("p", "No clan, so players without one come first. Pick your opponent:", "label"),
         resultList(results));
-      return done(pick());
+      return done(await pick());
     }
     // Everyone here has a clan, so none of them is likely to be the
     // opponent: list them, but don't open one as if it were.
@@ -1743,17 +1781,17 @@ async function findOpponent(event, options = {}) {
     show(out, loadingText("Nobody DeckLens knows is in that clan. Checking the game…"));
     const live = await liveClanParts(clan, name);
     show(out, ...live, el("p", "Others DeckLens knows with a similar name or clan", "label"), resultList(results));
-    return done(pick());
+    return done(await pick());
   }
   const parts = [el("p", "Pick your opponent", "label"), resultList(results)];
   if (canGoLive) parts.push(action("Not here? Check the clan live", () => liveClanLookup(clan, name, out)));
   show(out, ...parts);
-  return done(pick());
+  return done(await pick());
 }
 
 // --- auto-scout (screen watcher) -------------------------------------------
 
-const auto = { lastId: null, timer: null, afterBattle: null, afterToken: 0 };
+const auto = { lastId: null, timer: null, afterBattle: null, afterToken: 0, rating: null };
 const AFTER_BATTLE_TRIES = 12;      // your battle log can take a minute or two to update
 const AFTER_BATTLE_WAIT_MS = 10000;
 
@@ -1879,8 +1917,15 @@ async function pollWatcher() {
   const token = board.token;
   // No name (fancy letters or symbols): search the clan, but only open
   // someone we're sure of: a guess from the clan alone is usually wrong.
-  const found = await findOpponent(null, { auto: true, nameUnread: !latest.name,
+  let found = await findOpponent(null, { auto: true, nameUnread: !latest.name,
     noClan: Boolean(latest.name && !latest.clan), rating: latest.rating });
+  if (!found.picked && latest.name && latest.clan && token === board.token) {
+    // Nobody in that clan has a name like the one read. Names in scripts the reader
+    // doesn't know come back as confident nonsense ("ミナ" as "三十"), while the clan
+    // and rating read fine: look again by the clan alone, as for an unreadable name.
+    document.getElementById("find-name").value = "";
+    found = await findOpponent(null, { auto: true, nameUnread: true, rating: latest.rating });
+  }
   if (!found.picked && token === board.token) boardNotFound(latest, found.count);
 }
 
