@@ -53,6 +53,7 @@ Living document: update it as features are added. Last reviewed: week 7 (logins)
 | Anyone making the desktop app quit | Quit route exists only inside the desktop app, needs a login and a same-site request | Done |
 | Watcher inside the desktop app | Reports straight to the in-memory board under a key no web route can write; shown only to users logged in on that PC | Done |
 | Strangers using the site and its API quota | Login required for every page, API route and card image; no sign-up page, accounts only from the command line | Done |
+| Demo mode (`--demo`) left running where others can reach it | It has no login, so it listens on 127.0.0.1 only, keeps the Host allowlist and every rate limit, and refuses to start with DECKLENS_HTTPS=1; it holds no API key, database connection or real player data, so there is nothing behind it to reach | Done |
 | Password guessing | 5 failures lock a username for 15 minutes (whether or not it exists); 10 login attempts per minute per client; 12+ character passwords | Done |
 | Exhausting memory through logins (each scrypt check holds ~128 MB) | At most 2 password checks run at once; others wait up to 5 s, then get 429 (not counted as a failed login) | Done (audit 2026-11-07, web-auth F3) |
 | Stolen password database | scrypt hashes (OWASP parameters) with per-password salts; plain text impossible by database check; hashes with absurd cost parameters refused | Done |
@@ -66,5 +67,5 @@ Living document: update it as features are added. Last reviewed: week 7 (logins)
 | Untrusted values from API responses (leaderboard cursors, ids, ranks) | Location and season ids allowlisted; paging cursors validated before reuse; numbers accepted only as plain integers | Done |
 | Unsafe deserialisation of model files | Models exported as plain JSON (weights, trees as node arrays, archetype centroids, win counts), never pickle/joblib, so loading one can't run code; tree nodes must point forward and in range, so a crafted file can't loop; format tag, array shapes, value ranges and finite numbers checked on load | Done |
 | Misleading model results (leakage and confounding) | Train on older battles, test on strictly newer ones; card vocabulary built from training data only; player identity never used; skill at battle time included so card weights aren't inflated by who plays them; models symmetric so tag-order bias can't be exploited | Done |
-| Supply chain: CI actions | Dependabot updates actions; pin to commit SHAs | Partly done |
+| Supply chain: CI actions | Every action pinned to a full commit SHA (a moved tag can't change what runs); Dependabot raises the pins weekly | Done |
 | Over-retention of player data | Nightly crawl deletes players not seen for 90 days | Done |

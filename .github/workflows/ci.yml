@@ -9,6 +9,10 @@ on:
 permissions:
   contents: read
 
+# Every action is pinned to a full commit SHA, so a moved or compromised tag can't
+# change what runs here. Dependabot (.github/dependabot.yml) raises the pins weekly
+# and keeps the version comment beside each one in step.
+
 jobs:
   test-and-scan:
     runs-on: ubuntu-latest
@@ -31,8 +35,8 @@ jobs:
     env:
       DECKLENS_TEST_DATABASE_URL: postgresql://decklens:ci-test-only@localhost:5432/decklens_test
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0
         with:
           python-version: "3.12"
       - name: Install
@@ -47,12 +51,9 @@ jobs:
   secret-scan:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           fetch-depth: 0   # scan the full history, not just the latest commit
-      - uses: gitleaks/gitleaks-action@v3
+      - uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e  # v3.0.0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-# Hardening TODO: pin each action to a full commit SHA instead of a tag,
-# so a compromised tag can't change what runs in CI.
