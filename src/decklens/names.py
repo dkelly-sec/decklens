@@ -124,3 +124,24 @@ def fuzzy_score(query_key: str, key: str) -> float:
     for start in range(max(0, len(key) - width) + 1):
         best = max(best, SequenceMatcher(None, query_key, key[start:start + width + 1]).ratio())
     return best
+
+
+# Letters and digits a screen reader mixes up, whatever the font: capital I, small l
+# and 1; O and 0. A real battle screen gave "FIOReNt" for "Florent". Folding each
+# group to one letter makes a misread name equal to the real one.
+_READ_FOLD = str.maketrans("i10", "llo")
+READ_MATCH = 0.9  # what a match that needed folding is worth, next to a true one
+
+
+def read_key(key: str) -> str:
+    """A search key with look-alike characters folded together (see _READ_FOLD)."""
+    return key.translate(_READ_FOLD)
+
+
+def read_score(query_key: str, key: str) -> float:
+    """fuzzy_score that forgives I/l/1 and O/0 mix-ups, at a small discount so the
+    name as typed or read still wins when it really is that."""
+    plain = fuzzy_score(query_key, key)
+    if plain >= 1.0:
+        return plain
+    return max(plain, READ_MATCH * fuzzy_score(read_key(query_key), read_key(key)))

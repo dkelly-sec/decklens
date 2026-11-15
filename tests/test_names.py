@@ -105,3 +105,26 @@ def test_every_character_is_handled_without_crashing():
         key = search_key(chunk)
         assert isinstance(key, str)
         fuzzy_score("frank", key)
+
+
+# --- names read off the screen ------------------------------------------------------
+
+from decklens.names import read_key, read_score  # noqa: E402
+
+
+@pytest.mark.parametrize("read, real", [
+    ("FIOReNt", "Florent"),      # a real battle screen: l came back as I
+    ("AIi", "Ali"), ("lan77", "Ian77"), ("LiI", "Lil"),
+    ("BoOm", "Bo0m"), ("Omar", "0mar"), ("ZIOy", "Zl0y"),
+    ("11111", "l1ll1"), ("0000", "O0O0"),   # names the reader turns into digits
+])
+def test_look_alike_letters_read_as_the_same_name(read, real):
+    assert read_key(search_key(read)) == read_key(search_key(real))
+    assert read_score(search_key(read), search_key(real)) >= 0.9
+
+
+def test_folding_never_outranks_the_name_as_written():
+    assert read_score("ali", "ali") == 1.0                       # exact stays exact
+    assert read_score("aii", "ali") == pytest.approx(0.9)        # needed folding: a little less
+    assert read_score("aii", "bob") < 0.5                        # and it doesn't match everything
+    assert read_key("") == "" and read_score("", "ali") == 0.0

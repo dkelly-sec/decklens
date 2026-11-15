@@ -612,3 +612,67 @@ def test_rank_history_uses_this_seasons_ranks_only(conn):
     save_rank_entries(conn, [entry(400)], now - timedelta(days=1), "leaderboard")
     assert [r for _, r, _ in rank_history(conn, "#2PP", 30)] == [900, 400]
     assert [r for _, r, _ in rank_history(conn, "#2PP", 2)] == [400]
+
+
+def test_names_misread_off_the_screen_still_find_the_player(conn):
+    """The screen reader mixes up I/l/1 and O/0. A short name can't absorb that:
+    "AIi" shares one three-letter chunk with "Ali", too little for the fuzzy match."""
+    from decklens.storage import save_rank_entries
+    from decklens.web.search import known_clans, search_players
+
+    save_rank_entries(conn, [
+        RankEntry("#2PP", "Ali", 2140, 900, "#QQQ", "Lil 0nes"),
+        RankEntry("#9QJ", "Alina", 2150, 800, None, None),
+        RankEntry("#8YY", "Bo0m", 2100, 700, None, None),
+        RankEntry("#LLL", "l1ll1", 2000, 600, None, None),
+        RankEntry("#UUU", "Florent", 1990, 500, None, None),
+    ], NOW, "leaderboard")
+
+    for read, tag in (("AIi", "#2PP"), ("BoOm", "#8YY"), ("11111", "#LLL"), ("FIOReNt", "#UUU")):
+        found = search_players(conn, read)
+        assert found and found[0]["tag"] == tag and found[0]["name_match"], read
+    # The name as written still comes first: "Ali" exactly, then names that start with it.
+    assert [r["tag"] for r in search_players(conn, "ali")][:2] == ["#2PP", "#9QJ"]
+    # A misread that equals one name after folding beats a longer name it is the start of.
+    assert search_players(conn, "aii")[0]["tag"] == "#2PP"
+    # Clans too, in search and in the clans DeckLens knows by tag.
+    by_clan = search_players(conn, None, clan="LiI Ones")
+    assert [r["tag"] for r in by_clan] == ["#2PP"] and by_clan[0]["clan_match"]
+    assert known_clans(conn, "LiI Ones") == [{"tag": "#QQQ", "name": "Lil 0nes"}]
+    # Folding isn't a wildcard.
+    assert search_players(conn, "zzz") == []
+
+
+def test_sql_folds_look_alikes_exactly_as_python_does(conn):
+    # search.py spells the folding out in SQL (translate(key, 'i10', 'llo')) so the
+    # indexes can serve it; names.read_key is the same thing in Python.
+    from decklens.names import read_key
+
+    for key in ("ali", "aii", "bo0m", "l1ll1", "o0o0", "florent", "ian77", "x", "日本", ""):
+        assert conn.execute("SELECT translate(%s, 'i10', 'llo')", (key,)).fetchone()[0] == read_key(key)
+
+
+def test_read_key_search_uses_its_indexes(conn):
+    # The WHERE clause must match migration 007's index expressions exactly, or every
+    # search reads the whole players table.
+    conn.execute("INSERT INTO players (tag, name, search_key, last_seen) "
+                 "SELECT '#' || lpad(translate(to_hex(i), '0123456789abcdef', '0289PYLQGRJCUV02'), 8, '2'), "
+                 "'p' || i, 'player' || i, now() FROM generate_series(1, 5000) i "
+                 "ON CONFLICT DO NOTHING")
+    conn.execute("ANALYZE players")
+    conn.execute("SET enable_seqscan = off")
+    try:
+        plan = "\n".join(row[0] for row in conn.execute(
+            "EXPLAIN SELECT tag FROM players p WHERE translate(p.search_key, 'i10', 'llo') = 'all' "
+            "OR 'all' <% translate(p.search_key, 'i10', 'llo')"))
+    finally:
+        conn.execute("SET enable_seqscan = on")
+    assert "players_read_key" in plan and "Seq Scan" not in plan, plan
+
+
+def test_missing_read_key_indexes_are_noticed(conn):
+    from decklens.web.search import has_read_indexes
+
+    assert has_read_indexes(conn)
+    conn.execute("DROP INDEX players_read_key_trgm_idx")
+    assert not has_read_indexes(conn)   # the app logs how to fix it when it starts
