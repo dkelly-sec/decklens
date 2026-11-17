@@ -31,6 +31,7 @@ dev = [
 watcher = [
     "mss>=10.2.0",                  # screen capture
     "rapidocr-onnxruntime>=1.4.4",  # offline text recognition (ONNX models bundled)
+    "rapidocr>=3.10.0",             # bundles the multilingual model for Japanese/Chinese names
 ]
 
 [tool.setuptools.packages.find]

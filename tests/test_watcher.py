@@ -3,7 +3,7 @@ import pytest
 
 from decklens.watcher import (
     TOP_LEFT, TOP_RIGHT, DeckLensClient, NeedLogin, Sighting, TextLine, Watcher, crop, describe,
-    in_battle, lines_from_ocr, locate, read_opponent, valid_rows,
+    has_han_or_kana, in_battle, lines_from_ocr, locate, read_opponent, reread, valid_rows,
 )
 
 # What RapidOCR returned for a real battle screenshot (1080x2400), per region.
@@ -701,3 +701,59 @@ def test_client_status_returns_the_read_again_flag():
     client = DeckLensClient("http://127.0.0.1:8000", session=session)
     assert client.status("connected", "iPad") is True
     assert client.status("connected", "iPad") is False
+
+
+# --- Second, multilingual reader (Chinese and Japanese names) ---------------------
+
+def _box(left, top, right, bottom):
+    return [[left, top], [right, top], [right, bottom], [left, bottom]]
+
+
+def _recogniser(answers):
+    """A stand-in for the multilingual reader: answers by the left edge of the piece
+    it is shown (its pad is cut away first), and remembers what it was asked."""
+    asked = []
+
+    def recognise(part):
+        asked.append(int(part[0, 0, 0]))
+        return answers.get(int(part[0, 0, 0]), ("", 0.0))
+    return recognise, asked
+
+
+def _picture(*lefts):
+    """A 600x240 picture whose pixel values say which piece they belong to."""
+    image = np.zeros((240, 600, 3), dtype=np.uint8)
+    for left in lefts:
+        image[:, max(0, left - 10):, :] = left
+    return image
+
+
+def test_kana_the_main_reader_dropped_is_read_again():
+    # ミナ came back from the main reader as 三十; most kana names as an unsure guess.
+    main = [[_box(20, 20, 200, 60), "三十", 0.91],
+            [_box(30, 80, 220, 110), "ll", 0.21],
+            [_box(30, 130, 120, 160), "2106", 0.99]]
+    recognise, asked = _recogniser({20: ("ミナ", 0.97), 30: ("猫のお茶会", 0.99)})
+    out = reread(_picture(20, 30), main, recognise)
+    assert [t for _, t, _ in out] == ["ミナ", "猫のお茶会", "2106"]
+    assert asked == [20, 30]                        # the rating isn't read again
+
+
+def test_a_confident_latin_name_is_kept_unless_the_second_reader_sees_kana():
+    main = [[_box(20, 20, 200, 60), "Florent", 0.9]]
+    recognise, _ = _recogniser({20: ("Fiorent", 0.95)})
+    assert reread(_picture(20), main, recognise)[0][1] == "Florent"
+    recognise, _ = _recogniser({20: ("しょうへい", 0.9)})   # read by the main one as "L5"
+    assert reread(_picture(20), [[_box(20, 20, 200, 60), "L5", 0.8]], recognise)[0][1] == "しょうへい"
+
+
+def test_pieces_neither_reader_is_sure_of_are_dropped():
+    main = [[_box(20, 20, 200, 60), "xx", 0.2], [_box(30, 80, 200, 110), "単", 0.9],
+            ["not a box", "junk", 0.9]]
+    recognise, _ = _recogniser({20: ("yy", 0.3), 30: ("", 0.0)})
+    assert [t for _, t, _ in reread(_picture(20, 30), main, recognise)] == ["単"]
+
+
+def test_han_and_kana_are_told_from_other_scripts():
+    assert has_han_or_kana("四暗刻単騎") and has_han_or_kana("ミナ") and has_han_or_kana("ｹﾝ")
+    assert not has_han_or_kana("Florent") and not has_han_or_kana("철수") and not has_han_or_kana("2:54")

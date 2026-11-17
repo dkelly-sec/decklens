@@ -45,6 +45,7 @@ import os
 import re
 import sys
 import time
+import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, NamedTuple, Sequence
@@ -732,11 +733,77 @@ def window_grabber(titles: list[str], on_status: Status | None = None) -> Callab
     return grab
 
 
+# The main text reader (RapidOCR's PP-OCRv4) knows Latin letters and Chinese. It reads
+# Latin names best, but writes Japanese kanji in their simplified Chinese forms
+# (単騎 -> 单骑) and can't read kana: most kana names came back as nothing, ミナ as
+# 三十. A second, multilingual reader (PP-OCRv6: simplified and traditional Chinese,
+# Japanese, Latin; bundled with the rapidocr package) re-reads each piece of text the
+# main one found. Its reading is taken when the main one's was in Chinese characters
+# or unsure, or when it reads Chinese or Japanese itself. Numbers aren't re-read.
+# On rendered battle corners: Japanese names read right 2 -> 47 of 48, traditional
+# Chinese 7 -> 20 of 20, Latin unchanged (39 of 40). About 0.1 s more per look.
+REREAD_PAD = 0.15  # around each piece of text, in its heights
+
+
+def has_han_or_kana(text: str) -> bool:
+    """Chinese characters (also used in Japanese) or Japanese kana in text."""
+    return any(unicodedata.name(ch, "").startswith(
+        ("CJK ", "HIRAGANA ", "KATAKANA ", "HALFWIDTH KATAKANA ")) for ch in text)
+
+
+def reread(image: Any, result: Any, recognise: Callable[[Any], tuple[str, float]]) -> list[Any]:
+    """The main reader's [[box, text, confidence], ...] (all of it, sure or not) with
+    each piece re-read by recognise where that helps (see above). Pieces neither
+    reader is sure of are dropped, as the main reader alone drops them."""
+    h, w = image.shape[:2]
+    out = []
+    for item in result or []:
+        try:
+            box, text, confidence = item[0], str(item[1]), float(item[2])
+            xs, ys = [float(p[0]) for p in box], [float(p[1]) for p in box]
+        except (TypeError, ValueError, IndexError):
+            continue
+        if not (_is_number(text) and confidence >= MIN_CONFIDENCE):
+            pad = REREAD_PAD * (max(ys) - min(ys))
+            part = image[max(0, int(min(ys) - pad)):min(h, int(max(ys) + pad) + 1),
+                         max(0, int(min(xs) - pad)):min(w, int(max(xs) + pad) + 1)]
+            again, sure = recognise(part) if part.size else ("", 0.0)
+            if again.strip() and sure >= MIN_CONFIDENCE and (
+                    has_han_or_kana(text) or confidence < MIN_CONFIDENCE or has_han_or_kana(again)):
+                text, confidence = again.strip(), sure
+        if confidence >= MIN_CONFIDENCE:
+            out.append([box, text, confidence])
+    return out
+
+
+def multilingual_reader() -> Callable[[Any], tuple[str, float]] | None:
+    """Reads one piece of text (no searching for it) with the multilingual model, or
+    None if the rapidocr package isn't installed."""
+    try:
+        from rapidocr import LangRec, ModelType, OCRVersion, RapidOCR
+    except ImportError:
+        log.warning("Chinese and Japanese names need the multilingual text reader: "
+                    'run  pip install -e ".[watcher]"  again')
+        return None
+    # The model shipped inside the package, so nothing is downloaded.
+    engine = RapidOCR(params={"Global.log_level": "error", "Rec.ocr_version": OCRVersion.PPOCRV6,
+                              "Rec.model_type": ModelType.SMALL, "Rec.lang_type": LangRec.JAPAN})
+
+    def recognise(part: Any) -> tuple[str, float]:
+        found = engine(part, use_det=False, use_cls=False, use_rec=True)
+        texts, scores = getattr(found, "txts", None), getattr(found, "scores", None)
+        return (str(texts[0]), float(scores[0])) if texts and scores else ("", 0.0)
+    return recognise
+
+
 def text_reader() -> Callable[[Any], Any]:
     from rapidocr_onnxruntime import RapidOCR
 
     engine = RapidOCR()
-    return lambda image: engine(image)[0]
+    recognise = multilingual_reader()
+    if recognise is None:
+        return lambda image: engine(image)[0]
+    return lambda image: reread(image, engine(image, text_score=0.0)[0], recognise)
 
 
 def calibrate() -> None:
