@@ -12,9 +12,16 @@ Design (see THREAT_MODEL.md):
   issue time) that is HttpOnly, SameSite=Lax, Secure with the __Host- prefix
   over HTTPS, and valid for 30 days. Bumping a user's session version (the
   "logout-all" command, or a password change) invalidates every cookie they hold.
-- After 5 wrong passwords for a username within 15 minutes, that username is
-  locked for 15 minutes, whether or not it exists, so lockouts can't be used
-  to discover usernames either. Per-IP rate limits sit on top of this.
+- After 5 wrong passwords for a username from one client (IP address) within
+  15 minutes, that client is locked out of that username for 15 minutes. Other
+  clients can still log in as it, so a stranger who knows your username can't
+  lock you out. A username that collects 50 failures in 15 minutes, from any
+  number of clients, is locked for everyone: that caps guessing spread across
+  many addresses. Both apply whether or not the username exists, so lockouts
+  can't be used to discover usernames. Per-IP rate limits sit on top of this.
+  (Behind a reverse proxy, every client looks like the proxy unless the server
+  is told to trust its forwarded address, and the 5-failure lock then applies
+  to everyone, as it did before this split.)
 """
 
 from __future__ import annotations
@@ -29,7 +36,7 @@ import threading
 import time
 from collections import defaultdict, deque
 from dataclasses import dataclass
-from typing import Any, Callable
+from typing import Any, Callable, Hashable
 
 USERNAME_RE = re.compile(r"[a-z0-9_.-]{3,32}")
 MIN_PASSWORD = 12
@@ -146,22 +153,23 @@ class SessionSigner:
 
 
 class LoginGuard:
-    """Locks a username after too many failures, whether or not it exists."""
+    """Locks a key (a username, or a client and username) after too many failures,
+    whether or not the username exists."""
 
     def __init__(self, *, max_failures: int = 5, window: float = 900.0,
                  clock: Callable[[], float] = time.monotonic, max_tracked: int = 10_000):
         self.max_failures, self.window, self.clock = max_failures, window, clock
         self.max_tracked = max_tracked
-        self._failures: dict[str, deque] = defaultdict(deque)
+        self._failures: dict[Hashable, deque] = defaultdict(deque)
         self._lock = threading.Lock()
 
-    def _recent(self, key: str, now: float) -> deque:
+    def _recent(self, key: Hashable, now: float) -> deque:
         failures = self._failures[key]
         while failures and now - failures[0] >= self.window:
             failures.popleft()
         return failures
 
-    def locked_for(self, key: str) -> float:
+    def locked_for(self, key: Hashable) -> float:
         """Seconds until this username may try again (0 if it may now)."""
         now = self.clock()
         with self._lock:
@@ -170,13 +178,13 @@ class LoginGuard:
                 return 0.0
             return max(0.0, self.window - (now - failures[0]))
 
-    def failed(self, key: str) -> None:
+    def failed(self, key: Hashable) -> None:
         with self._lock:
             if len(self._failures) > self.max_tracked:  # bounded memory under a flood
                 self._failures.clear()
             self._recent(key, self.clock()).append(self.clock())
 
-    def succeeded(self, key: str) -> None:
+    def succeeded(self, key: Hashable) -> None:
         with self._lock:
             self._failures.pop(key, None)
 
@@ -190,13 +198,18 @@ class LoginBusy(Exception):
 MAX_CONCURRENT_CHECKS = 2
 CHECK_WAIT_SECONDS = 5.0
 
+# Failures for one username, from all clients together, before it locks for everyone.
+# One client is locked after 5, so reaching this takes at least 10 addresses.
+USERNAME_MAX_FAILURES = 50
+
 
 class Auth:
     """Everything the web app needs for logins."""
 
     def __init__(self, load_user: Callable[[str], User | None], secret: str, *,
                  secure_cookie: bool, clock: Callable[[], float] = time.time,
-                 guard: LoginGuard | None = None, user_cache_seconds: float = 30.0,
+                 guard: LoginGuard | None = None, user_guard: LoginGuard | None = None,
+                 user_cache_seconds: float = 30.0,
                  max_concurrent_checks: int = MAX_CONCURRENT_CHECKS,
                  check_wait: float = CHECK_WAIT_SECONDS):
         self._load_user = load_user
@@ -204,7 +217,8 @@ class Auth:
         self.secure_cookie = secure_cookie
         # The __Host- prefix makes browsers insist on Secure, Path=/ and no Domain.
         self.cookie_name = "__Host-decklens_session" if secure_cookie else "decklens_session"
-        self.guard = guard or LoginGuard()
+        self.guard = guard or LoginGuard()          # one client, one username: 5 failures
+        self.user_guard = user_guard or LoginGuard(max_failures=USERNAME_MAX_FAILURES)
         self.clock = clock
         self._cache: dict[str, tuple[float, User | None]] = {}
         self._cache_seconds = user_cache_seconds
@@ -225,12 +239,15 @@ class Auth:
             self._cache[username] = (now, user)
         return user
 
-    def login(self, raw_username: Any, password: Any) -> tuple[User | None, float]:
+    def login(self, raw_username: Any, password: Any,
+              client: str = "unknown") -> tuple[User | None, float]:
         """(user, 0) on success; (None, 0) for wrong details; (None, seconds) when locked.
+        client: the address the attempt came from (see the module docstring).
 
         Raises LoginBusy when too many password checks are already running."""
         key = raw_username.strip().lower()[:64] if isinstance(raw_username, str) else ""
-        wait = self.guard.locked_for(key)
+        pair = (client, key)
+        wait = max(self.guard.locked_for(pair), self.user_guard.locked_for(key))
         if wait:
             return None, wait
         username = normalise_username(raw_username)
@@ -243,9 +260,12 @@ class Auth:
         finally:
             self._checks.release()
         if ok and user and not user.disabled and password:
-            self.guard.succeeded(key)
+            # Only this client's count is cleared: one right password mustn't reset
+            # guesses other clients have been spending on this username.
+            self.guard.succeeded(pair)
             return user, 0.0
-        self.guard.failed(key)
+        self.guard.failed(pair)
+        self.user_guard.failed(key)
         return None, 0.0
 
     def session_user(self, cookie: str | None) -> User | None:

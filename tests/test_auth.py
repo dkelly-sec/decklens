@@ -158,6 +158,29 @@ def test_locked_account_refuses_even_the_right_password():
     assert auth.login("david", PASSWORD)[1] > 0
 
 
+def test_a_stranger_guessing_cannot_lock_the_owner_out():
+    # Pen test 2026-11-17: 5 wrong passwords from anywhere used to lock the username
+    # for everyone, so anyone who knew it could keep its owner logged out.
+    auth, _ = make_auth([user()])
+    for _ in range(5):
+        assert auth.login("david", "wrong password!", "203.0.113.9") == (None, 0.0)
+    assert auth.login("david", PASSWORD, "203.0.113.9")[1] > 0   # the guesser stays locked
+    found, wait = auth.login("david", PASSWORD, "198.51.100.7")  # the owner, elsewhere
+    assert found is not None and found.username == "david" and wait == 0
+
+
+def test_guesses_spread_over_many_clients_hit_the_username_limit():
+    auth, _ = make_auth([user()])
+    for n in range(9):  # 9 addresses x 5 guesses = 45: under the limit of 50
+        for _ in range(5):
+            auth.login("david", "wrong password!", f"203.0.113.{n}")
+    assert auth.login("david", PASSWORD, "198.51.100.7")[1] == 0
+    for _ in range(5):  # a 10th address takes it to 50
+        auth.login("david", "wrong password!", "203.0.113.99")
+    assert auth.login("david", PASSWORD, "198.51.100.8")[1] > 0  # locked for everyone now
+    assert auth.login("ghost", "whatever, long", "198.51.100.8")[1] == 0  # other names aren't
+
+
 def test_bumping_session_version_logs_out_everywhere():
     auth, store = make_auth([user()])
     cookie = auth.signer.make(store["david"])
@@ -466,4 +489,7 @@ def test_login_answers_429_when_password_checks_are_busy():
     release.set()
     first.join()
     assert response.status_code == 429 and response.headers["retry-after"] == "5"
-    assert auth.guard.locked_for("kate") == 0   # a busy refusal isn't a wrong password
+    # a busy refusal isn't a wrong password: neither lock counted it
+    assert not auth.user_guard._failures.get("kate")
+    assert not any(failures for (_, name), failures in auth.guard._failures.items()
+                   if name == "kate")
