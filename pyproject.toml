@@ -11,10 +11,10 @@ requires-python = ">=3.11"
 dependencies = [
     "requests>=2.34.2",
     "python-dotenv>=1.2.4",
-    "psycopg[binary]>=3.3.8",
+    "psycopg[binary]>=3.3.9",
     "numpy>=2.4.6",
     "scikit-learn>=1.9.1",
-    "fastapi>=0.162.2",
+    "fastapi>=0.163.1",
     "uvicorn>=0.54.0",
     "segno>=1.6.6",  # QR codes for deck links (pure Python, BSD)
 ]
@@ -25,7 +25,7 @@ dev = [
     "bandit>=1.9.4",
     "pip-audit>=2.10.1",
     "pre-commit>=4.7.0",
-    "httpx2>=2.16",  # used by the FastAPI test client
+    "httpx2>=2.16.2",  # used by the FastAPI test client
 ]
 # Screen watcher (python -m decklens.watcher), on the PC showing the mirrored phone.
 watcher = [
