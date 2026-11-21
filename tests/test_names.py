@@ -43,6 +43,32 @@ def test_japanese_voicing_marks_are_preserved():
     assert search_key("が") != search_key("か")
 
 
+@pytest.mark.parametrize("one, other", [
+    ("四暗刻単騎", "四暗刻单骑"),   # a real battle: the screen reader wrote 単騎 as 单骑
+    ("黒猫", "黑猫"),               # Japanese / traditional
+    ("龍騰天下", "龙腾天下"),       # traditional / simplified
+    ("竜王", "龍王"),               # Japanese / traditional
+    ("台灣之光", "台湾之光"),
+    ("僞", "偽"),                    # two traditional forms of one character
+    ("ﾐﾅ", "ミナ"),                 # half-width katakana
+])
+def test_forms_of_one_chinese_character_share_a_key(one, other):
+    assert search_key(one) == search_key(other)
+
+
+def test_kana_and_unrelated_characters_are_not_folded():
+    assert search_key("猫のお茶会") == "猫のお茶会"
+    assert search_key("ガッツ") == "ガッツ"
+    assert search_key("王") != search_key("玉")
+
+
+def test_han_fold_table_is_final():
+    """Folding twice changes nothing: every target is already in its folded form."""
+    from decklens.han_fold import FROM, TO
+    assert len(FROM) == len(TO) == len(set(FROM))
+    assert not set(TO) & set(FROM)
+
+
 def test_markup_in_names_is_stripped_from_the_key():
     assert search_key("<script>alert(1)</script>") == "scriptalert1script"
 
@@ -128,3 +154,18 @@ def test_folding_never_outranks_the_name_as_written():
     assert read_score("aii", "ali") == pytest.approx(0.9)        # needed folding: a little less
     assert read_score("aii", "bob") < 0.5                        # and it doesn't match everything
     assert read_key("") == "" and read_score("", "ali") == 0.0
+
+
+@pytest.mark.parametrize("one, other", [
+    ("أحمد", "احمد"), ("إبراهيم", "ابراهيم"), ("الأسطورة", "الاسطوره"),   # alef forms, teh marbuta
+    ("علی", "علي"), ("على", "علي"), ("کریم", "كريم"),                       # Persian yeh and kaf
+    ("مُحَمَّد", "محمد"), ("محـــمد", "محمد"), ("سؤال", "سوال"),            # vowels, tatweel, hamza
+    ("ملك ٢٠٢٦", "ملك 2026"),                                                # Arabic-Indic digits
+])
+def test_spellings_of_one_arabic_name_share_a_key(one, other):
+    assert search_key(one) == search_key(other)
+
+
+def test_other_scripts_keep_their_letters():
+    assert search_key("철수") == "철수" and search_key("สมชาย") == "สมชาย"
+    assert search_key("محمد") != search_key("محمود")
