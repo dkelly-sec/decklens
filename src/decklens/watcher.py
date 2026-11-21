@@ -23,6 +23,9 @@ phone as normal; this only reads pixels from the mirror window on your PC
 (like a stream capture). It never sends input to the phone or game, never
 touches game files, memory or network traffic, and never saves screenshots:
 images live in memory for one read and only the recognised text is sent.
+The first start also fetches the text readers for Arabic, Korean, Cyrillic,
+Thai, Greek and Devanagari names once (about 55 MB, checked against pinned
+SHA-256 hashes; see readers.py).
 
 What it looks for (checked against real battle screenshots):
 - top-right corner: the battle timer ("Time left: 2:54"), so menus and the
@@ -52,6 +55,7 @@ from typing import Any, Callable, NamedTuple, Sequence
 from urllib.parse import urlsplit
 
 from .names import read_score, search_key
+from .readers import MIN_CONFIDENCE, text_reader
 
 log = logging.getLogger("decklens.watcher")
 
@@ -62,7 +66,6 @@ CONFIG_FILE = Path.home() / ".decklens" / "watcher.json"
 TOP_LEFT = (0.0, 0.0, 0.62, 0.10)     # opponent name and clan
 TOP_RIGHT = (0.78, 0.02, 1.0, 0.10)   # "Time left: 2:54" / overtime
 BATTLE_TEXT = re.compile(r"\d\s*:\s*\d\d|left|overtime", re.IGNORECASE)
-MIN_CONFIDENCE = 0.5
 SAME_READ = 0.8  # fuzzy score at which two reads count as the same player
 RATING_TEXT = re.compile(r"\d{3,5}")
 MAX_RATING = 20_000
@@ -110,11 +113,23 @@ def _is_number(text: str) -> bool:
     return text.replace(" ", "").isdigit()
 
 
+def _rtl(text: str) -> bool:
+    """Written right to left (Arabic, Hebrew...): its first strong letter is."""
+    for ch in text:
+        kind = unicodedata.bidirectional(ch)
+        if kind in ("R", "AL"):
+            return True
+        if kind == "L":
+            return False
+    return False
+
+
 def _join_rows(boxes: list[tuple[str, float, float, float, float, float]]
                ) -> list[tuple[str, float, float, float, float, float]]:
     """Join boxes (text, left, top, right, bottom, confidence; pixels) that sit side
-    by side on one row. Numbers are never joined to anything: the rating must stay
-    a clean number, and tower levels beside a name are not part of it."""
+    by side on one row, in reading order (right to left for Arabic). Numbers are
+    never joined to anything: the rating must stay a clean number, and tower levels
+    beside a name are not part of it."""
     rows: list[tuple[str, float, float, float, float, float]] = []
     for box in sorted(boxes, key=lambda b: b[1]):
         text, left, top, right, bottom, confidence = box
@@ -123,7 +138,8 @@ def _join_rows(boxes: list[tuple[str, float, float, float, float, float]]
             overlap = min(bottom, bt) - max(top, tp)
             if (short > 0 and overlap >= 0.5 * short and -0.5 * tall <= left - r <= JOIN_GAP * tall
                     and not _is_number(text) and not _is_number(t)):
-                rows[i] = (f"{t} {text}", l, min(top, tp), max(right, r), max(bottom, bt),
+                joined = f"{text} {t}" if _rtl(t) and _rtl(text) else f"{t} {text}"
+                rows[i] = (joined, l, min(top, tp), max(right, r), max(bottom, bt),
                            min(confidence, c))
                 break
         else:
@@ -454,7 +470,9 @@ class Watcher:
     def _read(self, image: Any, region: tuple[float, float, float, float]) -> list[TextLine]:
         part = enlarge(crop(image, region))
         h, w = part.shape[:2]
-        return lines_from_ocr(self.ocr(part), w, h)
+        # The name corner gets every text reader; the timer only needs the main one.
+        read = getattr(self.ocr, "names", self.ocr) if region == TOP_LEFT else self.ocr
+        return lines_from_ocr(read(part), w, h)
 
     def step(self) -> Sighting | None:
         """One look at the screen. Returns the opponent if they were just reported."""
@@ -733,79 +751,6 @@ def window_grabber(titles: list[str], on_status: Status | None = None) -> Callab
     return grab
 
 
-# The main text reader (RapidOCR's PP-OCRv4) knows Latin letters and Chinese. It reads
-# Latin names best, but writes Japanese kanji in their simplified Chinese forms
-# (単騎 -> 单骑) and can't read kana: most kana names came back as nothing, ミナ as
-# 三十. A second, multilingual reader (PP-OCRv6: simplified and traditional Chinese,
-# Japanese, Latin; bundled with the rapidocr package) re-reads each piece of text the
-# main one found. Its reading is taken when the main one's was in Chinese characters
-# or unsure, or when it reads Chinese or Japanese itself. Numbers aren't re-read.
-# On rendered battle corners: Japanese names read right 2 -> 47 of 48, traditional
-# Chinese 7 -> 20 of 20, Latin unchanged (39 of 40). About 0.1 s more per look.
-REREAD_PAD = 0.15  # around each piece of text, in its heights
-
-
-def has_han_or_kana(text: str) -> bool:
-    """Chinese characters (also used in Japanese) or Japanese kana in text."""
-    return any(unicodedata.name(ch, "").startswith(
-        ("CJK ", "HIRAGANA ", "KATAKANA ", "HALFWIDTH KATAKANA ")) for ch in text)
-
-
-def reread(image: Any, result: Any, recognise: Callable[[Any], tuple[str, float]]) -> list[Any]:
-    """The main reader's [[box, text, confidence], ...] (all of it, sure or not) with
-    each piece re-read by recognise where that helps (see above). Pieces neither
-    reader is sure of are dropped, as the main reader alone drops them."""
-    h, w = image.shape[:2]
-    out = []
-    for item in result or []:
-        try:
-            box, text, confidence = item[0], str(item[1]), float(item[2])
-            xs, ys = [float(p[0]) for p in box], [float(p[1]) for p in box]
-        except (TypeError, ValueError, IndexError):
-            continue
-        if not (_is_number(text) and confidence >= MIN_CONFIDENCE):
-            pad = REREAD_PAD * (max(ys) - min(ys))
-            part = image[max(0, int(min(ys) - pad)):min(h, int(max(ys) + pad) + 1),
-                         max(0, int(min(xs) - pad)):min(w, int(max(xs) + pad) + 1)]
-            again, sure = recognise(part) if part.size else ("", 0.0)
-            if again.strip() and sure >= MIN_CONFIDENCE and (
-                    has_han_or_kana(text) or confidence < MIN_CONFIDENCE or has_han_or_kana(again)):
-                text, confidence = again.strip(), sure
-        if confidence >= MIN_CONFIDENCE:
-            out.append([box, text, confidence])
-    return out
-
-
-def multilingual_reader() -> Callable[[Any], tuple[str, float]] | None:
-    """Reads one piece of text (no searching for it) with the multilingual model, or
-    None if the rapidocr package isn't installed."""
-    try:
-        from rapidocr import LangRec, ModelType, OCRVersion, RapidOCR
-    except ImportError:
-        log.warning("Chinese and Japanese names need the multilingual text reader: "
-                    'run  pip install -e ".[watcher]"  again')
-        return None
-    # The model shipped inside the package, so nothing is downloaded.
-    engine = RapidOCR(params={"Global.log_level": "error", "Rec.ocr_version": OCRVersion.PPOCRV6,
-                              "Rec.model_type": ModelType.SMALL, "Rec.lang_type": LangRec.JAPAN})
-
-    def recognise(part: Any) -> tuple[str, float]:
-        found = engine(part, use_det=False, use_cls=False, use_rec=True)
-        texts, scores = getattr(found, "txts", None), getattr(found, "scores", None)
-        return (str(texts[0]), float(scores[0])) if texts and scores else ("", 0.0)
-    return recognise
-
-
-def text_reader() -> Callable[[Any], Any]:
-    from rapidocr_onnxruntime import RapidOCR
-
-    engine = RapidOCR()
-    recognise = multilingual_reader()
-    if recognise is None:
-        return lambda image: engine(image)[0]
-    return lambda image: reread(image, engine(image, text_score=0.0)[0], recognise)
-
-
 def calibrate() -> None:
     """Drag a box around the phone screen in the Phone Link window."""
     import tkinter as tk
@@ -868,9 +813,10 @@ def check(grab: Callable[[], Any]) -> None:
     if width < 300:
         print("That's small: make the mirror window bigger for reliable reading.")
     ocr = text_reader()
+    print(f"Text readers: {ocr.describe()}")
     top_right = lines_from_ocr(ocr(enlarge(crop(image, TOP_RIGHT))),
                                *enlarge(crop(image, TOP_RIGHT)).shape[1::-1])
-    top_left = lines_from_ocr(ocr(enlarge(crop(image, TOP_LEFT))),
+    top_left = lines_from_ocr(ocr.names(enlarge(crop(image, TOP_LEFT))),
                               *enlarge(crop(image, TOP_LEFT)).shape[1::-1])
     def shown(found_lines: Sequence[TextLine]) -> list[str]:
         # with how sure the reader was: under 50% a line is ignored

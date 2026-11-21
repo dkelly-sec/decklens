@@ -90,10 +90,26 @@ _CONFUSABLES.update({chr(0x1F1E6 + i): chr(ord("a") + i) for i in range(26)})
 # write Japanese kanji in their simplified Chinese forms.
 _HAN_FOLD = str.maketrans(han_fold.FROM, han_fold.TO)
 
+# Arabic-script spellings that vary for one name: alef forms (أ إ آ ٱ), teh marbuta
+# and heh (ة ه), alef maksura, Persian and Arabic yeh (ى ی ي), Persian and Arabic
+# kaf (ک ك), the stretching tatweel (ـ) and Arabic-Indic digits. Hamzas and vowel
+# marks are combining marks, dropped below; the screen reader often misses them.
+_ARABIC_FOLD = str.maketrans({
+    "ٱ": "ا", "ٲ": "ا", "ٳ": "ا", "ة": "ه", "ۃ": "ه", "ھ": "ه", "ە": "ه",
+    "ى": "ي", "ی": "ي", "ې": "ي", "ۍ": "ي", "ێ": "ي", "ک": "ك", "ڪ": "ك", "ـ": "",
+    **{chr(0x0660 + i): str(i) for i in range(10)}, **{chr(0x06F0 + i): str(i) for i in range(10)},
+})
+_ARABIC_MARKS = (0x0610, 0x061A), (0x064B, 0x065F), (0x0670, 0x0670), (0x06D6, 0x06ED)
+
 # Combining marks are only stripped from Latin, Greek and Cyrillic letters
-# (code points below U+0530). Elsewhere, such as Japanese voicing marks,
-# they change the letter, so they are kept.
+# (code points below U+0530) and Arabic letters (its marks are optional vowels and
+# hamzas). Elsewhere, such as Japanese voicing marks, they change the letter, so
+# they are kept.
 _STRIP_MARKS_BELOW = 0x0530
+
+
+def _optional_mark(ch: str) -> bool:
+    return any(lo <= ord(ch) <= hi for lo, hi in _ARABIC_MARKS)
 
 
 def search_key(name: str) -> str:
@@ -101,13 +117,13 @@ def search_key(name: str) -> str:
     if not isinstance(name, str):
         return ""
     text = unicodedata.normalize("NFKC", name[:MAX_NAME_LENGTH]).casefold()
-    text = unicodedata.normalize("NFKD", text.translate(_HAN_FOLD))
+    text = unicodedata.normalize("NFKD", text.translate(_HAN_FOLD).translate(_ARABIC_FOLD))
 
     out: list[str] = []
     for ch in text:
-        if unicodedata.combining(ch):
-            if not out or ord(out[-1][-1]) < _STRIP_MARKS_BELOW:
-                continue  # drop stray marks and accents on Latin/Greek/Cyrillic letters
+        if unicodedata.combining(ch) or _optional_mark(ch):
+            if not out or ord(out[-1][-1]) < _STRIP_MARKS_BELOW or _optional_mark(ch):
+                continue  # drop stray marks, accents on Latin/Greek/Cyrillic, Arabic vowels
             out.append(ch)
             continue
         ch = _CONFUSABLES.get(ch, ch)

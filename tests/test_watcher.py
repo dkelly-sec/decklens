@@ -1,9 +1,10 @@
 import numpy as np
 import pytest
 
+from decklens.readers import has_han_or_kana, reread
 from decklens.watcher import (
     TOP_LEFT, TOP_RIGHT, DeckLensClient, NeedLogin, Sighting, TextLine, Watcher, crop, describe,
-    has_han_or_kana, in_battle, lines_from_ocr, locate, read_opponent, reread, valid_rows,
+    in_battle, lines_from_ocr, locate, read_opponent, valid_rows,
 )
 
 # What RapidOCR returned for a real battle screenshot (1080x2400), per region.
